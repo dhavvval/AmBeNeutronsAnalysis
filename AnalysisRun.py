@@ -9,12 +9,14 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import scipy.special as scm
 import scipy.optimize as scp
+from collections import defaultdict
+import pandas as pd
 
 
 # edit accordingly
 
-data_directory = 'Background/'                                     # directory containing BeamClusterAnalysis ntuples
-waveform_dir = 'Background/'                             # directory containing raw AmBe PMT waveforms
+data_directory = '../AmBe_BeamCluster/'                                     # directory containing BeamClusterAnalysis ntuples
+waveform_dir = '../AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
 
 file_pattern = re.compile(r'AmBe_(\d+)_v\d+\.ntuple\.root')      # Pattern to extract run numbers from the files: R<run_number>_AmBe.ntuple.root -- edit to match your filename pattern
 
@@ -42,9 +44,21 @@ hit_charges = []
 hit_ids = []
 source_position = [[], [], []]
 event_ids = []
+efficiency_data = defaultdict(lambda: [0, 0, 0])
 
 for c1, run in enumerate(run_numbers):
     print(f"\nProcessing run {run} ({c1+1}/{len(run_numbers)})")
+
+    cluster_time = []
+    cluster_charge = []
+    cluster_QB = []
+    cluster_hits = []
+    hit_times = []
+    hit_charges = []
+    hit_ids = []
+    source_position = [[], [], []]
+    event_ids = []
+   
     
     good_events = waveform_results[run]["good_events"]
     x_pos, y_pos, z_pos = waveform_results[run]["source_position"]
@@ -56,14 +70,33 @@ for c1, run in enumerate(run_numbers):
         event_data, good_events, x_pos, y_pos, z_pos,
         ane.cosmic, ane.AmBe,
         cluster_time, cluster_charge, cluster_QB, cluster_hits,
-        hit_times, hit_charges, hit_ids, source_position, event_ids
+        hit_times, hit_charges, hit_ids, source_position, event_ids, efficiency_data
     )
 
-print('----------------------------------------------------------------\n')
-print('Total AmBe neutron candidates:', len(cluster_time))
+    print('----------------------------------------------------------------\n')
+    print('Total AmBe neutron candidates:', len(cluster_time))
 
 
-run = int(run)  # Ensure run is an integer for comparison
+    run = int(run)  # Ensure run is an integer for comparison
+    print('Event run number:', run)
+    df = pd.DataFrame({
+        "clusterTime": cluster_time,
+        "clusterPE": cluster_charge,
+        "clusterChargeBalance": cluster_QB,
+        "clusterHits": cluster_hits,
+        "hitT": hit_times,
+        "hitQ": hit_charges,  # optional if you have it separate
+        "hitPE": hit_charges,  # assuming this is PE
+        "hitID": hit_ids,
+        "sourceX": source_position[0],
+        "sourceY": source_position[1],
+        "sourceZ": source_position[2],
+        "eventID": event_ids
+    })
+    print(df.head())
+    df.to_csv(f'EventAmBeNeutronCandidatesCBPE_{run}.csv', index=False)
+
+'''run = int(run)  # Ensure run is an integer for comparison
 if run in Events:
     print('Event run number:', run)
     df = pd.DataFrame({
@@ -101,5 +134,17 @@ elif run in Backgrounds:
     print(bdf.head())
     bdf.to_csv(f'BackgroundAmBeNeutronCandidates_{run}.csv', index=False)
 else:
-    print('Run number not recognized for AmBe neutron candidates:', run)
-    
+    print('Run number not recognized for AmBe neutron candidates:', run)'''
+
+df_eff = pd.DataFrame([
+    {
+        "x_pos": key[0], "y_pos": key[1], "z_pos": key[2],
+        "total_events": val[0],
+        "cosmic_events": val[1],
+        "ambe_triggers": val[0] - val[1],
+        "neutron_candidates": val[2]
+    }
+    for key, val in efficiency_data.items()
+])
+
+df_eff.to_csv('AmBeTriggerSummary.csv', index=False)

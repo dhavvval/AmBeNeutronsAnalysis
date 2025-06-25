@@ -76,7 +76,7 @@ Background_counts = bdf['eventID'].value_counts()
 #multiplicity_counts = event_counts.value_counts().sort_index()
 #Background_multiplicity_counts = Background_counts.value_counts().sort_index()
 
-plt.hist(event_counts, bins=range(0, 5), log=True, edgecolor='black', align='left')
+plt.hist(event_counts, bins=range(1, 5), log=False, edgecolor='black')
 plt.xlabel('Neutron multiplicity')
 plt.ylabel('No. of AmBe Neutron Candidates in Event')
 plt.title('Neutron multiplicity distribution')
@@ -86,7 +86,7 @@ leg.set_frame_on(True)
 leg.draw_frame(True)
 plt.show()
 
-plt.hist(Background_counts, bins=range(0, 5), log=True, edgecolor='black', align='left')
+plt.hist(Background_counts, bins=range(1, 5), log=False, edgecolor='black')
 plt.xlabel('Background Neutron multiplicity')
 plt.ylabel('No. of AmBe Neutron Candidates in Background')
 plt.title('Neutron multiplicity distribution for run')
@@ -95,6 +95,31 @@ leg = plt.legend(loc=1,fontsize=24)
 leg.set_frame_on(True)
 leg.draw_frame(True)
 plt.show()
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+
+# Example: Assume your dataframe is called df, and has 'clusterChargeBalance' and 'clusterPE'
+x = df['clusterChargeBalance']
+y =df['clusterPE']
+
+# Create figure with subplots
+fig = plt.figure(figsize=(12, 8))
+grid = plt.GridSpec(4, 4, hspace=0.1, wspace=0.1)
+
+main_ax = fig.add_subplot(grid[1:, :-1])
+
+
+# 2D histogram
+hb = main_ax.hist2d(x, y, bins=50, cmap='viridis')
+main_ax.set_xlabel('Charge Balance')
+main_ax.set_ylabel('PE')
+plt.colorbar(hb[3], ax=main_ax, label='Counts')
+
+plt.suptitle("2D Histogram with Side Histograms", fontsize=14)
+plt.show()
+
 
 Bbins,Bbin_edges = np.histogram(Background_counts,range=(0,5),bins=5)
 print("BINS AND EDGES")

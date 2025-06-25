@@ -1,35 +1,22 @@
-print('\nLoading Packages...')
 import os          
 import numpy as np
 import uproot
 from tqdm import trange
 from scipy.stats import norm
 import re
-
-# ----------------------------------------------------- #
-
-# edit accordingly
-
-data_directory = 'test/AmBe_BeamCluster/'                                     # directory containing BeamClusterAnalysis ntuples
-waveform_dir = 'test/AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
-
-file_pattern = re.compile(r'AmBe_(\d+)_v3\.ntuple\.root')      # Pattern to extract run numbers from the files: R<run_number>_AmBe.ntuple.root -- edit to match your filename pattern
-
-output_filename = 'neutron_candidates.root'                  # name of output root file to be created containing neutron candidates
-
-which_Tree = 1                                               # PhaseIITreeMaker (0) or ANNIEEventTreeMaker (1) tool
-
+from collections import defaultdict
 
 # AmBe neutrons
-def AmBe(CPE, CCB, CT, CN):
+def AmBe(CPE, CCB, CT, CN, ETT):
     if(CPE<=0 or CPE>70):      # 0 < cluster PE < 100
         return False
     if(CCB>=0.4 or CCB<=0):   # Cluster Charge Balance < 0.4
         return False
     if(CT<2000):              # cluster time not in prompt window
         return False
-    if(CN!=1):                # only 1 neutron candidate cluster per trigger
-        return False          # for the PhaseIITreeMaker, this MUST BE CHANGED --> "clusterNumber" just tags the current cluster. Need to make sure this is the ONLY cluster in the event
+    #if(CN>1): 
+     #   print("More than 1 neutron candidate cluster found", ETT)               # only 1 neutron candidate cluster per trigger
+        #return False          # for the PhaseIITreeMaker, this MUST BE CHANGED --> "clusterNumber" just tags the current cluster. Need to make sure this is the ONLY cluster in the event
     return True
 
 # cosmic muon clusters
@@ -53,6 +40,7 @@ def source_loc(run):
         4499: (0, 0, 0),
         4507: (0, -50, 0),
         4508: (0, -100, 0),
+        4496: (0, 0, 0), #AmBe run without source
         
         # Port 1 data
         4593: (0, 100, -75),
@@ -82,7 +70,6 @@ def source_loc(run):
     
     print('\n##### RUN NUMBER ' + run + 'DOESNT HAVE A SOURCE LOCATION!!! ERROR #####\n')
     exit()
-
 
 def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                       pulse_start=300, pulse_end=1200, pulse_gamma=400,
@@ -171,7 +158,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
 
     return results, run_numbers, file_names
 
-def LoadBeamCluster(file_path, which_Tree=which_Tree):
+def LoadBeamCluster(file_path, which_Tree):
     print('\nLoading AmBe event data...')
 
     with uproot.open(file_path) as file_1:
@@ -211,7 +198,7 @@ def LoadBeamCluster(file_path, which_Tree=which_Tree):
 def process_events(event_data, good_events, x_pos, y_pos, z_pos,
                    cosmic, AmBe,
                    cluster_time, cluster_charge, cluster_QB, cluster_hits,
-                   hit_times, hit_charges, hit_ids, source_position):
+                   hit_times, hit_charges, hit_ids, source_position, event_ids,  efficiency_data=None):
 
     EN = event_data["eventNumber"]
     ETT = event_data["eventTimeTank"]
@@ -228,16 +215,24 @@ def process_events(event_data, good_events, x_pos, y_pos, z_pos,
     cosmic_events = 0
     neutron_cand_count = 0
 
+    key = (x_pos, y_pos, z_pos)
+
     for i in trange(len(EN)):
         if ETT[i] in good_events:
+            
             total_events += 1
+
+            if efficiency_data is not None:
+                efficiency_data[key][0] += 1  # total_events
 
             for k in range(len(CT[i])):
                 if cosmic(CT[i][k], CPE[i][k]):
                     cosmic_events += 1
+                    if efficiency_data is not None:
+                        efficiency_data[key][1] += 1 # cosmic_events
                     break
 
-                if AmBe(CPE[i][k], CCB[i][k], CT[i][k], CN[i]):
+                if AmBe(CPE[i][k], CCB[i][k], CT[i][k], CN[i], ETT[i]):
                     if CPE[i][k] != float('-inf'):
                         cluster_time.append(CT[i][k])
                         cluster_charge.append(CPE[i][k])
@@ -249,52 +244,17 @@ def process_events(event_data, good_events, x_pos, y_pos, z_pos,
                         source_position[0].append(x_pos)
                         source_position[1].append(y_pos)
                         source_position[2].append(z_pos)
+                        event_ids.append(EN[i])
                         neutron_cand_count += 1
+                        if efficiency_data is not None:
+                            efficiency_data[key][2] += 1
 
     print(f'\nThere were a total of {total_events} AmBe events after waveform cuts')
     print(f'{cosmic_events} ({round(100*cosmic_events/total_events,2)}%) were cosmics')
     print(f'This leaves {total_events - cosmic_events} AmBe-triggered events')
     print(f'\nAfter selection cuts: {neutron_cand_count} AmBe neutron candidates\n')
-
-    return total_events, cosmic_events, neutron_cand_count
-
-
-##Run the analysis##
-
-waveform_results, run_numbers, file_names = AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc)
-
-
-cluster_time = []
-cluster_charge = []
-cluster_QB = []
-cluster_hits = []
-hit_times = []
-hit_charges = []
-hit_ids = []
-source_position = [[], [], []]
-
-for c1, run in enumerate(run_numbers):
-    print(f"\nProcessing run {run} ({c1+1}/{len(run_numbers)})")
     
-    good_events = waveform_results[run]["good_events"]
-    x_pos, y_pos, z_pos = waveform_results[run]["source_position"]
-    file_path = file_names[c1]
 
-    event_data = LoadBeamCluster(file_path, which_Tree=1)
-
-    total_events, cosmic_events, neutron_cand_count = process_events(
-        event_data, good_events, x_pos, y_pos, z_pos,
-        cosmic, AmBe,
-        cluster_time, cluster_charge, cluster_QB, cluster_hits,
-        hit_times, hit_charges, hit_ids, source_position
-    )
-
-print('----------------------------------------------------------------\n')
-print('Total AmBe neutron candidates:', len(cluster_time))
-
-
-
-
-
+    return total_events, cosmic_events, neutron_cand_count, event_ids
 
 
