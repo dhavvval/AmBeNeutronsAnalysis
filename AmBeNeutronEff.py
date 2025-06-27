@@ -8,9 +8,9 @@ from collections import defaultdict
 
 # AmBe neutrons
 def AmBe(CPE, CCB, CT, CN, ETT):
-    if(CPE<=0 or CPE>70):      # 0 < cluster PE < 100
+    if(CPE<=0 or CPE>150):      # 0 < cluster PE < 70
         return False
-    if(CCB>=0.4 or CCB<=0):   # Cluster Charge Balance < 0.4
+    if(CCB>=0.3 or CCB<=0):   # Cluster Charge Balance < 0.4
         return False
     if(CT<2000):              # cluster time not in prompt window
         return False
@@ -23,7 +23,7 @@ def AmBe(CPE, CCB, CT, CN, ETT):
 def cosmic(CT, CPE):
     if(CT<2000):              # any cluster in the prompt (2us) window
         return True
-    if(CPE>150):              # any cluster > 150 PE in the prompt or ext window
+    if(CPE>150):              # any cluster > 70 PE in the prompt or ext window
         return True
     return False
 

@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-efficiency_data = "AmBeTriggerSummary.csv"
+efficiency_data = "AmBeTriggerSummaryPE150CB0.3.csv"
 
 df = pd.read_csv(efficiency_data)
 
@@ -65,13 +65,14 @@ labels_SE = vectorized_label(pivot_eff.values, pivot_err.values, pivot_n.values)
 
 plt.figure(figsize=(8, 6))
 sns.heatmap(pivot_eff, annot=labels_SE, fmt="", cmap="YlOrBr", cbar=True, annot_kws={"size": 12}, mask=mask, linecolor='black', linewidths=0.2, cbar_kws={"label": "Efficiency (%)"})
-plt.title("AmBe neutron efficiency from AmBe 2.0")
+plt.title("AmBe neutron efficiency from AmBe 2.0 (PE < 150, CB < 0.3)")
 plt.xlabel("Ports")
 plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)
 plt.yticks(rotation=0)
 plt.gca().invert_yaxis()
 plt.tight_layout()
+plt.savefig("AmBeNeutronEfficiency_AmBe2.0wPE150CB0.3.png", dpi=300, bbox_inches='tight')
 plt.show()
 ##Residuals plot using AmBe 1.0 and AmBe 2.0 data
 
@@ -94,10 +95,11 @@ residuals = pivot_eff - ambe1_df
 plt.figure(figsize=(8, 6))
 sns.heatmap(residuals, annot=True, fmt=".1f", cmap="coolwarm", center=0, cbar_kws={'label': 'Residual (AmBe 2.0 - AmBe 1.0)'}, mask=mask, linecolor='black', linewidths=0.2)
 
-plt.title("Residual Efficiency of AmBe 2.0 compare to AmBe 1.0")
+plt.title("Residual Efficiency of AmBe 2.0 compare to AmBe 1.0 (PE < 150, CB < 0.3)")
 plt.xlabel("Ports")
 plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)
 plt.gca().invert_yaxis()
 plt.tight_layout()
+plt.savefig("ResidualEfficiency_AmBe2.0wPE150CB0.3.png", dpi=300, bbox_inches='tight')
 plt.show()

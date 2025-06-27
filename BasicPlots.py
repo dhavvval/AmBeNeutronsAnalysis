@@ -8,6 +8,7 @@ import re
 from scipy.optimize import curve_fit
 from matplotlib.backends.backend_pdf import PdfPages
 
+##This one to make plots of different ports and depths for AmBe neutron source positions####
 
 files = './' 
 csvs = glob.glob(os.path.join(files, 'EventAmBeNeutronCandidates_*.csv'))

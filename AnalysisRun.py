@@ -15,8 +15,8 @@ import pandas as pd
 
 # edit accordingly
 
-data_directory = 'Background/'                                     # directory containing BeamClusterAnalysis ntuples
-waveform_dir = 'Background/'                             # directory containing raw AmBe PMT waveforms
+data_directory = '../AmBe_BeamCluster/'                                     # directory containing BeamClusterAnalysis ntuples
+waveform_dir = '../AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
 
 file_pattern = re.compile(r'AmBe_(\d+)_v\d+\.ntuple\.root')      # Pattern to extract run numbers from the files: R<run_number>_AmBe.ntuple.root -- edit to match your filename pattern
 
@@ -94,10 +94,10 @@ for c1, run in enumerate(run_numbers):
         "eventID": event_ids
     })
     print(df.head())
-    df.to_csv(f'EventAmBeNeutronCandidatesCBPE_{run}.csv', index=False)
+    df.to_csv(f'EventAmBeNeutronCandidatesPE150CB0.3_{run}.csv', index=False) ##This files to do analysis for multiplicty, capture time, and other plots of Charge current vs Cluster time etc
 
-'''run = int(run)  # Ensure run is an integer for comparison
-if run in Events:
+    '''run = int(run)  # Ensure run is an integer for comparison
+
     print('Event run number:', run)
     df = pd.DataFrame({
         "clusterTime": cluster_time,
@@ -114,7 +114,7 @@ if run in Events:
         "eventID": event_ids
     })
     print(df.head())
-    df.to_csv(f'EventAmBeNeutronCandidates_{run}.csv', index=False)
+    df.to_csv(f'EventAmBeNeutronCandidatesPE150CB0.3_{run}.csv', index=False)
 elif run in Backgrounds:
     print('Background run number:', run)
     bdf = pd.DataFrame({
@@ -132,7 +132,7 @@ elif run in Backgrounds:
         "eventID": event_ids
     })
     print(bdf.head())
-    bdf.to_csv(f'BackgroundAmBeNeutronCandidates_{run}.csv', index=False)
+    bdf.to_csv(f'BackgroundAmBeNeutronCandidatesPE150CB0.3_{run}.csv', index=False)
 else:
     print('Run number not recognized for AmBe neutron candidates:', run)'''
 
@@ -147,4 +147,6 @@ df_eff = pd.DataFrame([
     for key, val in efficiency_data.items()
 ])
 
-df_eff.to_csv('AmBeTriggerSummaryforBackground4496.csv', index=False)
+df_eff.to_csv('AmBeTriggerSummaryPE150CB0.3.csv', index=False) ## This file to do analysis for efficiency heatmap.
+
+

@@ -76,7 +76,7 @@ Background_counts = bdf['eventID'].value_counts()
 #multiplicity_counts = event_counts.value_counts().sort_index()
 #Background_multiplicity_counts = Background_counts.value_counts().sort_index()
 
-plt.hist(event_counts, bins=range(1, 5), log=False, edgecolor='black')
+plt.hist(event_counts, bins=range(1, 5), log=False, edgecolor='black', align='mid')
 plt.xlabel('Neutron multiplicity')
 plt.ylabel('No. of AmBe Neutron Candidates in Event')
 plt.title('Neutron multiplicity distribution')

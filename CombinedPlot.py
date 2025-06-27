@@ -6,7 +6,7 @@ import numpy as np
 from scipy.optimize import curve_fit
 
 path = './'  # Directory containing the CSV files
-csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidates_*.csv'))
+csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesPE150CB0.3_*.csv'))
 
 def NeutCapture(t, A, tau, B):
     return A * np.exp(-t / tau) + B
@@ -25,10 +25,11 @@ CCB = combined_df['clusterChargeBalance']
 CT = combined_df['clusterTime'] / 1000  # Convert to microseconds
 
 # neutron multiplicty
-plt.hist(events_counts, bins=range(1, 10, 1), log=True, edgecolor='black', linewidth=0.5, align='left', density=False)
+plt.hist(events_counts, bins=range(1, 10, 1), log=True, edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
 plt.xlabel('Neutron multiplicity')
 plt.ylabel('Counts')
-plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0 campaign')
+plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0 (PE < 150, CB < 0.3)')
+plt.savefig("NeutronMultiplicity_AmBe2.0wPE150CB0.3.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 # Plot Neutron Capture Time
@@ -38,7 +39,7 @@ bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 init = [np.max(counts), 20, np.min(counts)]
 
 
-fit_mask = (bin_centers > 12) & (bin_centers < 66)
+fit_mask = (bin_centers > 15) & (bin_centers < 65)
 fit_x = bin_centers[fit_mask]
 fit_y = counts[fit_mask]
 fit_y_errors = np.sqrt(fit_y)
@@ -65,16 +66,18 @@ plt.plot(fit_x, NeutCapture(fit_x, *popt), 'r-', linewidth=2, label=label)
 plt.xlabel(fr"Cluster Time [$\mu s$]")
 plt.ylabel("Counts")
 plt.legend()
-plt.title(f"Neutron Capture Time for AmBe 2.0")
+plt.title(f"Neutron Capture Time for AmBe 2.0 (PE < 150, CB < 0.3)")
+plt.savefig("NeutronCaptureTime_AmBe2.0wPE150CB0.3.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 
 plt.hist2d(PE, CCB, bins=70, cmap='viridis', 
         range=[[0, 100], [0, 0.5]], cmin=1)
 plt.colorbar(label='Counts')
-plt.title(f"Cluster PE vs Charge Balance")
+plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0 (PE < 150, CB < 0.3)")
 plt.xlabel("Cluster PE")
 plt.ylabel("Cluster Charge Balance")
+plt.savefig("ClusterPE_vs_ChargeBalance_AmBe2.0wPE150CB0.3.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 residuals = (fit_y - fit_y_expected) / fit_y_errors
@@ -82,6 +85,7 @@ plt.plot(fit_x, residuals)
 plt.axhline(0, color='gray', linestyle='--')
 plt.xlabel("Time [μs]")
 plt.ylabel("Normalized Residual")
-plt.title("Fit Residuals")
+plt.title("Fit Residuals for AmBe 2.0 Neutron Capture Time (PE < 150, CB < 0.3)")
+plt.savefig("FitResiduals_AmBe2.0wPE150CB0.3.png", dpi=300, bbox_inches='tight')
 plt.show()
 
