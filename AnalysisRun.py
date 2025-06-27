@@ -15,8 +15,8 @@ import pandas as pd
 
 # edit accordingly
 
-data_directory = '../AmBe_BeamCluster/'                                     # directory containing BeamClusterAnalysis ntuples
-waveform_dir = '../AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
+data_directory = 'Background/'                                     # directory containing BeamClusterAnalysis ntuples
+waveform_dir = 'Background/'                             # directory containing raw AmBe PMT waveforms
 
 file_pattern = re.compile(r'AmBe_(\d+)_v\d+\.ntuple\.root')      # Pattern to extract run numbers from the files: R<run_number>_AmBe.ntuple.root -- edit to match your filename pattern
 
@@ -147,4 +147,4 @@ df_eff = pd.DataFrame([
     for key, val in efficiency_data.items()
 ])
 
-df_eff.to_csv('AmBeTriggerSummary.csv', index=False)
+df_eff.to_csv('AmBeTriggerSummaryforBackground4496.csv', index=False)
