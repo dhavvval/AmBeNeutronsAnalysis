@@ -15,8 +15,8 @@ import pandas as pd
 
 # edit accordingly
 
-data_directory = '../AmBe_BeamCluster/'                                     # directory containing BeamClusterAnalysis ntuples
-waveform_dir = '../AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
+data_directory = 'AmBe_BeamCluster/'                                     # directory containing BeamClusterAnalysis ntuples
+waveform_dir = 'AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
 
 file_pattern = re.compile(r'AmBe_(\d+)_v\d+\.ntuple\.root')      # Pattern to extract run numbers from the files: R<run_number>_AmBe.ntuple.root -- edit to match your filename pattern
 
@@ -94,7 +94,7 @@ for c1, run in enumerate(run_numbers):
         "eventID": event_ids
     })
     print(df.head())
-    df.to_csv(f'EventAmBeNeutronCandidatesPE150CB0.3_{run}.csv', index=False) ##This files to do analysis for multiplicty, capture time, and other plots of Charge current vs Cluster time etc
+    df.to_csv(f'EventAmBeNeutronCandidatesPE150CB0.4_{run}.csv', index=False) ##This files to do analysis for multiplicty, capture time, and other plots of Charge current vs Cluster time etc
 
     '''run = int(run)  # Ensure run is an integer for comparison
 
@@ -147,6 +147,6 @@ df_eff = pd.DataFrame([
     for key, val in efficiency_data.items()
 ])
 
-df_eff.to_csv('AmBeTriggerSummaryPE150CB0.3.csv', index=False) ## This file to do analysis for efficiency heatmap.
+df_eff.to_csv('AmBeTriggerSummaryportPE150CB0.4Port2.csv', index=False) ## This file to do analysis for efficiency heatmap.
 
 
