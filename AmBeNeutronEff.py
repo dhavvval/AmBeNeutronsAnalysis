@@ -103,8 +103,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
     combined_IC_accepted = []
     IC_values = [] 
 
-    for c1, run in enumerate(run_numbers):
-        IC_values = []  
+    for c1, run in enumerate(run_numbers): 
         IC_accepted = []
         seen_timestamps = set()    
         print(f"\n\nRun: {run} ({c1+1}/{len(file_names)})")
@@ -245,30 +244,29 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
     plt.show()'''     
 
     plt.figure(figsize=(8, 5))
-    plt.hist(combined_IC_values, bins=100, alpha=0.7, color='blue')
+    plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000), log=True)
     plt.xlabel('IC_adjusted')
     plt.ylabel('Number of Events')
-    plt.title('All IC adjusted Values')
+    plt.title('All IC adjusted Values for background events')
     plt.tight_layout()
     #plt.savefig('IC_adjusted_AllEvents.png', dpi=300)
     plt.show()
 
     plt.figure(figsize=(8, 5))
-    plt.hist(IC_values, bins=100, alpha=0.7, color='blue')
-    plt.xlabel('IC_adjusted')
+    plt.hist(IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000), log=True)
+    plt.xlabel('IC')
     plt.ylabel('Number of Events')
-    plt.title('All IC Values')
+    plt.title('All IC Values for background events')
     plt.tight_layout()
     #plt.savefig('IC_adjusted_AllEvents.png', dpi=300)
     plt.show()
 
     # Second histogram
     plt.figure(figsize=(8, 5))
-    plt.hist(combined_IC_accepted, bins=100, alpha=0.7, color='green')
-    plt.xlabel('IC_adjusted)')
+    plt.hist(combined_IC_accepted, bins=500, alpha=0.7, color='orange', range=(0, 1000), log=True)
+    plt.xlabel('IC_adjusted accepted')
     plt.ylabel('Number of Events')
-    plt.title('Accepted')
-    plt.legend()
+    plt.title('Accepted IC_adjusted Values for background events')
     plt.tight_layout()
     #plt.savefig('IC_adjusted_AcceptedEvents.png', dpi=300)
     plt.show()

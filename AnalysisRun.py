@@ -11,12 +11,13 @@ import scipy.special as scm
 import scipy.optimize as scp
 from collections import defaultdict
 import pandas as pd
+import matplotlib
 
 
 # edit accordingly
 
-data_directory = 'AmBe_BeamCluster/'                                     # directory containing BeamClusterAnalysis ntuples
-waveform_dir = 'AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
+data_directory = 'Background/'                                    # directory containing BeamClusterAnalysis ntuples
+waveform_dir = 'Background/'                             # directory containing raw AmBe PMT waveforms
 
 file_pattern = re.compile(r'AmBe_(\d+)_v\d+\.ntuple\.root')      # Pattern to extract run numbers from the files: R<run_number>_AmBe.ntuple.root -- edit to match your filename pattern
 
@@ -147,6 +148,6 @@ df_eff = pd.DataFrame([
     for key, val in efficiency_data.items()
 ])
 
-df_eff.to_csv('AmBeTriggerSummaryportPE150CB0.4Port2.csv', index=False) ## This file to do analysis for efficiency heatmap.
+df_eff.to_csv('AmBeTriggerSummaryportPE150CB0Background.csv', index=False) ## This file to do analysis for efficiency heatmap.
 
 
