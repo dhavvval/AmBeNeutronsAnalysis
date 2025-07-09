@@ -16,8 +16,8 @@ import matplotlib
 
 # edit accordingly
 
-data_directory = 'Background/'                                    # directory containing BeamClusterAnalysis ntuples
-waveform_dir = 'Background/'                             # directory containing raw AmBe PMT waveforms
+data_directory = '../Outside_source/'                                    # directory containing BeamClusterAnalysis ntuples
+waveform_dir = '../Outside_source/'                             # directory containing raw AmBe PMT waveforms
 
 file_pattern = re.compile(r'AmBe_(\d+)_v\d+\.ntuple\.root')      # Pattern to extract run numbers from the files: R<run_number>_AmBe.ntuple.root -- edit to match your filename pattern
 
@@ -95,47 +95,8 @@ for c1, run in enumerate(run_numbers):
         "eventID": event_ids
     })
     print(df.head())
-    df.to_csv(f'EventAmBeNeutronCandidatesPE150CB0.4_{run}.csv', index=False) ##This files to do analysis for multiplicty, capture time, and other plots of Charge current vs Cluster time etc
+    df.to_csv(f'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidatesPE150CB0.4_{run}.csv', index=False) ##This files to do analysis for multiplicty, capture time, and other plots of Charge current vs Cluster time etc
 
-    '''run = int(run)  # Ensure run is an integer for comparison
-
-    print('Event run number:', run)
-    df = pd.DataFrame({
-        "clusterTime": cluster_time,
-        "clusterPE": cluster_charge,
-        "clusterChargeBalance": cluster_QB,
-        "clusterHits": cluster_hits,
-        "hitT": hit_times,
-        "hitQ": hit_charges,  # optional if you have it separate
-        "hitPE": hit_charges,  # assuming this is PE
-        "hitID": hit_ids,
-        "sourceX": source_position[0],
-        "sourceY": source_position[1],
-        "sourceZ": source_position[2],
-        "eventID": event_ids
-    })
-    print(df.head())
-    df.to_csv(f'EventAmBeNeutronCandidatesPE150CB0.3_{run}.csv', index=False)
-elif run in Backgrounds:
-    print('Background run number:', run)
-    bdf = pd.DataFrame({
-        "clusterTime": cluster_time,
-        "clusterPE": cluster_charge,
-        "clusterChargeBalance": cluster_QB,
-        "clusterHits": cluster_hits,
-        "hitT": hit_times,
-        "hitQ": hit_charges,  # optional if you have it separate
-        "hitPE": hit_charges,  # assuming this is PE
-        "hitID": hit_ids,
-        "sourceX": source_position[0],
-        "sourceY": source_position[1],
-        "sourceZ": source_position[2],
-        "eventID": event_ids
-    })
-    print(bdf.head())
-    bdf.to_csv(f'BackgroundAmBeNeutronCandidatesPE150CB0.3_{run}.csv', index=False)
-else:
-    print('Run number not recognized for AmBe neutron candidates:', run)'''
 
 df_eff = pd.DataFrame([
     {
@@ -148,6 +109,6 @@ df_eff = pd.DataFrame([
     for key, val in efficiency_data.items()
 ])
 
-df_eff.to_csv('AmBeTriggerSummaryportPE150CB0Background.csv', index=False) ## This file to do analysis for efficiency heatmap.
+df_eff.to_csv('TriggerSummary/AmBeTriggerSummaryportPE150CB0OutsideTheTank.csv', index=False) ## This file to do analysis for efficiency heatmap.
 
 

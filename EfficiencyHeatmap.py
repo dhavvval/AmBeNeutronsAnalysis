@@ -7,7 +7,7 @@ import glob
 
 # efficiency_data = "AmBeTriggerSummaryPE150CB0.3.csv"
 path = './'  # Directory containing the CSV files
-efficiency_data = glob.glob(os.path.join(path, 'AmBeTriggerSummaryPE150CB0.4*.csv'))
+efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummaryPE150CB0.4*.csv'))
 print(efficiency_data)
 
 all_df = []
@@ -82,7 +82,7 @@ plt.xticks(rotation=45)
 plt.yticks(rotation=0)
 plt.gca().invert_yaxis()
 plt.tight_layout()
-plt.savefig("AmBeNeutronEfficiency_AmBe2.0wPE150CB0.4.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/AmBeNeutronEfficiency_AmBe2.0wPE150CB0.4.png", dpi=300, bbox_inches='tight')
 plt.show()
 ##Residuals plot using AmBe 1.0 and AmBe 2.0 data
 
@@ -111,5 +111,5 @@ plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)
 plt.gca().invert_yaxis()
 plt.tight_layout()
-plt.savefig("ResidualEfficiency_AmBe2.0wPE150CB0.4.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/ResidualEfficiency_AmBe2.0wPE150CB0.4.png", dpi=300, bbox_inches='tight')
 plt.show()

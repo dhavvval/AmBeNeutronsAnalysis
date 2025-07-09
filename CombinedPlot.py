@@ -7,7 +7,7 @@ from scipy.optimize import curve_fit
 from scipy.stats import chi2
 
 path = './'  # Directory containing the CSV files
-csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesPE150CB0.4_*.csv'))
+csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidatesPE150CB0.4bkg_*.csv'))
 
 def NeutCapture(t, A, therm, tau, B):
     return A * (1-np.exp(-t / therm)) * np.exp(-t / tau) + B
@@ -30,18 +30,18 @@ CT = combined_df['clusterTime'] / 1000  # Convert to microseconds
 plt.hist(events_counts, bins=range(1, 10, 1), log=True, edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
 plt.xlabel('Neutron multiplicity for background events')
 plt.ylabel('Counts')
-plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0 (PE < 150, CB < 0.4)')
-plt.savefig("NeutronMultiplicity_AmBe2.0wPE150CB0.4.png", dpi=300, bbox_inches='tight')
+plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0 for outside the tank (PE < 150, CB < 0.4)')
+plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0wPE150CB0.4.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 # Plot Neutron Capture Time
-counts, bin_edges = np.histogram(CT, bins=140, range=(0, 70))
+counts, bin_edges = np.histogram(CT, bins=200, range=(0, 70))
 bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
 init = [np.max(counts), 5, 25, np.min(counts)]
 
 
-fit_mask = (bin_centers > 3.5) & (bin_centers < 65)
+fit_mask = (bin_centers > 2) & (bin_centers < 65)
 fit_x = bin_centers[fit_mask]
 fit_y = counts[fit_mask]
 fit_y_errors = np.sqrt(fit_y)
@@ -59,7 +59,7 @@ chi2_ndof = chi2_value / ndof
 p_value = 1 - chi2.cdf(chi2_value, ndof)
 print(fr"$\chi^2 = {chi2_value:.2f}$, ndof = {ndof}, $\frac{{\chi^2}}{{\mathrm{{ndof}}}} = {chi2_ndof:.2f}$, p-value = {p_value:.3f}")
 
-plt.hist(CT, bins=140, range=(0, 70), histtype='step', color='blue', label="Data")
+plt.hist(CT, bins=200, range=(0, 70), histtype='step', color='blue', label="Data")
 label = (
     fr"$\mathrm{{therm}} = {popt[1]:.2f} \pm {perr[1]:.2f}\ \mu s$" + "\n"
     fr"$\tau = {popt[2]:.2f} \pm {perr[2]:.2f}\ \mu s$" + "\n"
@@ -71,25 +71,25 @@ plt.xlabel(fr"Cluster Time [$\mu s$]")
 plt.ylabel("Counts")
 plt.legend()
 plt.title(f"Neutron Capture Time for AmBe 2.0 (PE < 150, CB < 0.4)")
-plt.savefig("NeutronCaptureTime_AmBe2.0wPE150CB0.4.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/NeutronCaptureTime_AmBe2.0wPE150CB0.4.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 
-plt.hist2d(PE, CCB, bins=140, cmap='viridis', 
+plt.hist2d(PE, CCB, bins=35, cmap='viridis', 
         range=[[0, 100], [0, 0.5]], cmin=1)
 plt.colorbar(label='Counts')
-plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0 (PE < 150, CB < 0.4)")
+plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0 for outside the tank (PE < 150, CB < 0.4)")
 plt.xlabel("Cluster PE")
 plt.ylabel("Cluster Charge Balance")
-plt.savefig("ClusterPE_vs_ChargeBalance_AmBe2.0wPE150CB0.4.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0wPE150CB0.4.png", dpi=300, bbox_inches='tight')
 plt.show()
 
-residuals = (fit_y - fit_y_expected) / fit_y_errors
+'''residuals = (fit_y - fit_y_expected) / fit_y_errors
 plt.plot(fit_x, residuals)
 plt.axhline(0, color='gray', linestyle='--')
 plt.xlabel("Time [μs]")
 plt.ylabel("Normalized Residual")
 plt.title("Fit Residuals for AmBe 2.0 Neutron Capture Time (PE < 150, CB < 0.4)")
-plt.savefig("FitResiduals_AmBe2.0wPE150CB0.4.png", dpi=300, bbox_inches='tight')
-plt.show()
+plt.savefig("OutputPlots/FitResiduals_AmBe2.0wPE150CB0.4.png", dpi=300, bbox_inches='tight')
+plt.show()'''
 

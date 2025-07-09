@@ -9,22 +9,19 @@ import matplotlib.pyplot as plt
 
 # AmBe neutrons
 def AmBe(CPE, CCB, CT, CN, ETT):
-    if(CPE<=0 or CPE>150):      # 0 < cluster PE < 70
+    if(CPE<=0 or CPE>150):      # 0 < cluster PE < 150
         return False
     if(CCB>=0.4 or CCB<=0):   # Cluster Charge Balance < 0.4
         return False
     if(CT<2000):              # cluster time not in prompt window
-        return False
-    #if(CN>1): 
-     #   print("More than 1 neutron candidate cluster found", ETT)               # only 1 neutron candidate cluster per trigger
-        #return False          # for the PhaseIITreeMaker, this MUST BE CHANGED --> "clusterNumber" just tags the current cluster. Need to make sure this is the ONLY cluster in the event
+        return False        
     return True
 
 # cosmic muon clusters
 def cosmic(CT, CPE):
     if(CT<2000):              # any cluster in the prompt (2us) window
         return True
-    if(CPE>150):              # any cluster > 70 PE in the prompt or ext window
+    if(CPE>150):              # any cluster > 150 PE in the prompt or ext window
         return True
     return False
 
@@ -69,7 +66,11 @@ def source_loc(run):
         4603: (0, 100, 75),
         4604: (0, 50, 75),
         4605: (0, 50, 75),
-        4625: (0, -50, 75)
+        4625: (0, -50, 75),
+
+        #outside the tank data
+        4707: (0, 328, 0), 
+        4708: (0, 328, 0)
         
     }
         
@@ -157,46 +158,11 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                                 good_events.append(int(timestamp))
                                 accepted_events += 1
 
-                                '''if accepted_events in [1, 10, 20]:
-                                    plt.figure(figsize=(10, 4))
-                                    plt.plot(hist_edges[:-1], hist_values, label='Waveform')
-                                    plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
-                                    plt.axvspan(pulse_start, pulse_end, color='yellow', alpha=0.3, label='Integration Window')
-                                    plt.title(f'Accepted Waveform (timestamp: {timestamp})')
-                                    plt.xlabel('Time (ns)')
-                                    plt.ylabel('ADC counts')
-                                    plt.legend()
-                                    plt.tight_layout()
-                                    plt.show()'''
-
                             else:
                                 rejected_events += 1
 
-                                '''if rejected_events in [1, 10, 20]:
-                                    plt.figure(figsize=(10, 4))
-                                    plt.plot(hist_edges[:-1], hist_values, label='Waveform')
-                                    plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
-                                    plt.axvspan(pulse_start, pulse_end, color='yellow', alpha=0.3, label='Integration Window')
-                                    plt.title(f'Rejected Waveform (2nd pulse) (timestamp: {timestamp})')
-                                    plt.xlabel('Time (ns)')
-                                    plt.ylabel('ADC counts')
-                                    plt.legend()
-                                    plt.tight_layout()
-                                    plt.show()'''
                         else:
                             rejected_events += 1
-
-                            '''if rejected_events in [3, 6, 9]:
-                                plt.figure(figsize=(10, 4))
-                                plt.plot(hist_edges[:-1], hist_values, label='Waveform')
-                                plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
-                                plt.axvspan(pulse_start, pulse_end, color='yellow', alpha=0.3, label='Integration Window')
-                                plt.title(f'Rejected Waveform (pulse max < IC_adjusted) (timestamp: {timestamp})')
-                                plt.xlabel('Time (ns)')
-                                plt.ylabel('ADC counts')
-                                plt.legend()
-                                plt.tight_layout()
-                                plt.show()'''
 
 
 
@@ -210,18 +176,6 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
         print(f'{accepted_events} waveforms were accepted ({round(100*accepted_events/total,2)}%)')
         print(f'{rejected_events} waveforms were rejected ({round(100*rejected_events/total,2)}%)\n')
 
-        '''plt.figure(figsize=(8, 5))
-        plt.hist(IC_values, bins=200, alpha=0.5, label='All Events')
-        #plt.hist(IC_accepted, bins=100, alpha=0.7, label='Accepted Events')
-        plt.axvline(pulse_gamma, color='r', linestyle='--', label=f'Current Lower Cut = {pulse_gamma}')
-        plt.axvline(pulse_max, color='r', linestyle='--', label=f'Current Upper Cut = {pulse_max}')
-        plt.xlabel('IC_adjusted (nC)')
-        plt.ylabel('Number of Events')
-        plt.title(f'IC_adjusted Distribution for Run {run}')
-        plt.legend()
-        plt.tight_layout()
-        plt.savefig(f'IC_adjusted_Distribution_Run_{run}.png', dpi=300, bbox_inches='tight')
-        #plt.show(block=False)'''
 
         results[run] = {
             'source_position': (x_pos, y_pos, z_pos),
@@ -229,19 +183,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
             'rejected_events': rejected_events,
             'good_events': set(good_events)
         }
-
-    '''plt.figure(figsize=(8, 5))
-    plt.hist(combined_IC_values, bins=200, alpha=0.5, label='All Events')
-    plt.hist(combined_IC_accepted, bins=100, alpha=0.7, label='Accepted Events')
-    plt.axvline(pulse_gamma, color='r', linestyle='--', label=f'Current Lower Cut = {pulse_gamma}')
-    plt.axvline(pulse_max, color='r', linestyle='--', label=f'Current Upper Cut = {pulse_max}')
-    plt.xlabel('IC_adjusted (nC)')
-    plt.ylabel('Number of Events')
-    plt.title(f'IC_adjusted Distribution for Runs')
-    plt.legend()
-    plt.tight_layout()
-    #plt.savefig(f'IC_adjusted_Distribution_Runs.png', dpi=300, bbox_inches='tight')
-    plt.show()'''     
+  
 
     plt.figure(figsize=(8, 5))
     plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000), log=True)
