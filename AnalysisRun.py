@@ -16,8 +16,17 @@ import matplotlib
 
 # edit accordingly
 
+#data_directory = '../AmBe_BeamCluster/'                                    # directory containing BeamClusterAnalysis ntuples
+#waveform_dir = '../AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
+
+#data_directory = 'Background/'                                    # directory containing BeamClusterAnalysis ntuples
+#waveform_dir = 'Background/'
+
+
+
 data_directory = '../Outside_source/'                                    # directory containing BeamClusterAnalysis ntuples
-waveform_dir = '../Outside_source/'                             # directory containing raw AmBe PMT waveforms
+waveform_dir = '../Outside_source/'
+
 
 file_pattern = re.compile(r'AmBe_(\d+)_v\d+\.ntuple\.root')      # Pattern to extract run numbers from the files: R<run_number>_AmBe.ntuple.root -- edit to match your filename pattern
 
@@ -32,9 +41,21 @@ expoPFlat= lambda x,C1,tau,mu,B: C1*np.exp(-(x-mu)/tau) + B
 mypoisson = lambda x,mu: (mu**x)*np.exp(-mu)/scm.factorial(x)
 mypoissons = lambda x,R1,mu1,R2,mu2: R1*(mu1**x)*np.exp(-mu2)/scm.factorial(x) + R2*(mu2**x)*np.exp(-mu2)/scm.factorial(x)
 
+efficiency_data = defaultdict(lambda: [0, 0, 0])
 
 waveform_results, run_numbers, file_names = ane.AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, ane.source_loc)
 
+waveform_df = pd.DataFrame.from_dict(waveform_results, orient='index')
+
+if 'good_events' in waveform_df.columns:
+    waveform_df = waveform_df.drop(columns=['good_events'])
+
+waveform_df[['x_pos', 'y_pos', 'z_pos']] = pd.DataFrame(waveform_df['source_position'].tolist(), index=waveform_df.index)
+waveform_df = waveform_df.drop(columns=['source_position'])
+
+waveform_df = waveform_df.groupby(['x_pos', 'y_pos', 'z_pos'], as_index=False).sum()
+
+waveform_df.to_csv('TriggerSummary/AmBeWaveformResultsOutsideLowerPulse.csv', index = False)  # Save the waveform results to a CSV file
 
 cluster_time = []
 cluster_charge = []
@@ -45,7 +66,7 @@ hit_charges = []
 hit_ids = []
 source_position = [[], [], []]
 event_ids = []
-efficiency_data = defaultdict(lambda: [0, 0, 0])
+
 
 for c1, run in enumerate(run_numbers):
     print(f"\nProcessing run {run} ({c1+1}/{len(run_numbers)})")
@@ -95,7 +116,7 @@ for c1, run in enumerate(run_numbers):
         "eventID": event_ids
     })
     print(df.head())
-    df.to_csv(f'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidatesPE150CB0.4_{run}.csv', index=False) ##This files to do analysis for multiplicty, capture time, and other plots of Charge current vs Cluster time etc
+    df.to_csv(f'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidatesOutsideLowerPulse_{run}.csv', index=False) ##This files to do analysis for multiplicty, capture time, and other plots of Charge current vs Cluster time etc
 
 
 df_eff = pd.DataFrame([
@@ -109,6 +130,6 @@ df_eff = pd.DataFrame([
     for key, val in efficiency_data.items()
 ])
 
-df_eff.to_csv('TriggerSummary/AmBeTriggerSummaryportPE150CB0OutsideTheTank.csv', index=False) ## This file to do analysis for efficiency heatmap.
+df_eff.to_csv('TriggerSummary/AmBeTriggerSummaryportOutsideLowerPulse.csv', index=False) ## This file to do analysis for efficiency heatmap.
 
 

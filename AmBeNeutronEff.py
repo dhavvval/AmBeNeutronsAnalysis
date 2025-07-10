@@ -81,8 +81,8 @@ def source_loc(run):
     exit()
 
 def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
-                      pulse_start=300, pulse_end=1200, pulse_gamma=400,
-                      pulse_max=1000, NS_PER_ADC_SAMPLE=2, ADC_IMPEDANCE=50):
+                      pulse_start=300, pulse_end=1200, pulse_gamma=400, lower_pulse=175,
+                      pulse_max=1000, NS_PER_ADC_SAMPLE=2, ADC_IMPEDANCE=50): #pulse_gamma = 400, lower_pulse = 175
 
 
     file_names = []
@@ -111,6 +111,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
         print('-----------------------------------------------------------------')
 
         x_pos, y_pos, z_pos = source_loc(run)
+        key = (x_pos, y_pos, z_pos)
         print(f'Source position (x,y,z): ({x_pos},{y_pos},{z_pos})')
 
         good_events = []
@@ -147,7 +148,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                         combined_IC_values.append(IC_adjusted)
                         IC_values.append(IC)
 
-                        if pulse_max > IC_adjusted > pulse_gamma:
+                        if pulse_max > IC_adjusted > lower_pulse:
                             post_pulse_mask = hist_edges[:-1] > pulse_end
                             post_pulse_values = hist_values[post_pulse_mask]
                             another_pulse = np.any(post_pulse_values > (7 + sigma + baseline))
@@ -172,6 +173,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                     counter += 1
 
         total = accepted_events + rejected_events
+
         print(f'\nThere were a total of {total} acquisitions')
         print(f'{accepted_events} waveforms were accepted ({round(100*accepted_events/total,2)}%)')
         print(f'{rejected_events} waveforms were rejected ({round(100*rejected_events/total,2)}%)\n')
@@ -181,37 +183,9 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
             'source_position': (x_pos, y_pos, z_pos),
             'accepted_events': accepted_events,
             'rejected_events': rejected_events,
+            'total_waveforms': total,
             'good_events': set(good_events)
         }
-  
-
-    plt.figure(figsize=(8, 5))
-    plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000), log=True)
-    plt.xlabel('IC_adjusted')
-    plt.ylabel('Number of Events')
-    plt.title('All IC adjusted Values for background events')
-    plt.tight_layout()
-    #plt.savefig('IC_adjusted_AllEvents.png', dpi=300)
-    plt.show()
-
-    plt.figure(figsize=(8, 5))
-    plt.hist(IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000), log=True)
-    plt.xlabel('IC')
-    plt.ylabel('Number of Events')
-    plt.title('All IC Values for background events')
-    plt.tight_layout()
-    #plt.savefig('IC_adjusted_AllEvents.png', dpi=300)
-    plt.show()
-
-    # Second histogram
-    plt.figure(figsize=(8, 5))
-    plt.hist(combined_IC_accepted, bins=500, alpha=0.7, color='orange', range=(0, 1000), log=True)
-    plt.xlabel('IC_adjusted accepted')
-    plt.ylabel('Number of Events')
-    plt.title('Accepted IC_adjusted Values for background events')
-    plt.tight_layout()
-    #plt.savefig('IC_adjusted_AcceptedEvents.png', dpi=300)
-    plt.show()
 
     return results, run_numbers, file_names
 
