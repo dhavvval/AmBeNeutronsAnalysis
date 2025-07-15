@@ -187,6 +187,62 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
             'good_events': set(good_events)
         }
 
+    plt.figure(figsize=(8, 5))
+    plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000), log=True)
+    plt.xlabel('IC_adjusted')
+    plt.ylabel('Number of Events')
+    plt.title('All IC adjusted Values for all runs')
+    plt.tight_layout()
+    #plt.savefig('IC_adjusted_AllEvents.png', dpi=300)
+    plt.show()
+
+    plt.figure(figsize=(8, 5))
+    plt.hist(IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000), log=True)
+    plt.xlabel('IC')
+    plt.ylabel('Number of Events')
+    plt.title('All IC Values for all runs')
+    plt.tight_layout()
+    #plt.savefig('IC_adjusted_AllEvents.png', dpi=300)
+    plt.show()
+
+    # Second histogram
+    plt.figure(figsize=(8, 5))
+    plt.hist(combined_IC_accepted, bins=500, alpha=0.7, color='orange', range=(0, 1000), log=True)
+    plt.xlabel('IC_adjusted accepted')
+    plt.ylabel('Number of Events')
+    plt.title('Accepted IC_adjusted Values for all runs')
+    plt.tight_layout()
+    #plt.savefig('IC_adjusted_AcceptedEvents.png', dpi=300)
+    plt.show()
+
+    plt.figure(figsize=(8, 5))
+    plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000))
+    plt.xlabel('IC_adjusted')
+    plt.ylabel('Number of Events')
+    plt.title('All IC adjusted Values for all runs')
+    plt.tight_layout()
+    #plt.savefig('IC_adjusted_AllEvents.png', dpi=300)
+    plt.show()
+
+    plt.figure(figsize=(8, 5))
+    plt.hist(IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000))
+    plt.xlabel('IC')
+    plt.ylabel('Number of Events')
+    plt.title('All IC Values for all runs')
+    plt.tight_layout()
+    #plt.savefig('IC_adjusted_AllEvents.png', dpi=300)
+    plt.show()
+
+    # Second histogram
+    plt.figure(figsize=(8, 5))
+    plt.hist(combined_IC_accepted, bins=500, alpha=0.7, color='orange', range=(0, 1000))
+    plt.xlabel('IC_adjusted accepted')
+    plt.ylabel('Number of Events')
+    plt.title('Accepted IC_adjusted Values for all runs')
+    plt.tight_layout()
+    #plt.savefig('IC_adjusted_AcceptedEvents.png', dpi=300)
+    plt.show()
+
     return results, run_numbers, file_names
 
 def LoadBeamCluster(file_path, which_Tree):

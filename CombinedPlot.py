@@ -17,20 +17,25 @@ port_2=[4453, 4603, 4604, 4605, 4625]
 port_3=[4628, 4629, 4630, 4633, 4635, 4636, 4640, 4646, 4649, 4650, 4651]
 port_4=[4652, 4653, 4654, 4656, 4658, 4659, 4660, 4661, 4662, 4663, 4664, 4665, 4666, 4667, 4668, 4670, 4672, 4673, 4678, 4679, 4682, 4683, 4685, 4686, 4687]
 
-csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidatesLowerPulse_*.csv'))
+csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidatestest_*.csv'))
 
 
 def NeutCapture(t, A, therm, tau, B):
     return A * (1-np.exp(-t / therm)) * np.exp(-t / tau) + B
 
 
+'''all_df = []
+for file in csv_files:
+    df = pd.read_csv(file)
+    all_df.append(df)'''
+
 all_df = []
 for file in csv_files:
     match = re.search(r'_(\d+)\.csv$', file)
     if match:
         value = int(match.group(1))
-        if value in no_source_central_port:
-            print(f"Processing file for No Source Central Port: {file}")
+        if value in outside_tank:
+            print(f"Processing file for Outside Tank: {file}")
             df = pd.read_csv(file)
             all_df.append(df)
 
@@ -46,15 +51,15 @@ CT = combined_df['clusterTime'] / 1000  # Convert to microseconds
 plt.hist(events_counts, bins=range(1, 10, 1), log=True, edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
 plt.xlabel('Neutron multiplicity for background events')
 plt.ylabel('Counts')
-plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0 for All ports (Lower value)')
-plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0wLowerValueAllPorts.png", dpi=300, bbox_inches='tight')
+plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0 for Outside Tank (PE < 150, CCB < 0.4)')
+plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0wOutside.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 plt.hist(events_counts, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
 plt.xlabel('Neutron multiplicity for background events')
 plt.ylabel('Counts')
-plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0 for All ports (Lower value)')
-plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0nologwLowerValueAllPorts.png", dpi=300, bbox_inches='tight')
+plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0 for Outside Tank (PE < 150, CCB < 0.4)')
+plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0nologwOutside.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 # Plot Neutron Capture Time
@@ -93,18 +98,18 @@ plt.plot(fit_x, NeutCapture(fit_x, *popt), 'r-', linewidth=2, label=label)
 plt.xlabel(fr"Cluster Time [$\mu s$]")
 plt.ylabel("Counts")
 plt.legend()
-plt.title(f"Neutron Capture Time for AmBe 2.0 for All ports (Lower value)")
-plt.savefig("OutputPlots/NeutronCaptureTime_AmBe2.0wLowerValueAllPorts.png", dpi=300, bbox_inches='tight')
+plt.title(f"Neutron Capture Time for AmBe 2.0 for Outside Tank (PE < 150, CCB < 0.4)")
+plt.savefig("OutputPlots/NeutronCaptureTime_AmBe2.0wOutside.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 
 plt.hist2d(PE, CCB, bins=35, cmap='viridis', 
         range=[[0, 100], [0, 0.5]], cmin=1)
 plt.colorbar(label='Counts')
-plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0 for All ports (Lower value)")
+plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0 for Outside Tank (PE < 150, CCB < 0.4)")
 plt.xlabel("Cluster PE")
 plt.ylabel("Cluster Charge Balance")
-plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0wLowerValueAllPorts.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0wOutside.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 residuals = (fit_y - fit_y_expected) / fit_y_errors
@@ -112,7 +117,7 @@ plt.plot(fit_x, residuals)
 plt.axhline(0, color='gray', linestyle='--')
 plt.xlabel("Time [μs]")
 plt.ylabel("Normalized Residual")
-plt.title("Fit Residuals for AmBe 2.0 Neutron Capture Time for All ports (Lower value)")
-plt.savefig("OutputPlots/FitResiduals_AmBe2.0wLowerValueAllPorts.png", dpi=300, bbox_inches='tight')
+plt.title("Fit Residuals for AmBe 2.0 Neutron Capture Time for Outside Tank (PE < 150, CCB < 0.4)")
+plt.savefig("OutputPlots/FitResiduals_AmBe2.0wOutside.png", dpi=300, bbox_inches='tight')
 plt.show()
 

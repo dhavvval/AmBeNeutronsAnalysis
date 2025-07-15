@@ -16,16 +16,19 @@ import matplotlib
 
 # edit accordingly
 
-#data_directory = '../AmBe_BeamCluster/'                                    # directory containing BeamClusterAnalysis ntuples
-#waveform_dir = '../AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
+data_directory = '../AmBe_BeamCluster/'                                    # directory containing BeamClusterAnalysis ntuples
+waveform_dir = '../AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
+
 
 #data_directory = 'Background/'                                    # directory containing BeamClusterAnalysis ntuples
 #waveform_dir = 'Background/'
 
+#data_directory = '../Outside_source/'                                    # directory containing BeamClusterAnalysis ntuples
+#waveform_dir = '../Outside_source/'
 
-
-data_directory = '../Outside_source/'                                    # directory containing BeamClusterAnalysis ntuples
-waveform_dir = '../Outside_source/'
+##Test for my gridjobs
+#data_directory = '../test/'                                    # directory containing BeamClusterAnalysis ntuples
+#waveform_dir = '../test/'
 
 
 file_pattern = re.compile(r'AmBe_(\d+)_v\d+\.ntuple\.root')      # Pattern to extract run numbers from the files: R<run_number>_AmBe.ntuple.root -- edit to match your filename pattern
@@ -33,9 +36,7 @@ file_pattern = re.compile(r'AmBe_(\d+)_v\d+\.ntuple\.root')      # Pattern to ex
 
 which_Tree = 1                                               # PhaseIITreeMaker (0) or ANNIEEventTreeMaker (1) tool
 
-Events = {4506, 4505, 4499}
-    
-Backgrounds = {4496}
+central_port = [4506, 4505, 4499, 4507, 4508] #port 5 with AmBe source
 
 expoPFlat= lambda x,C1,tau,mu,B: C1*np.exp(-(x-mu)/tau) + B
 mypoisson = lambda x,mu: (mu**x)*np.exp(-mu)/scm.factorial(x)
@@ -55,7 +56,7 @@ waveform_df = waveform_df.drop(columns=['source_position'])
 
 waveform_df = waveform_df.groupby(['x_pos', 'y_pos', 'z_pos'], as_index=False).sum()
 
-waveform_df.to_csv('TriggerSummary/AmBeWaveformResultsOutsideLowerPulse.csv', index = False)  # Save the waveform results to a CSV file
+waveform_df.to_csv('TriggerSummary/AmBeWaveformResultstest.csv', index = False)  # Save the waveform results to a CSV file
 
 cluster_time = []
 cluster_charge = []
@@ -116,7 +117,7 @@ for c1, run in enumerate(run_numbers):
         "eventID": event_ids
     })
     print(df.head())
-    df.to_csv(f'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidatesOutsideLowerPulse_{run}.csv', index=False) ##This files to do analysis for multiplicty, capture time, and other plots of Charge current vs Cluster time etc
+    df.to_csv(f'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidatestest_{run}.csv', index=False) ##This files to do analysis for multiplicty, capture time, and other plots of Charge current vs Cluster time etc
 
 
 df_eff = pd.DataFrame([
@@ -130,6 +131,6 @@ df_eff = pd.DataFrame([
     for key, val in efficiency_data.items()
 ])
 
-df_eff.to_csv('TriggerSummary/AmBeTriggerSummaryportOutsideLowerPulse.csv', index=False) ## This file to do analysis for efficiency heatmap.
+df_eff.to_csv('TriggerSummary/AmBeTriggerSummaryporttest.csv', index=False) ## This file to do analysis for efficiency heatmap.
 
 
