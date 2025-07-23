@@ -14,14 +14,15 @@ import pandas as pd
 import matplotlib
 
 
+
 # edit accordingly
 
-data_directory = '../AmBe_BeamCluster/'                                    # directory containing BeamClusterAnalysis ntuples
-waveform_dir = '../AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
+#data_directory = '../AmBe_BeamCluster/'                                    # directory containing BeamClusterAnalysis ntuples
+#waveform_dir = '../AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
 
 
-#data_directory = 'Background/'                                    # directory containing BeamClusterAnalysis ntuples
-#waveform_dir = 'Background/'
+data_directory = '../test/'                                    # directory containing BeamClusterAnalysis ntuples
+waveform_dir = '../test/'
 
 #data_directory = '../Outside_source/'                                    # directory containing BeamClusterAnalysis ntuples
 #waveform_dir = '../Outside_source/'
@@ -30,8 +31,13 @@ waveform_dir = '../AmBe_waveforms/'                             # directory cont
 #data_directory = '../NewRun/'                                    # directory containing BeamClusterAnalysis ntuples
 #waveform_dir = '../NewRun/'
 
+campaign = int(input('What campaign is this? (1/2): '))  # Campaign 1 or 2
 
-file_pattern = re.compile(r'AmBe_(\d+)_v\d+\.ntuple\.root')      # Pattern to extract run numbers from the files: R<run_number>_AmBe.ntuple.root -- edit to match your filename pattern
+if campaign == 1:
+    file_pattern = re.compile(r'AmBe_(\d+)_v\d+\.ntuple\.root')      # Pattern to extract run numbers from the files: AmBe_<run_number>_v<version>.ntuple.root
+elif campaign == 2:
+    file_pattern = re.compile(r'BeamCluster_(\d+)\.root')
+     # Pattern to extract run numbers from the files: R<run_number>_AmBe.ntuple.root -- edit to match your filename pattern
 
 ##File pattern for the AmBe v1 Campaign 2 - July 2025
 #file_pattern = re.compile(r'BeamCluster_(\d+)\.root') ## BeamCluster_4708.root
@@ -40,13 +46,13 @@ which_Tree = 1                                               # PhaseIITreeMaker 
 
 central_port = [4506, 4505, 4499, 4507, 4508] #port 5 with AmBe source
 
-expoPFlat= lambda x,C1,tau,mu,B: C1*np.exp(-(x-mu)/tau) + B
-mypoisson = lambda x,mu: (mu**x)*np.exp(-mu)/scm.factorial(x)
-mypoissons = lambda x,R1,mu1,R2,mu2: R1*(mu1**x)*np.exp(-mu2)/scm.factorial(x) + R2*(mu2**x)*np.exp(-mu2)/scm.factorial(x)
+
+runinfo = input('What type of run is this? (AmBe/Outside_source//C1/C2/ClusterCuts): ')
+runinfo = str(runinfo)
 
 efficiency_data = defaultdict(lambda: [0, 0, 0])
 
-waveform_results, run_numbers, file_names = ane.AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, ane.source_loc)
+waveform_results, run_numbers, file_names = ane.AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, ane.source_loc, runinfo=runinfo, campaign=campaign)
 
 waveform_df = pd.DataFrame.from_dict(waveform_results, orient='index')
 
@@ -58,7 +64,7 @@ waveform_df = waveform_df.drop(columns=['source_position'])
 
 waveform_df = waveform_df.groupby(['x_pos', 'y_pos', 'z_pos'], as_index=False).sum()
 
-waveform_df.to_csv('TriggerSummary/AmBeWaveformResultsC1gammmacut.csv', index = False)  # Save the waveform results to a CSV file
+waveform_df.to_csv(f'TriggerSummary/AmBeWaveformResults_{runinfo}.csv', index = False)  # Save the waveform results to a CSV file
 
 cluster_time = []
 cluster_charge = []
@@ -119,7 +125,7 @@ for c1, run in enumerate(run_numbers):
         "eventID": event_ids
     })
     print(df.head())
-    df.to_csv(f'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidaC1gammmacut_{run}.csv', index=False) ##This files to do analysis for multiplicty, capture time, and other plots of Charge current vs Cluster time etc
+    df.to_csv(f'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_{runinfo}_{run}.csv', index=False) ##This files to do analysis for multiplicty, capture time, and other plots of Charge current vs Cluster time etc
 
 
 df_eff = pd.DataFrame([
@@ -133,7 +139,7 @@ df_eff = pd.DataFrame([
     for key, val in efficiency_data.items()
 ])
 
-df_eff.to_csv('TriggerSummary/AmBeTriggerSummaryportC1gammmacut.csv', index=False) ## This file to do analysis for efficiency heatmap.
+df_eff.to_csv(f'TriggerSummary/AmBeTriggerSummary_{runinfo}.csv', index=False) ## This file to do analysis for efficiency heatmap.
 
 
 

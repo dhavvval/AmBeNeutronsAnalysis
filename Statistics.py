@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import seaborn as sns
 
-WaveformFile = "TriggerSummary/AmBeWaveformResultsPE150CB0.4.csv"
-TriggerFile = "TriggerSummary/AmBeTriggerSummaryportPE150CB0.4.csv"
+WaveformFile = "TriggerSummary/AmBeWaveformResultsC2test.csv"
+TriggerFile = "TriggerSummary/AmBeTriggerSummaryportC2test.csv"
 
 Wdf = pd.read_csv(WaveformFile)
 Tdf = pd.read_csv(TriggerFile)
@@ -41,26 +41,28 @@ WT_df["position"]= WT_df.apply(lambda row: f"({row['x_pos']}, {row['y_pos']}, {r
 WT_df["% Accepted waveforms"] = round ((WT_df["accepted_events"]/WT_df["total_waveforms"])*100, 2)
 WT_df["% Neutron candidates"] = round ((WT_df["neutron_candidates"]/WT_df["total_waveforms"])*100, 2)
 WT_df["% AmBe triggers"] = round ((WT_df["ambe_triggers"]/WT_df["total_waveforms"])*100, 2)
+WT_df["% Cosmic events"] = round ((WT_df["cosmic_events"]/WT_df["total_waveforms"])*100, 2)
 
 print(WT_df.head())
 
-WT_stats = WT_df[['port', "position", "total_waveforms", "accepted_events", "neutron_candidates", "ambe_triggers", "% Accepted waveforms", "% Neutron candidates", "% AmBe triggers"]]
+WT_stats = WT_df[['port', "position", "total_waveforms", "accepted_events", "neutron_candidates", "ambe_triggers", "% Accepted waveforms", "% Neutron candidates", "% AmBe triggers", "% Cosmic events"]]
 
 WT_stats = WT_stats.sort_values(by='port')
 WT_stats = WT_stats.reset_index(drop=True)
+print(WT_stats)
 
 
 
 
 
 plot_df = WT_stats.copy()
-plot_df[["% Accepted waveforms", "% Neutron candidates", "% AmBe triggers"]] = \
-    plot_df[["% Accepted waveforms", "% Neutron candidates", "% AmBe triggers"]].fillna(0)
+plot_df[["% Accepted waveforms", "% Neutron candidates", "% AmBe triggers", "% Cosmic events"]] = \
+    plot_df[["% Accepted waveforms", "% Neutron candidates", "% AmBe triggers", "% Cosmic events"]].fillna(0)
 
 # Define colors (Okabe-Ito)
-colors = ["#0371B1", "#E69F00", "#009E73"]  # Blue, Orange, Green
+colors = ["#0371B1", "#E69F00", "#009E73", "#F0E442"]  # Blue, Orange, Green, Yellow
 
-pdf_file = "Statistics_of_AmBe2.0C1.pdf"
+pdf_file = "Statistics_of_AmBe_test_5692.pdf"
 with PdfPages(pdf_file) as pdf:
     ports = plot_df["port"].unique()
     
@@ -71,6 +73,7 @@ with PdfPages(pdf_file) as pdf:
         accepted = port_data["% Accepted waveforms"]
         neutron = port_data["% Neutron candidates"]
         ambe = port_data["% AmBe triggers"]
+        cosmic = port_data["% Cosmic events"]
         
         x = np.arange(len(positions))
         width = 0.25
@@ -81,7 +84,7 @@ with PdfPages(pdf_file) as pdf:
         bars1 = ax.bar(x - width, accepted, width, label='% Accepted waveforms', color=colors[0])
         bars2 = ax.bar(x, ambe, width, label='% AmBe triggers', color=colors[1])
         bars3 = ax.bar(x + width, neutron, width, label='% Neutron candidates', color=colors[2])
-
+        bars4 = ax.bar(x + 2*width, cosmic, width, label='% Cosmic events', color=colors[3])
 
         # Annotate bars
         def annotate(bars):
@@ -97,6 +100,7 @@ with PdfPages(pdf_file) as pdf:
         annotate(bars1)
         annotate(bars2)
         annotate(bars3)
+        annotate(bars4)
         
         # Highlight NaNs in original WT_df by marking positions
         nan_mask = WT_df.loc[port_data.index, "% Accepted waveforms"].isna()

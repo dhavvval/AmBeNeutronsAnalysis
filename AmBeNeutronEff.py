@@ -8,6 +8,8 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 from numpy.fft import fft, ifft, fftfreq
 
+
+
 # AmBe neutrons
 def AmBe(CPE, CCB, CT, CN, ETT):
     if(CPE<=0 or CPE>150):      # 0 < cluster PE < 150
@@ -80,7 +82,9 @@ def source_loc(run):
         5683: (0, -100, 0),
         5684: (0, -100, 0),
         5688: (0, 100, 0), #dummy port number actual one is (0, -100, 0)
-        5689: (0, 50, 0) #dummy port number actual one is (0, -100, 0)
+        5689: (0, 50, 0), #dummy port number actual one is (0, -100, 0)
+        5691: (0, 0, 0), #dummy port number actual one is (0, -100, 0)
+        5693: (0, 0, 0) #dummy port number actual one is (0, -100, 0)
         
     }
         
@@ -92,7 +96,7 @@ def source_loc(run):
 
 def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                       pulse_start=300, pulse_end=1200, pulse_gamma=400, lower_pulse=175,
-                      pulse_max=1000, NS_PER_ADC_SAMPLE=2, ADC_IMPEDANCE=50): #pulse_gamma = 400, lower_pulse = 175
+                      pulse_max=1000, NS_PER_ADC_SAMPLE=2, ADC_IMPEDANCE=50, runinfo='default', campaign=1): #pulse_gamma = 400, lower_pulse = 175
 
 
     file_names = []
@@ -106,8 +110,10 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
             run_number = int(match.group(1))
             run_numbers.append(str(run_number))
             file_names.append(os.path.join(data_directory, file_name))
-
-    folder_pattern = re.compile(r'^RWM_\d+')
+    if campaign == 1:
+        folder_pattern = re.compile(r'^RWM_\d+')
+    elif campaign == 2:
+        folder_pattern = re.compile(r'^BRF_\d+')
     results = {}
 
     combined_IC_values = []
@@ -131,6 +137,10 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
 
         waveform_files = os.listdir(os.path.join(waveform_dir, run))
 
+        waveformsample = input("Do you want to see samples of waveforms? (y/n): ")
+        IC_plots = input('Do you want to plot IC values? (y/n): ')
+
+
         print('\nLoading Raw Waveforms...')
         for file_idx in trange(len(waveform_files)):
             waveform_filepath = os.path.join(waveform_dir, run, waveform_files[file_idx])
@@ -149,7 +159,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                         hist_values = hist.values()
                         hist_edges = hist.axes[0].edges()
 
-                        baseline, sigma = norm.fit(hist_values[10000:30000])
+                        baseline, sigma = norm.fit(hist_values)
                         
                         hist_values_bs = hist_values - baseline
 
@@ -172,107 +182,69 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                             if not another_pulse:
                                 good_events.append(int(timestamp))
                                 accepted_events += 1
-                                if accepted_events in [1, 10, 20]:
-                                    '''
-                                    plt.figure(figsize=(10, 4))
-                                    plt.plot(hist_edges[:-1], hist_values, label='Waveform')
-                                    plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
-                                    plt.axvspan(pulse_start, pulse_end, color='yellow', alpha=0.3, label='Integration Window')
-                                    plt.title(f'Accepted Waveform (timestamp: {timestamp}, Run: {run}), IC: {IC_adjusted:.2f}')
-                                    plt.xlabel('Time (ns)')
-                                    plt.ylabel('ADC counts')
-                                    plt.legend()
-                                    plt.tight_layout()
-                                    plt.show()
+
+                                if waveformsample == 'y':
+                                    if accepted_events in [1, 10, 20]:
+                                        plt.figure(figsize=(10, 4))
+                                        plt.plot(hist_edges[:-1], hist_values_bs, label='Waveform')
+                                        plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
+                                        plt.axvspan(pulse_start, pulse_end, color='yellow', alpha=0.3, label='Integration Window')
+                                        plt.title(f'Accepted Waveform (timestamp: {timestamp}, Run: {run}), IC: {IC_adjusted:.2f}')
+                                        plt.xlabel('Time (ns)')
+                                        plt.ylabel('ADC counts')
+                                        plt.legend()
+                                        plt.tight_layout()
+                                        plt.show()
+                                else:
+                                    continue
                                     
-                                    sr = 2000 
-                                    # sampling interval
-                                    ts = 1.0/sr
-                                    t = np.arange(0,1,ts)
-                                    mydata=hist_values[300:1200]
-                                    X = fft(mydata)
-                                    N = len(X)
-                                    n = np.arange(N)
-                                    T = N/sr
-                                    freq = n/T 
-
-                                    plt.figure(figsize = (12, 6))
-                                    plt.subplot(121)
-
-                                    plt.stem(freq, np.abs(X), 'b', \
-                                            markerfmt=" ", basefmt="-b")
-                                    plt.xlabel('Freq (Hz)')
-                                    plt.ylabel('FFT Amplitude |X(freq)|')
-                                    plt.xlim(0, 10)
-
-                                    plt.subplot(122)
-                                    #plt.plot(t, ifft(X), 'r')
-                                    plt.plot(mydata, 'r')
-                                    plt.plot(X, 'b')
-                                    plt.plot(ifft(X), 'g')
-                                    plt.xlabel('Time (s)')
-                                    plt.ylabel('Amplitude')
-                                    plt.tight_layout()
-                                    plt.show()
-                                    
-                                    useme=hist_values[800:1000]
-                                    print(useme)
-                                    fs = useme.size 
-                                    X = fft(useme)
-                                    freq = fftfreq(len(useme), d=1.0/fs)
-
-                                    #cut_off = 6  # Hz
-                                    X_filtered = X.copy()
-                                    #X_filtered[np.abs(freq) < cut_off] = 0
-
-                                    # Inverse FFT back to time domain
-                                    x_filtered = ifft(X_filtered)
-                                    plt.figure(figsize=(10, 4))
-                                    plt.stem(freq, np.abs(X_filtered), 'b', markerfmt=" ", basefmt="-b")
-                                    plt.xlim(0, 20)
-                                    plt.xlabel('Frequency (Hz)')
-                                    plt.ylabel('Amplitude')
-                                    plt.title('FFT Amplitude Spectrum (After Filtering)')
-                                    plt.show()
-                                    '''
-                                
-
-
                             else:
                                 rejected_events += 1
-                                '''if rejected_events in [1, 10, 20]:
+
+                                if waveformsample == 'y':
+                                    if rejected_events in [1, 10, 20]:
+                                        plt.figure(figsize=(10, 4))
+                                        plt.plot(hist_edges[:-1], hist_values_bs, label='Waveform')
+                                        plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
+                                        plt.axvspan(pulse_start, pulse_end, color='yellow', alpha=0.3, label='Integration Window')
+                                        plt.title(f'Rejected Waveform (2nd pulse) (timestamp: {timestamp}), run: {run}, IC: {IC_adjusted:.2f}')
+                                        plt.xlabel('Time (ns)')
+                                        plt.ylabel('ADC counts')
+                                        plt.legend()
+                                        plt.tight_layout()
+                                        plt.show()
+                                else:
+                                    continue
+
+                        else:
+                            rejected_events += 1
+                            if waveformsample == 'y':
+                                if rejected_events in [3, 6, 9]:
                                     plt.figure(figsize=(10, 4))
                                     plt.plot(hist_edges[:-1], hist_values_bs, label='Waveform')
                                     plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
                                     plt.axvspan(pulse_start, pulse_end, color='yellow', alpha=0.3, label='Integration Window')
-                                    plt.title(f'Rejected Waveform (2nd pulse) (timestamp: {timestamp}), run: {run}, IC: {IC_adjusted:.2f}')
+                                    plt.title(f'Rejected Waveform (pulse max < IC_adjusted) (timestamp: {timestamp}), Run: {run}, IC: {IC_adjusted:.2f}')
                                     plt.xlabel('Time (ns)')
                                     plt.ylabel('ADC counts')
                                     plt.legend()
                                     plt.tight_layout()
-                                    plt.show()'''
-
-                        else:
-                            rejected_events += 1
-                            '''if rejected_events in [3, 6, 9]:
-                                plt.figure(figsize=(10, 4))
-                                plt.plot(hist_edges[:-1], hist_values_bs, label='Waveform')
-                                plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
-                                plt.axvspan(pulse_start, pulse_end, color='yellow', alpha=0.3, label='Integration Window')
-                                plt.title(f'Rejected Waveform (pulse max < IC_adjusted) (timestamp: {timestamp}), Run: {run}, IC: {IC_adjusted:.2f}')
-                                plt.xlabel('Time (ns)')
-                                plt.ylabel('ADC counts')
-                                plt.legend()
-                                plt.tight_layout()
-                                plt.show()'''
-
-
+                                    plt.show()
+                            else:
+                                continue
 
                     except Exception as e:
                         print(f"Could not access '{folder}': {e}")
 
                     counter += 1
-
+        plt.figure(figsize=(8, 5))
+        plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000))
+        plt.xlabel('IC_adjusted')
+        plt.ylabel('Number of Events')
+        plt.title('All IC adjusted Values for run ' + run)
+        plt.tight_layout()
+        #plt.savefig('IC_adjusted_AllEvents.png', dpi=300)
+        plt.show()
         total = accepted_events + rejected_events
 
         print(f'\nThere were a total of {total} acquisitions')
@@ -288,61 +260,35 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
             'good_events': set(good_events)
         }
 
-    '''plt.figure(figsize=(8, 5))
-    plt.hist(combined_IC_values, bins=100, alpha=0.7, color='blue', range=(0, 1000), log=True)
-    plt.xlabel('IC_adjusted')
-    plt.ylabel('Number of Events')
-    plt.title('All IC adjusted Values for all runs')
-    plt.tight_layout()
-    #plt.savefig('IC_adjusted_AllEvents.png', dpi=300)
-    plt.show()
+    if IC_plots == 'y':
+        plt.figure(figsize=(8, 5))
+        plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000))
+        plt.xlabel('IC_adjusted')
+        plt.ylabel('Number of Events')
+        plt.title('All IC adjusted Values for all runs')
+        plt.tight_layout()
+        plt.savefig(f'IC_adjusted_AllEvents_{runinfo}.png', dpi=300)
+        #plt.show()
 
-    plt.figure(figsize=(8, 5))
-    plt.hist(IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000), log=True)
-    plt.xlabel('IC')
-    plt.ylabel('Number of Events')
-    plt.title('All IC Values for all runs')
-    plt.tight_layout()
-    #plt.savefig('IC_adjusted_AllEvents.png', dpi=300)
-    plt.show()
+        plt.figure(figsize=(8, 5))
+        plt.hist(IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000))
+        plt.xlabel('IC')
+        plt.ylabel('Number of Events')
+        plt.title('All IC Values for all runs')
+        plt.tight_layout()
+        plt.savefig(f'IC_adjusted_AllEvents_{runinfo}.png', dpi=300)
+        #plt.show()
 
-    # Second histogram
-    plt.figure(figsize=(8, 5))
-    plt.hist(combined_IC_accepted, bins=500, alpha=0.7, color='orange', range=(0, 1000), log=True)
-    plt.xlabel('IC_adjusted accepted')
-    plt.ylabel('Number of Events')
-    plt.title('Accepted IC_adjusted Values for all runs')
-    plt.tight_layout()
-    #plt.savefig('IC_adjusted_AcceptedEvents.png', dpi=300)
-    plt.show()
+        # Second histogram
+        plt.figure(figsize=(8, 5))
+        plt.hist(combined_IC_accepted, bins=500, alpha=0.7, color='orange', range=(0, 1000))
+        plt.xlabel('IC_adjusted accepted')
+        plt.ylabel('Number of Events')
+        plt.title('Accepted IC_adjusted Values for all runs')
+        plt.tight_layout()
+        plt.savefig(f'IC_adjusted_AcceptedEvents_{runinfo}.png', dpi=300)
+        #plt.show()
 
-    plt.figure(figsize=(8, 5))
-    plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000))
-    plt.xlabel('IC_adjusted')
-    plt.ylabel('Number of Events')
-    plt.title('All IC adjusted Values for all runs')
-    plt.tight_layout()
-    #plt.savefig('IC_adjusted_AllEvents.png', dpi=300)
-    plt.show()
-
-    plt.figure(figsize=(8, 5))
-    plt.hist(IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000))
-    plt.xlabel('IC')
-    plt.ylabel('Number of Events')
-    plt.title('All IC Values for all runs')
-    plt.tight_layout()
-    #plt.savefig('IC_adjusted_AllEvents.png', dpi=300)
-    plt.show()
-
-    # Second histogram
-    plt.figure(figsize=(8, 5))
-    plt.hist(combined_IC_accepted, bins=500, alpha=0.7, color='orange', range=(0, 1000))
-    plt.xlabel('IC_adjusted accepted')
-    plt.ylabel('Number of Events')
-    plt.title('Accepted IC_adjusted Values for all runs')
-    plt.tight_layout()
-    #plt.savefig('IC_adjusted_AcceptedEvents.png', dpi=300)
-    plt.show()'''
 
     return results, run_numbers, file_names
 

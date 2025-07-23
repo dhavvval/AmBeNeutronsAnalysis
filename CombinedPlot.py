@@ -17,7 +17,7 @@ port_2=[4453, 4603, 4604, 4605, 4625]
 port_3=[4628, 4629, 4630, 4633, 4635, 4636, 4640, 4646, 4649, 4650, 4651]
 port_4=[4652, 4653, 4654, 4656, 4658, 4659, 4660, 4661, 4662, 4663, 4664, 4665, 4666, 4667, 4668, 4670, 4672, 4673, 4678, 4679, 4682, 4683, 4685, 4686, 4687]
 
-csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidaC1gammmacut_*.csv'))
+csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_*.csv'))
 
 
 def NeutCapture(t, A, therm, tau, B):
