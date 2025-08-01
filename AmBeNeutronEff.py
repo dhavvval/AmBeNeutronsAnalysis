@@ -11,20 +11,37 @@ from numpy.fft import fft, ifft, fftfreq
 
 
 # AmBe neutrons
-def AmBe(CPE, CCB, CT, CN, ETT):
-    if(CPE<=0 or CPE>150):      # 0 < cluster PE < 150
+def AmBe(CPE, CCB, CT, CN, ETT, CH):
+    if(CPE<=0 or CPE>100):      # 0 < cluster PE < 100
         return False
-    if(CCB>=0.4 or CCB<=0):   # Cluster Charge Balance < 0.4
+    if(CCB>=0.45 or CCB<=0):   # Cluster Charge Balance < 0.4
         return False
     if(CT<2000):              # cluster time not in prompt window
-        return False        
+        return False
+    if(CN !=1):                # cluster multiplicity = 1
+        return False
+    #if (CH < 5):
+     #   return False       # cluster hits > 3
+    return True
+
+def AmBeMultiple(CPE, CCB, CT, CN, ETT, CH):
+    if(CPE<=0 or CPE>100):      # 0 < cluster PE < 100
+        return False
+    if(CCB>=0.45 or CCB<=0):   # Cluster Charge Balance < 0.4
+        return False
+    if(CT<2000):              # cluster time not in prompt window
+        return False
+    if(CN ==1):                # cluster multiplicity > 1
+        return False 
+    #if(CH < 5):              # cluster hits > 3
+     #   return False
     return True
 
 # cosmic muon clusters
 def cosmic(CT, CPE):
     if(CT<2000):              # any cluster in the prompt (2us) window
         return True
-    if(CPE>150):              # any cluster > 150 PE in the prompt or ext window
+    if(CPE>100):              # any cluster > 150 PE in the prompt or ext window
         return True
     return False
 
@@ -84,8 +101,15 @@ def source_loc(run):
         5688: (0, 100, 0), #dummy port number actual one is (0, -100, 0)
         5689: (0, 50, 0), #dummy port number actual one is (0, -100, 0)
         5691: (0, 0, 0), #dummy port number actual one is (0, -100, 0)
-        5693: (0, 0, 0) #dummy port number actual one is (0, -100, 0)
+        5693: (0, 0, 0), #dummy port number actual one is (0, -100, 0)
         
+        ##########Analysis Quality C2 - AmBe v2 Campaign 2 - July 2025#########
+        #port 5
+        5682: (0, 0, 0),
+        5696: (0, -100, 0),
+        5707: (0, 55.3, 0),
+        5708: (0, 100, 0),
+        5710: (0, 100, 0)
     }
         
     if run in source_positions:
@@ -93,7 +117,8 @@ def source_loc(run):
 
     print('\n##### RUN NUMBER '+str(run)+' DOESNT HAVE A SOURCE LOCATION!!! ERROR #####\n')
     exit()
-
+waveformsample = input("Do you want to see samples of waveforms? (y/n): ")
+IC_plots = input('Do you want to plot IC values? (y/n): ')
 def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                       pulse_start=300, pulse_end=1200, pulse_gamma=400, lower_pulse=175,
                       pulse_max=1000, NS_PER_ADC_SAMPLE=2, ADC_IMPEDANCE=50, runinfo='default', campaign=1): #pulse_gamma = 400, lower_pulse = 175
@@ -137,9 +162,6 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
 
         waveform_files = os.listdir(os.path.join(waveform_dir, run))
 
-        waveformsample = input("Do you want to see samples of waveforms? (y/n): ")
-        IC_plots = input('Do you want to plot IC values? (y/n): ')
-
 
         print('\nLoading Raw Waveforms...')
         for file_idx in trange(len(waveform_files)):
@@ -166,13 +188,20 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                         pulse_mask = (hist_edges[:-1] > pulse_start) & (hist_edges[:-1] < pulse_end)
                         #baseline, sigma = norm.fit(pulse_mask)
                        # print(f'Baseline: {baseline}, Sigma: {sigma}')
-                        IC = np.sum(hist_values[pulse_mask]-baseline ) #- baseline
+                        ADC_TO_VOLT = 2.415 / (2 ** 12)
+                        IC = np.sum(hist_values[pulse_mask]-baseline ) #*ADC_TO_VOLT #- baseline
                         IC_adjusted = (NS_PER_ADC_SAMPLE / ADC_IMPEDANCE) * IC
+                        ref_integral = 2.6e-2  # Reference integral value for normalization
+                        REF_ENERGY = 4.42  # MeV, energy of the AmBe neutron source
+                        IC_MeV = (IC_adjusted / ref_integral) * REF_ENERGY
+                        #print(f'IC_MeV: {IC_MeV:.2f} MeV, Timestamp: {timestamp}')
                        # IC_values.append(IC_adjusted)
                         combined_IC_values.append(IC_adjusted)
                         IC_values.append(IC)
+                        #print(f'IC_adjusted: {IC_adjusted:.2f} ns, Timestamp: {timestamp}')
 
-                        if pulse_max > IC_adjusted > pulse_gamma:
+                        if pulse_max > IC_adjusted > 250:
+                        #if IC_MeV > 4.42:
                             post_pulse_mask = hist_edges[:-1] > pulse_end
                             post_pulse_values = hist_values[post_pulse_mask]
                             another_pulse = np.any(post_pulse_values > (7 + sigma + baseline))
@@ -184,17 +213,21 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                                 accepted_events += 1
 
                                 if waveformsample == 'y':
-                                    if accepted_events in [1, 10, 20]:
+                                    if accepted_events in range(1, 11):
+                                        print(IC)
                                         plt.figure(figsize=(10, 4))
                                         plt.plot(hist_edges[:-1], hist_values_bs, label='Waveform')
-                                        plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
+                                        #plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
                                         plt.axvspan(pulse_start, pulse_end, color='yellow', alpha=0.3, label='Integration Window')
                                         plt.title(f'Accepted Waveform (timestamp: {timestamp}, Run: {run}), IC: {IC_adjusted:.2f}')
                                         plt.xlabel('Time (ns)')
                                         plt.ylabel('ADC counts')
                                         plt.legend()
                                         plt.tight_layout()
-                                        plt.show()
+                                        plt.savefig(f'AcceptedWaveform_{timestamp}_Run{run}.png', dpi=300)
+                                       
+                                        plt.close()
+                                        #plt.show()
                                 else:
                                     continue
                                     
@@ -205,14 +238,17 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                                     if rejected_events in [1, 10, 20]:
                                         plt.figure(figsize=(10, 4))
                                         plt.plot(hist_edges[:-1], hist_values_bs, label='Waveform')
-                                        plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
+                                        #plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
                                         plt.axvspan(pulse_start, pulse_end, color='yellow', alpha=0.3, label='Integration Window')
                                         plt.title(f'Rejected Waveform (2nd pulse) (timestamp: {timestamp}), run: {run}, IC: {IC_adjusted:.2f}')
                                         plt.xlabel('Time (ns)')
                                         plt.ylabel('ADC counts')
                                         plt.legend()
                                         plt.tight_layout()
-                                        plt.show()
+                                        plt.savefig(f'RejectedWaveform_2ndPulse_{timestamp}_Run{run}.png', dpi=300)
+                                        #plt.show()
+                                        plt.close()
+                                        #plt.show()
                                 else:
                                     continue
 
@@ -222,14 +258,17 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                                 if rejected_events in [3, 6, 9]:
                                     plt.figure(figsize=(10, 4))
                                     plt.plot(hist_edges[:-1], hist_values_bs, label='Waveform')
-                                    plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
+                                    #plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
                                     plt.axvspan(pulse_start, pulse_end, color='yellow', alpha=0.3, label='Integration Window')
                                     plt.title(f'Rejected Waveform (pulse max < IC_adjusted) (timestamp: {timestamp}), Run: {run}, IC: {IC_adjusted:.2f}')
                                     plt.xlabel('Time (ns)')
                                     plt.ylabel('ADC counts')
                                     plt.legend()
                                     plt.tight_layout()
-                                    plt.show()
+                                    plt.savefig(f'RejectedWaveform_PulseMax_{timestamp}_Run{run}.png', dpi=300)
+                                    #plt.show()
+                                    plt.close()
+                                    #plt.show()
                             else:
                                 continue
 
@@ -237,15 +276,18 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                         print(f"Could not access '{folder}': {e}")
 
                     counter += 1
+
+        total = accepted_events + rejected_events
+
         plt.figure(figsize=(8, 5))
         plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000))
         plt.xlabel('IC_adjusted')
         plt.ylabel('Number of Events')
-        plt.title('All IC adjusted Values for run ' + run)
+        plt.title('All IC adjusted values for run: ' + str(run))
         plt.tight_layout()
-        #plt.savefig('IC_adjusted_AllEvents.png', dpi=300)
-        plt.show()
-        total = accepted_events + rejected_events
+        plt.savefig(f'IC_adjusted_AllEvents_{runinfo}_{run}.png', dpi=300)
+        plt.close()
+        #plt.show()
 
         print(f'\nThere were a total of {total} acquisitions')
         print(f'{accepted_events} waveforms were accepted ({round(100*accepted_events/total,2)}%)')
@@ -262,31 +304,36 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
 
     if IC_plots == 'y':
         plt.figure(figsize=(8, 5))
-        plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000))
+        plt.hist(combined_IC_values, bins=200, alpha=0.7, color='blue', range=(0, 1000))
         plt.xlabel('IC_adjusted')
         plt.ylabel('Number of Events')
         plt.title('All IC adjusted Values for all runs')
         plt.tight_layout()
         plt.savefig(f'IC_adjusted_AllEvents_{runinfo}.png', dpi=300)
+        plt.close()
         #plt.show()
+        
 
         plt.figure(figsize=(8, 5))
-        plt.hist(IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000))
+        plt.hist(IC_values, bins=200, alpha=0.7, color='blue', range=(0, 1000))
         plt.xlabel('IC')
         plt.ylabel('Number of Events')
         plt.title('All IC Values for all runs')
         plt.tight_layout()
-        plt.savefig(f'IC_adjusted_AllEvents_{runinfo}.png', dpi=300)
+        plt.savefig(f'IC_AllEvents_{runinfo}.png', dpi=300)
+        plt.close()
         #plt.show()
+     
 
         # Second histogram
         plt.figure(figsize=(8, 5))
-        plt.hist(combined_IC_accepted, bins=500, alpha=0.7, color='orange', range=(0, 1000))
+        plt.hist(combined_IC_accepted, bins=200, alpha=0.7, color='orange', range=(0, 1000))
         plt.xlabel('IC_adjusted accepted')
         plt.ylabel('Number of Events')
         plt.title('Accepted IC_adjusted Values for all runs')
         plt.tight_layout()
         plt.savefig(f'IC_adjusted_AcceptedEvents_{runinfo}.png', dpi=300)
+        plt.close()
         #plt.show()
 
 
@@ -330,9 +377,11 @@ def LoadBeamCluster(file_path, which_Tree):
     return data
 
 def process_events(event_data, good_events, x_pos, y_pos, z_pos,
-                   cosmic, AmBe,
+                   cosmic, AmBe, AmBeMultiple,
                    cluster_time, cluster_charge, cluster_QB, cluster_hits,
-                   hit_times, hit_charges, hit_ids, source_position, event_ids,  efficiency_data=None):
+                   hit_times, hit_charges, hit_ids, source_position, event_ids,
+                   prompt_cluster_time, prompt_cluster_charge, prompt_cluster_QB, efficiency_data=None):
+
 
     EN = event_data["eventNumber"]
     ETT = event_data["eventTimeTank"]
@@ -348,11 +397,13 @@ def process_events(event_data, good_events, x_pos, y_pos, z_pos,
     total_events = 0
     cosmic_events = 0
     neutron_cand_count = 0
+    multiple_neutron_cand_count = 0
 
     key = (x_pos, y_pos, z_pos)
-
+    repeated_event_id = set()
     for i in trange(len(EN)):
         if ETT[i] in good_events:
+            #print(f'\nProcessing event {EN[i]} at time {ETT[i]}')
             
             total_events += 1
 
@@ -361,12 +412,15 @@ def process_events(event_data, good_events, x_pos, y_pos, z_pos,
 
             for k in range(len(CT[i])):
                 if cosmic(CT[i][k], CPE[i][k]):
+                    prompt_cluster_time.append(CT[i][k])
+                    prompt_cluster_charge.append(CPE[i][k])
+                    prompt_cluster_QB.append(CCB[i][k])
                     cosmic_events += 1
                     if efficiency_data is not None:
                         efficiency_data[key][1] += 1 # cosmic_events
                     break
 
-                if AmBe(CPE[i][k], CCB[i][k], CT[i][k], CN[i], ETT[i]):
+                if AmBe(CPE[i][k], CCB[i][k], CT[i][k], CN[i], ETT[i], CH[i][k]):
                     if CPE[i][k] != float('-inf'):
                         cluster_time.append(CT[i][k])
                         cluster_charge.append(CPE[i][k])
@@ -382,6 +436,29 @@ def process_events(event_data, good_events, x_pos, y_pos, z_pos,
                         neutron_cand_count += 1
                         if efficiency_data is not None:
                             efficiency_data[key][2] += 1
+                
+                if AmBeMultiple(CPE[i][k], CCB[i][k], CT[i][k], CN[i], ETT[i], CH[i][k]):
+                    if CPE[i][k] != float('-inf'):
+                        cluster_time.append(CT[i][k])
+                        cluster_charge.append(CPE[i][k])
+                        cluster_QB.append(CCB[i][k])
+                        cluster_hits.append(CH[i][k])
+                        hit_times.append(hT[i][k])
+                        hit_charges.append(hPE[i][k])
+                        hit_ids.append(hID[i][k])
+                        source_position[0].append(x_pos)
+                        source_position[1].append(y_pos)
+                        source_position[2].append(z_pos)
+                        
+                        event_ids.append(EN[i])
+                        #print(f'Event {EN[i]} has multiple neutrons')
+
+                        if EN[i] not in repeated_event_id:
+                            #print(f'Event {EN[i]} has multiple neutrons but I am gonna count it only once  ')
+                            multiple_neutron_cand_count += 1
+                            repeated_event_id.add(EN[i])
+                            if efficiency_data is not None:
+                                efficiency_data[key][3] += 1
 
     print(f'\nThere were a total of {total_events} AmBe events after waveform cuts')
     if total_events == 0:
@@ -390,9 +467,9 @@ def process_events(event_data, good_events, x_pos, y_pos, z_pos,
         print(f'{cosmic_events} ({round(100 * cosmic_events / total_events, 2)}%) were cosmics')
 
     print(f'This leaves {total_events - cosmic_events} AmBe-triggered events')
-    print(f'\nAfter selection cuts: {neutron_cand_count} AmBe neutron candidates\n')
-    
+    print(f'\nAfter selection cuts: {neutron_cand_count} AmBe single neutron candidates\n')
+    print(f'\nAfter selection cuts: {multiple_neutron_cand_count} AmBe multiple neutron candidates\n')
 
-    return total_events, cosmic_events, neutron_cand_count, event_ids
+    return total_events, cosmic_events, neutron_cand_count, multiple_neutron_cand_count, event_ids
 
 

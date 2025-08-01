@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import seaborn as sns
 
-WaveformFile = "TriggerSummary/AmBeWaveformResultsC2test.csv"
-TriggerFile = "TriggerSummary/AmBeTriggerSummaryportC2test.csv"
+WaveformFile = "TriggerSummary/AmBeWaveformResults_PE75CB0.45.csv"
+TriggerFile = "TriggerSummary/AmBeTriggerSummary_PE75CB0.45.csv"
 
 Wdf = pd.read_csv(WaveformFile)
 Tdf = pd.read_csv(TriggerFile)
@@ -62,7 +62,7 @@ plot_df[["% Accepted waveforms", "% Neutron candidates", "% AmBe triggers", "% C
 # Define colors (Okabe-Ito)
 colors = ["#0371B1", "#E69F00", "#009E73", "#F0E442"]  # Blue, Orange, Green, Yellow
 
-pdf_file = "Statistics_of_AmBe_test_5692.pdf"
+pdf_file = "Statistics_of_PE70CB0.45.pdf"
 with PdfPages(pdf_file) as pdf:
     ports = plot_df["port"].unique()
     

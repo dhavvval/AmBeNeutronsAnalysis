@@ -17,9 +17,7 @@ port_2=[4453, 4603, 4604, 4605, 4625]
 port_3=[4628, 4629, 4630, 4633, 4635, 4636, 4640, 4646, 4649, 4650, 4651]
 port_4=[4652, 4653, 4654, 4656, 4658, 4659, 4660, 4661, 4662, 4663, 4664, 4665, 4666, 4667, 4668, 4670, 4672, 4673, 4678, 4679, 4682, 4683, 4685, 4686, 4687]
 
-csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_*.csv'))
-
-
+csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_PE100CB0.45updated_*.csv'))
 def NeutCapture(t, A, therm, tau, B):
     return A * (1-np.exp(-t / therm)) * np.exp(-t / tau) + B
 
@@ -43,23 +41,80 @@ combined_df = pd.concat(all_df, ignore_index=True)
     
 events_counts = combined_df['eventID'].value_counts()
 
+unique_event_count = combined_df['eventID'].nunique()
+#print(f"Total unique events aka neutron triggers: {unique_event_count}")
+
+
+# Separate the counts into two groups
+single_events = events_counts[events_counts == 1]
+multi_events = events_counts[events_counts > 1]
+#print(multi_events)
+
+
 PE = combined_df['clusterPE']
 CCB = combined_df['clusterChargeBalance']
 CT = combined_df['clusterTime'] / 1000  # Convert to microseconds
 
-# neutron multiplicty
-plt.hist(events_counts, bins=range(1, 10, 1), log=True, edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
-plt.xlabel('Neutron multiplicity for background events')
-plt.ylabel('Counts')
-plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0 (PE < 150, CCB < 0.4)')
-plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0C1gammacut.png", dpi=300, bbox_inches='tight')
-plt.show()
+# Plot for single multiplicity events (if any)
+if not single_events.empty:
+    plt.figure()
+    counts, bins, patches=plt.hist(single_events, bins=range(1, 10, 1), edgecolor='blue', color="lightgreen", linewidth=0.5, align='left')
+    text = "\n".join([f"{int(counts[i])}" for i in range(len(counts)) if counts[i] > 0])
+    plt.text(0.05, 0.95, text, transform=plt.gca().transAxes, fontsize=10, va='top')
+    plt.xlabel('Multiplicity')
+    plt.ylabel('Counts')
+    plt.title('Events with multiplicity = 1')
+    plt.show()
 
+    plt.figure()
+    plt.hist2d(PE, CCB, bins=300, cmap='viridis', 
+            range=[[-10, 120], [0.1, 1.0]], cmin=1, )
+    plt.colorbar(label='Counts')
+    plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0 for single neutron candidate (PE < 100, CCB < 0.45)")
+    plt.xlabel("Cluster PE")
+    plt.ylabel("Cluster Charge Balance")
+    plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0PE100CB0.45updated.png", dpi=300, bbox_inches='tight')
+    plt.show()
+
+# Plot for multiple multiplicity events (if any)
+if not multi_events.empty:
+    plt.figure()
+    counts, bins, patches = plt.hist(multi_events, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left')
+    text = "\n".join([f"bin{int(bins[i])}: {int(counts[i])}" for i in range(len(counts)) if counts[i] > 0])
+    plt.text(0.05, 0.95, text, transform=plt.gca().transAxes, fontsize=10, va='top')
+    plt.xlabel('Multiplicity')
+    plt.ylabel('Counts')
+    plt.title('Events with multiplicity > 1')
+    plt.show()
+
+    plt.figure()
+    plt.hist2d(PE, CCB, bins=300, cmap='viridis', 
+            range=[[-10, 120], [0.1, 1.0]], cmin=1, )
+    plt.colorbar(label='Counts')
+    plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0 for multiple neutron candidates(PE < 100, CCB < 0.45)")
+    plt.xlabel("Cluster PE")
+    plt.ylabel("Cluster Charge Balance")
+    plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0PE100CB0.45updated.png", dpi=300, bbox_inches='tight')
+    plt.show()
+
+
+
+
+# neutron multiplicty
+plt.figure()
 plt.hist(events_counts, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
 plt.xlabel('Neutron multiplicity for background events')
 plt.ylabel('Counts')
-plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0 (PE < 150, CCB < 0.4)')
-plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0C1gammacut.png", dpi=300, bbox_inches='tight')
+plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0 (PE < 100, CCB < 0.6)')
+plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0PE100CB0.6.png", dpi=300, bbox_inches='tight')
+plt.show()
+
+plt.figure()
+plt.hist(events_counts, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
+plt.xlabel('Neutron multiplicity for background events')
+plt.ylabel('Counts')
+plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0 (PE < 100, CCB < 0.6)')
+plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0PE100CB0.6.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 # Plot Neutron Capture Time
@@ -87,6 +142,7 @@ chi2_ndof = chi2_value / ndof
 p_value = 1 - chi2.cdf(chi2_value, ndof)
 print(fr"$\chi^2 = {chi2_value:.2f}$, ndof = {ndof}, $\frac{{\chi^2}}{{\mathrm{{ndof}}}} = {chi2_ndof:.2f}$, p-value = {p_value:.3f}")
 
+plt.figure()
 plt.hist(CT, bins=200, range=(0, 70), histtype='step', color='blue', label="Data")
 label = (
     fr"$\mathrm{{therm}} = {popt[1]:.2f} \pm {perr[1]:.2f}\ \mu s$" + "\n"
@@ -94,30 +150,33 @@ label = (
     fr"$\chi^2 = {chi2_value:.2f},\ \mathrm{{ndof}} = {ndof},\ "
     fr"\frac{{\chi^2}}{{\mathrm{{ndof}}}} = {chi2_ndof:.2f}$"
 )
+
 plt.plot(fit_x, NeutCapture(fit_x, *popt), 'r-', linewidth=2, label=label)
 plt.xlabel(fr"Cluster Time [$\mu s$]")
 plt.ylabel("Counts")
 plt.legend()
-plt.title(f"Neutron Capture Time for AmBe 2.0 (PE < 150, CCB < 0.4)")
-plt.savefig("OutputPlots/NeutronCaptureTime_AmBe2.0C1gammacut.png", dpi=300, bbox_inches='tight')
-plt.show()
+plt.title(f"Neutron Capture Time for AmBe 2.0 (PE < 100, CCB < 0.45)")
+plt.savefig("OutputPlots/NeutronCaptureTime_AmBe2.0PE100CB0.45updated.png", dpi=300, bbox_inches='tight')
+#plt.show()
 
 
-plt.hist2d(PE, CCB, bins=35, cmap='viridis', 
-        range=[[0, 100], [0, 0.5]], cmin=1)
+plt.figure()
+plt.hist2d(PE, CCB, bins=300, cmap='viridis', 
+        range=[[-10, 120], [0.1, 1.0]], cmin=1, )
 plt.colorbar(label='Counts')
-plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0 (PE < 150, CCB < 0.4)")
+plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0 (PE < 100, CCB < 0.45)")
 plt.xlabel("Cluster PE")
 plt.ylabel("Cluster Charge Balance")
-plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0C1gammacut.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0PE100CBB0.45updated.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 residuals = (fit_y - fit_y_expected) / fit_y_errors
+plt.figure()
 plt.plot(fit_x, residuals)
 plt.axhline(0, color='gray', linestyle='--')
 plt.xlabel("Time [μs]")
 plt.ylabel("Normalized Residual")
-plt.title("Fit Residuals for AmBe 2.0 Neutron Capture Time (PE < 150, CCB < 0.4)")
-plt.savefig("OutputPlots/FitResiduals_AmBe2.0C1gammacut.png", dpi=300, bbox_inches='tight')
-plt.show()
+plt.title("Fit Residuals for AmBe 2.0 Neutron Capture Time (PE < 100, CCB < 0.45)")
+plt.savefig("OutputPlots/FitResiduals_AmBe2.0PE100CB0.45updated.png", dpi=300, bbox_inches='tight')
+#plt.show()
 

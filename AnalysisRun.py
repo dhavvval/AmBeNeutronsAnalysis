@@ -21,15 +21,18 @@ import matplotlib
 #waveform_dir = '../AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
 
 
-data_directory = '../test/'                                    # directory containing BeamClusterAnalysis ntuples
-waveform_dir = '../test/'
+#data_directory = '../test/'                                    # directory containing BeamClusterAnalysis ntuples
+#waveform_dir = '../test/'
 
 #data_directory = '../Outside_source/'                                    # directory containing BeamClusterAnalysis ntuples
 #waveform_dir = '../Outside_source/'
 
 ##Test for my gridjobs
-#data_directory = '../NewRun/'                                    # directory containing BeamClusterAnalysis ntuples
-#waveform_dir = '../NewRun/'
+#data_directory = '../NewRun/test'                                    # directory containing BeamClusterAnalysis ntuples
+#waveform_dir = '../NewRun/test'
+
+data_directory = '../AnalysisQualityC2'                                    # directory containing BeamClusterAnalysis ntuples
+waveform_dir = '../AnalysisQualityC2'
 
 campaign = int(input('What campaign is this? (1/2): '))  # Campaign 1 or 2
 
@@ -50,7 +53,7 @@ central_port = [4506, 4505, 4499, 4507, 4508] #port 5 with AmBe source
 runinfo = input('What type of run is this? (AmBe/Outside_source//C1/C2/ClusterCuts): ')
 runinfo = str(runinfo)
 
-efficiency_data = defaultdict(lambda: [0, 0, 0])
+efficiency_data = defaultdict(lambda: [0, 0, 0, 0])
 
 waveform_results, run_numbers, file_names = ane.AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, ane.source_loc, runinfo=runinfo, campaign=campaign)
 
@@ -75,6 +78,9 @@ hit_charges = []
 hit_ids = []
 source_position = [[], [], []]
 event_ids = []
+prompt_cluster_time = []
+prompt_cluster_charge = []
+prompt_cluster_QB = []
 
 
 for c1, run in enumerate(run_numbers):
@@ -89,6 +95,9 @@ for c1, run in enumerate(run_numbers):
     hit_ids = []
     source_position = [[], [], []]
     event_ids = []
+    prompt_cluster_time = []
+    prompt_cluster_charge = []
+    prompt_cluster_QB = []
    
     
     good_events = waveform_results[run]["good_events"]
@@ -97,11 +106,12 @@ for c1, run in enumerate(run_numbers):
 
     event_data = ane.LoadBeamCluster(file_path, which_Tree)
 
-    total_events, cosmic_events, neutron_cand_count, event_ids = ane.process_events(
+    total_events, cosmic_events, neutron_cand_count, multiple_neutron_cand_count, event_ids = ane.process_events(
         event_data, good_events, x_pos, y_pos, z_pos,
-        ane.cosmic, ane.AmBe,
+        ane.cosmic, ane.AmBe, ane.AmBeMultiple,
         cluster_time, cluster_charge, cluster_QB, cluster_hits,
-        hit_times, hit_charges, hit_ids, source_position, event_ids, efficiency_data
+        hit_times, hit_charges, hit_ids, source_position, event_ids,
+        prompt_cluster_time, prompt_cluster_charge, prompt_cluster_QB, efficiency_data
     )
 
     print('----------------------------------------------------------------\n')
@@ -127,6 +137,13 @@ for c1, run in enumerate(run_numbers):
     print(df.head())
     df.to_csv(f'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_{runinfo}_{run}.csv', index=False) ##This files to do analysis for multiplicty, capture time, and other plots of Charge current vs Cluster time etc
 
+    prompt_df = pd.DataFrame({
+        "prompt_clusterTime": prompt_cluster_time,
+        "prompt_clusterPE": prompt_cluster_charge,
+        "prompt_clusterChargeBalance": prompt_cluster_QB,
+
+    })
+    prompt_df.to_csv(f'EventAmBeNeutronCandidatesData/PromptAmBeNeutronCandidates_{runinfo}_{run}.csv', index=False) ##This files to do analysis for capture time, charge balance, and PE of prompt neutrons
 
 df_eff = pd.DataFrame([
     {
@@ -134,7 +151,9 @@ df_eff = pd.DataFrame([
         "total_events": val[0],
         "cosmic_events": val[1],
         "ambe_triggers": val[0] - val[1],
-        "neutron_candidates": val[2]
+        "single_neutron_candidates": val[2],
+        "multiple_neutron_candidates": val[3],
+        "unique_neutron_triggers": val[2] + val[3]
     }
     for key, val in efficiency_data.items()
 ])
