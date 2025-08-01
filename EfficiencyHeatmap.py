@@ -7,7 +7,7 @@ import glob
 
 # efficiency_data = "AmBeTriggerSummaryPE150CB0.3.csv"
 path = './'  # Directory containing the CSV files
-efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummary_PE100CB0.45updated.csv'))
+efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummary_C2Quality.csv'))
 print(efficiency_data)
 
 all_df = []
@@ -17,7 +17,7 @@ for file in efficiency_data:
 
 df = pd.concat(all_df, ignore_index=True)
 
-port_info = {(0, 100, 0): 'Port 5', (0, 50, 0): 'Port 5', (0, 0, 0): 'Port 5', (0, -50, 0): 'Port 5', (0, -100, 0): 'Port 5', 
+port_info = {(0, 100, 0): 'Port 5', (0, 50, 0): 'Port 5', (0, 0, 0): 'Port 5', (0, -50, 0): 'Port 5', (0, -100, 0): 'Port 5', (0, 55.3, 0): 'Port 5',
  (0, 100, -75): 'Port 1', (0, 50, -75): 'Port 1', (0, 0, -75): 'Port 1', (0, -50, -75): 'Port 1', (0, -100, -75): 'Port 1', 
  (-75, 100, 0): 'Port 4', (-75, 50, 0): 'Port 4', (-75, 0, 0): 'Port 4', (-75, -50, 0): 'Port 4', (-75, -100, 0): 'Port 4', 
  (0, 100, 102): 'Port 3', (0, 50, 102): 'Port 3', (0, 0, 102): 'Port 3', (0, -50, 102): 'Port 3', (0, -100, 102): 'Port 3',
@@ -85,7 +85,7 @@ plt.xticks(rotation=45)
 plt.yticks(rotation=0)
 plt.gca().invert_yaxis()
 plt.tight_layout()
-plt.savefig("OutputPlots/AmBeNeutronEfficiency_AmBe2.0PE100CB0.45updated.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/AmBeNeutronEfficiency_AmBe2.0test.png", dpi=300, bbox_inches='tight')
 plt.show()
 ##Residuals plot using AmBe 1.0 and AmBe 2.0 data
 
@@ -114,5 +114,5 @@ plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)
 plt.gca().invert_yaxis()
 plt.tight_layout()
-plt.savefig("OutputPlots/ResidualEfficiency_AmBe2.0PE100CB0.45updated.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/ResidualEfficiency_AmBe2.0test.png", dpi=300, bbox_inches='tight')
 plt.show()

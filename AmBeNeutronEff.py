@@ -181,7 +181,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                         hist_values = hist.values()
                         hist_edges = hist.axes[0].edges()
 
-                        baseline, sigma = norm.fit(hist_values)
+                        baseline, sigma = norm.fit(hist_values[10000:30000])
                         
                         hist_values_bs = hist_values - baseline
 
@@ -200,7 +200,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                         IC_values.append(IC)
                         #print(f'IC_adjusted: {IC_adjusted:.2f} ns, Timestamp: {timestamp}')
 
-                        if pulse_max > IC_adjusted > 250:
+                        if pulse_max > IC_adjusted > 275:
                         #if IC_MeV > 4.42:
                             post_pulse_mask = hist_edges[:-1] > pulse_end
                             post_pulse_values = hist_values[post_pulse_mask]
@@ -224,7 +224,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                                         plt.ylabel('ADC counts')
                                         plt.legend()
                                         plt.tight_layout()
-                                        plt.savefig(f'AcceptedWaveform_{timestamp}_Run{run}.png', dpi=300)
+                                        plt.savefig(f'verbose/AcceptedWaveform_{timestamp}_Run{run}.png', dpi=300)
                                        
                                         plt.close()
                                         #plt.show()
@@ -245,7 +245,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                                         plt.ylabel('ADC counts')
                                         plt.legend()
                                         plt.tight_layout()
-                                        plt.savefig(f'RejectedWaveform_2ndPulse_{timestamp}_Run{run}.png', dpi=300)
+                                        plt.savefig(f'verbose/RejectedWaveform_2ndPulse_{timestamp}_Run{run}.png', dpi=300)
                                         #plt.show()
                                         plt.close()
                                         #plt.show()
@@ -265,7 +265,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                                     plt.ylabel('ADC counts')
                                     plt.legend()
                                     plt.tight_layout()
-                                    plt.savefig(f'RejectedWaveform_PulseMax_{timestamp}_Run{run}.png', dpi=300)
+                                    plt.savefig(f'verbose/RejectedWaveform_PulseMax_{timestamp}_Run{run}.png', dpi=300)
                                     #plt.show()
                                     plt.close()
                                     #plt.show()
@@ -285,7 +285,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
         plt.ylabel('Number of Events')
         plt.title('All IC adjusted values for run: ' + str(run))
         plt.tight_layout()
-        plt.savefig(f'IC_adjusted_AllEvents_{runinfo}_{run}.png', dpi=300)
+        plt.savefig(f'verbose/IC_adjusted_AllEvents_{runinfo}_{run}.png', dpi=300)
         plt.close()
         #plt.show()
 
@@ -309,7 +309,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
         plt.ylabel('Number of Events')
         plt.title('All IC adjusted Values for all runs')
         plt.tight_layout()
-        plt.savefig(f'IC_adjusted_AllEvents_{runinfo}.png', dpi=300)
+        plt.savefig(f'verbose/IC_adjusted_AllEvents_{runinfo}.png', dpi=300)
         plt.close()
         #plt.show()
         
@@ -320,7 +320,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
         plt.ylabel('Number of Events')
         plt.title('All IC Values for all runs')
         plt.tight_layout()
-        plt.savefig(f'IC_AllEvents_{runinfo}.png', dpi=300)
+        plt.savefig(f'verbose/IC_AllEvents_{runinfo}.png', dpi=300)
         plt.close()
         #plt.show()
      
@@ -332,7 +332,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
         plt.ylabel('Number of Events')
         plt.title('Accepted IC_adjusted Values for all runs')
         plt.tight_layout()
-        plt.savefig(f'IC_adjusted_AcceptedEvents_{runinfo}.png', dpi=300)
+        plt.savefig(f'verbose/IC_adjusted_AcceptedEvents_{runinfo}.png', dpi=300)
         plt.close()
         #plt.show()
 
