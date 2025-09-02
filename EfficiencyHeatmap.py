@@ -7,7 +7,7 @@ import glob
 
 # efficiency_data = "AmBeTriggerSummaryPE150CB0.3.csv"
 path = './'  # Directory containing the CSV files
-efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummary_C2Quality.csv'))
+efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummary_gammaregion.csv'))
 print(efficiency_data)
 
 all_df = []
@@ -17,7 +17,7 @@ for file in efficiency_data:
 
 df = pd.concat(all_df, ignore_index=True)
 
-port_info = {(0, 100, 0): 'Port 5', (0, 50, 0): 'Port 5', (0, 0, 0): 'Port 5', (0, -50, 0): 'Port 5', (0, -100, 0): 'Port 5', (0, 55.3, 0): 'Port 5',
+port_info = {(0, 100, 0): 'Port 5', (0, 50, 0): 'Port 5', (0, 0, 0): 'Port 5', (0, -50, 0): 'Port 5', (0, -100, 0): 'Port 5', #(0, 55.3, 0): 'Port 5',
  (0, 100, -75): 'Port 1', (0, 50, -75): 'Port 1', (0, 0, -75): 'Port 1', (0, -50, -75): 'Port 1', (0, -100, -75): 'Port 1', 
  (-75, 100, 0): 'Port 4', (-75, 50, 0): 'Port 4', (-75, 0, 0): 'Port 4', (-75, -50, 0): 'Port 4', (-75, -100, 0): 'Port 4', 
  (0, 100, 102): 'Port 3', (0, 50, 102): 'Port 3', (0, 0, 102): 'Port 3', (0, -50, 102): 'Port 3', (0, -100, 102): 'Port 3',

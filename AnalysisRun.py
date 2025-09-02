@@ -11,14 +11,14 @@ import scipy.special as scm
 import scipy.optimize as scp
 from collections import defaultdict
 import pandas as pd
-import matplotlib
+
 
 
 
 # edit accordingly
 
-#data_directory = '../AmBe_BeamCluster/'                                    # directory containing BeamClusterAnalysis ntuples
-#waveform_dir = '../AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
+data_directory = '../AmBe_BeamCluster/'                                    # directory containing BeamClusterAnalysis ntuples
+waveform_dir = '../AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
 
 
 #data_directory = '../test/'                                    # directory containing BeamClusterAnalysis ntuples
@@ -31,8 +31,8 @@ import matplotlib
 #data_directory = '../NewRun/test'                                    # directory containing BeamClusterAnalysis ntuples
 #waveform_dir = '../NewRun/test'
 
-data_directory = '../AnalysisQualityC2'                                    # directory containing BeamClusterAnalysis ntuples
-waveform_dir = '../AnalysisQualityC2'
+#data_directory = '../AnalysisQualityC2/newPMTPhysics'                                    # directory containing BeamClusterAnalysis ntuples
+#waveform_dir = '../AnalysisQualityC2/newPMTPhysics'
 
 campaign = int(input('What campaign is this? (1/2): '))  # Campaign 1 or 2
 

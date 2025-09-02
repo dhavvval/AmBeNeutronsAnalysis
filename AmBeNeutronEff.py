@@ -41,7 +41,7 @@ def AmBeMultiple(CPE, CCB, CT, CN, ETT, CH):
 def cosmic(CT, CPE):
     if(CT<2000):              # any cluster in the prompt (2us) window
         return True
-    if(CPE>100):              # any cluster > 150 PE in the prompt or ext window
+    if(CPE>100):              # any cluster > 100 PE in the prompt or ext window
         return True
     return False
 
@@ -53,63 +53,46 @@ def source_loc(run):
     source_positions = {
         
         # Port 5 data
-        4506: (0, 100, 0),
-        4505: (0, 50, 0),
-        4499: (0, 0, 0),
-        4507: (0, -50, 0),
-        4508: (0, -100, 0),
-        4496: (0, 0, 0), #AmBe run without source
+        4506: (0, 100, 0), 4505: (0, 50, 0), 4499: (0, 0, 0), 4507: (0, -50, 0), 4508: (0, -100, 0), 4496: (0, 0, 0), #AmBe run without source
         
         # Port 1 data
-        4593: (0, 100, -75),
-        4590: (0, 50, -75),
-        4589: (0, 0, -75),
-        4596: (0, -50, -75),
-        4598: (0, -100, -75),
+        4593: (0, 100, -75), 4590: (0, 50, -75), 4589: (0, 0, -75), 4596: (0, -50, -75), 4598: (0, -100, -75),
         
         # Port 4 data
-        4656: (-75, 100, 0),
-        4658: (-75, 50, 0),
-        4660: (-75, 0, 0),
+        4656: (-75, 100, 0), 4658: (-75, 50, 0), 4660: (-75, 0, 0),
         4662: (-75, -50, 0), 4664: (-75, -50, 0), 4665: (-75, -50, 0), 4666: (-75, -50, 0), 4667: (-75, -50, 0), 4670: (-75, -50, 0),
         4678: (-75, -100, 0), 4683: (-75, -100, 0), 4687: (-75, -100, 0),
         
         # Port 3 data
-        4628: (0, 100, 102), 4629: (0, 100, 102),
-        4633: (0, 50, 102),
+        4628: (0, 100, 102), 4629: (0, 100, 102), 4633: (0, 50, 102),
         4635: (0, 0, 102), 4636: (0, 0, 102), 4640: (0, 0, 102), 4646: (0, 0, 102),
-        4649: (0, -50, 102),
-        4651: (0, -100, 102),
+        4649: (0, -50, 102), 4651: (0, -100, 102),
 
         #port 2 data
-        4453: (0, 0, 75),
-        4603: (0, 100, 75),
-        4604: (0, 50, 75),
-        4605: (0, 50, 75),
-        4625: (0, -50, 75),
+        4453: (0, 0, 75), 4603: (0, 100, 75), 4604: (0, 50, 75), 4605: (0, 50, 75), 4625: (0, -50, 75),
 
         #outside the tank data
-        4707: (0, 328, 0), 
-        4708: (0, 328, 0),
+        4707: (0, 328, 0), 4708: (0, 328, 0),
 
-        ##New runs for AmBe v1 Campaign 2 - July 2025
-        5682: (0, 0 ,0),
-        5680: (0, 0, 0),
-        5681: (0, 0, 0),
-        5683: (0, -100, 0),
-        5684: (0, -100, 0),
-        5688: (0, 100, 0), #dummy port number actual one is (0, -100, 0)
-        5689: (0, 50, 0), #dummy port number actual one is (0, -100, 0)
-        5691: (0, 0, 0), #dummy port number actual one is (0, -100, 0)
-        5693: (0, 0, 0), #dummy port number actual one is (0, -100, 0)
+
         
         ##########Analysis Quality C2 - AmBe v2 Campaign 2 - July 2025#########
-        #port 5
-        5682: (0, 0, 0),
-        5696: (0, -100, 0),
-        5707: (0, 55.3, 0),
-        5708: (0, 100, 0),
-        5710: (0, 100, 0)
+        #port 5 
+        5682: (0, 0, 0), 5696: (0, -100, 0), 5707: (0, 55.3, 0), 5708: (0, 100, 0), 5710: (0, 100, 0), 5740: (0, 0, 0), 
+
+        #port 1
+        5711: (0, -100, -75), 5712: (0, 0, -75), 5715: (0, 0, -75), 5716: (0, 0, -75), 5730: (0, 100, -75),
+      
+        #port 4
+        5741: (-75, 100, 0),  5742: (-75, 100, 0), 5774: (-75, 0, 0), 5775: (-75, -100, 0),
+
+        #port 3
+        5776: (0, 100, 102), 5780: (0, 100, 102), 5782: (0, 0, 102), 5783: (0, -105.5, 102),
+
+        #outside the tank without source
+        5743: (0, 328, 0),  5778: (0, 328, 0),  5779: (0, 328, 0) #dummy positions
+
+
     }
         
     if run in source_positions:
@@ -121,7 +104,7 @@ waveformsample = input("Do you want to see samples of waveforms? (y/n): ")
 IC_plots = input('Do you want to plot IC values? (y/n): ')
 def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                       pulse_start=300, pulse_end=1200, pulse_gamma=400, lower_pulse=175,
-                      pulse_max=1000, NS_PER_ADC_SAMPLE=2, ADC_IMPEDANCE=50, runinfo='default', campaign=1): #pulse_gamma = 400, lower_pulse = 175
+                      pulse_max=2000, NS_PER_ADC_SAMPLE=2, ADC_IMPEDANCE=50, runinfo='default', campaign=1): #pulse_gamma = 400, lower_pulse = 175
 
 
     file_names = []
@@ -200,7 +183,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                         IC_values.append(IC)
                         #print(f'IC_adjusted: {IC_adjusted:.2f} ns, Timestamp: {timestamp}')
 
-                        if pulse_max > IC_adjusted > 275:
+                        if pulse_max > IC_adjusted > pulse_gamma:
                         #if IC_MeV > 4.42:
                             post_pulse_mask = hist_edges[:-1] > pulse_end
                             post_pulse_values = hist_values[post_pulse_mask]
@@ -214,7 +197,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
 
                                 if waveformsample == 'y':
                                     if accepted_events in range(1, 11):
-                                        print(IC)
+                                        #print(IC)
                                         plt.figure(figsize=(10, 4))
                                         plt.plot(hist_edges[:-1], hist_values_bs, label='Waveform')
                                         #plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
@@ -280,7 +263,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
         total = accepted_events + rejected_events
 
         plt.figure(figsize=(8, 5))
-        plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1000))
+        plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 3000))
         plt.xlabel('IC_adjusted')
         plt.ylabel('Number of Events')
         plt.title('All IC adjusted values for run: ' + str(run))
@@ -304,7 +287,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
 
     if IC_plots == 'y':
         plt.figure(figsize=(8, 5))
-        plt.hist(combined_IC_values, bins=200, alpha=0.7, color='blue', range=(0, 1000))
+        plt.hist(combined_IC_values, bins=200, alpha=0.7, color='blue', range=(0, 3000))
         plt.xlabel('IC_adjusted')
         plt.ylabel('Number of Events')
         plt.title('All IC adjusted Values for all runs')
@@ -315,7 +298,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
         
 
         plt.figure(figsize=(8, 5))
-        plt.hist(IC_values, bins=200, alpha=0.7, color='blue', range=(0, 1000))
+        plt.hist(IC_values, bins=200, alpha=0.7, color='blue', range=(0, 3000))
         plt.xlabel('IC')
         plt.ylabel('Number of Events')
         plt.title('All IC Values for all runs')
@@ -327,7 +310,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
 
         # Second histogram
         plt.figure(figsize=(8, 5))
-        plt.hist(combined_IC_accepted, bins=200, alpha=0.7, color='orange', range=(0, 1000))
+        plt.hist(combined_IC_accepted, bins=200, alpha=0.7, color='orange', range=(0, 3000))
         plt.xlabel('IC_adjusted accepted')
         plt.ylabel('Number of Events')
         plt.title('Accepted IC_adjusted Values for all runs')

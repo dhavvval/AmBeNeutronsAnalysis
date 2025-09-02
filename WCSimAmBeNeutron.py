@@ -85,7 +85,7 @@ plt.show()
 plt.close()
 
 
-counts, bin_edges = np.histogram(clusterTime, bins=200, range=(0, 70))
+counts, bin_edges = np.histogram(clusterTime, bins=70, range=(0, 70))
 bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
 init = [np.max(counts), 6, 25, np.min(counts)]
@@ -111,7 +111,7 @@ p_value = 1 - chi2.cdf(chi2_value, ndof)
 print(fr"$\chi^2 = {chi2_value:.2f}$, ndof = {ndof}, $\frac{{\chi^2}}{{\mathrm{{ndof}}}} = {chi2_ndof:.2f}$, p-value = {p_value:.3f}")
 
 plt.figure()
-plt.hist(clusterTime, bins=200, range=(0, 70), histtype='step', color='blue', label="Data")
+plt.hist(clusterTime, bins=70, range=(0, 70), histtype='step', color='blue', label="Data")
 label = (
     fr"$\mathrm{{therm}} = {popt[1]:.2f} \pm {perr[1]:.2f}\ \mu s$" + "\n"
     fr"$\tau = {popt[2]:.2f} \pm {perr[2]:.2f}\ \mu s$" + "\n"
