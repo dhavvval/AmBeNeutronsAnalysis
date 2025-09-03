@@ -5,10 +5,10 @@ import seaborn as sns
 import os
 import glob
 
-# efficiency_data = "AmBeTriggerSummaryPE150CB0.3.csv"
+
 path = './'  # Directory containing the CSV files
-efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummary_gammaregion.csv'))
-print(efficiency_data)
+efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummary_AmBeC2OldPMT.csv'))
+
 
 all_df = []
 for file in efficiency_data:
@@ -17,9 +17,9 @@ for file in efficiency_data:
 
 df = pd.concat(all_df, ignore_index=True)
 
-port_info = {(0, 100, 0): 'Port 5', (0, 50, 0): 'Port 5', (0, 0, 0): 'Port 5', (0, -50, 0): 'Port 5', (0, -100, 0): 'Port 5', #(0, 55.3, 0): 'Port 5',
- (0, 100, -75): 'Port 1', (0, 50, -75): 'Port 1', (0, 0, -75): 'Port 1', (0, -50, -75): 'Port 1', (0, -100, -75): 'Port 1', 
- (-75, 100, 0): 'Port 4', (-75, 50, 0): 'Port 4', (-75, 0, 0): 'Port 4', (-75, -50, 0): 'Port 4', (-75, -100, 0): 'Port 4', 
+port_info = {(0, 100, 0): 'Port 5', (0, 50, 0): 'Port 5', (0, 0, 0): 'Port 5', (0, -50, 0): 'Port 5', (0, -100, 0): 'Port 5', (0, 55.3, 0): 'Port 5',
+ (0, 100, -75): 'Port 1', (0, 50, -75): 'Port 1', (0, 0, -75): 'Port 1', (0, -50, -75): 'Port 1', (0, -100, -75): 'Port 1',
+ (75, 100, 0): 'Port 4', (75, 50, 0): 'Port 4', (75, 0, 0): 'Port 4', (75, -50, 0): 'Port 4', (75, -100, 0): 'Port 4',
  (0, 100, 102): 'Port 3', (0, 50, 102): 'Port 3', (0, 0, 102): 'Port 3', (0, -50, 102): 'Port 3', (0, -100, 102): 'Port 3',
  (0, 100, 75): 'Port 2', (0, 50, 75): 'Port 2', (0, 0, 75): 'Port 2', (0, -50, 75): 'Port 2', (0, -100, 75): 'Port 2'
  }
@@ -41,10 +41,7 @@ for pos in positions:
 df["port"] = df.apply(lambda row: port_info.get((row["x_pos"], row["y_pos"], row["z_pos"]), "Unknown"), axis=1)
 df["efficiency"] = df["unique_neutron_triggers"]/df["ambe_triggers"]
 df["err_A"] = np.sqrt(df["unique_neutron_triggers"])/df["ambe_triggers"]
-df["err_B"] = np.sqrt(df["efficiency"] * (1 - df["efficiency"]) / df["ambe_triggers"])
-#df["efficiency"] = df["unique_neutron_triggers"]/df["total_events"]
-#df["err_A"] = np.sqrt(df["unique_neutron_triggers"])/df["total_events"]
-#df["err_B"] = np.sqrt(df["efficiency"] * (1 - df["efficiency"]) / df["total_events"])   
+df["err_B"] = np.sqrt(df["efficiency"] * (1 - df["efficiency"]) / df["ambe_triggers"])  
 
 df["efficiency"] = df["efficiency"]*100  # Convert to percentage
 df["err_A"] = df["err_A"]*100  # Convert to percentage
@@ -71,24 +68,22 @@ def make_label_se(eff, err, n):
         return "empty"
     return f"{eff:.2f}${{\\pm{err:.2f}}}$"
 
-
-
 vectorized_label = np.vectorize(make_label_se)
 labels_SE = vectorized_label(pivot_eff.values, pivot_err.values, pivot_n.values)
 
 plt.figure(figsize=(8, 6))
 sns.heatmap(pivot_eff, annot=labels_SE, fmt="", cmap="YlOrBr", cbar=True, annot_kws={"size": 12}, mask=mask, linecolor='black', linewidths=0.2, cbar_kws={"label": "Efficiency (%)"})
-plt.title("AmBe neutron efficiency from AmBe 2.0 (PE < 100, CB < 0.45)")
+plt.title("AmBe neutron efficiency from AmBe 2.0 C2 Old PMT (PE < 100, CB < 0.45)")
 plt.xlabel("Ports")
 plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)
 plt.yticks(rotation=0)
 plt.gca().invert_yaxis()
 plt.tight_layout()
-plt.savefig("OutputPlots/AmBeNeutronEfficiency_AmBe2.0test.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/AmBeNeutronEfficiency_AmBe2.0C2OldPMT.png", dpi=300, bbox_inches='tight')
 plt.show()
-##Residuals plot using AmBe 1.0 and AmBe 2.0 data
 
+##Residuals plot using AmBe 1.0 and AmBe 2.0 data
 Ambe1_ypos = [100, 50, 0, -50, -100]
 
 # Define the table by reading values row-wise (top to bottom)
@@ -108,11 +103,11 @@ residuals = pivot_eff - ambe1_df
 plt.figure(figsize=(8, 6))
 sns.heatmap(residuals, annot=True, fmt=".1f", cmap="coolwarm", center=0, cbar_kws={'label': 'Residual (AmBe 2.0 - AmBe 1.0)'}, mask=mask, linecolor='black', linewidths=0.2)
 
-plt.title("Residual Efficiency of AmBe 2.0 compare to AmBe 1.0 (PE < 100, CB < 0.45)")
+plt.title("Residual Efficiency of AmBe 2.0 C1 Old PMT compare to AmBe 1.0 (PE < 100, CB < 0.45)")
 plt.xlabel("Ports")
 plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)
 plt.gca().invert_yaxis()
 plt.tight_layout()
-plt.savefig("OutputPlots/ResidualEfficiency_AmBe2.0test.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/ResidualEfficiency_AmBe2.0C2OldPMT.png", dpi=300, bbox_inches='tight')
 plt.show()

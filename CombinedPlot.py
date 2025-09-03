@@ -15,16 +15,6 @@ if __name__ == "__main__":
 
     path = './'  # Directory containing the CSV files
 
-    central_port = [4506, 4505, 4499, 4507, 4508] #port 5 with AmBe source
-    outside_tank = [4707, 4708]
-    no_source_central_port = [4496] #port 5 without source
-    port_1=[4589, 4590, 4591, 4593, 4594, 4595, 4596, 4598, 4599, 4600, 4601, 4602]
-    port_2=[4453, 4603, 4604, 4605, 4625]
-    port_3=[4628, 4629, 4630, 4633, 4635, 4636, 4640, 4646, 4649, 4650, 4651]
-    port_4=[4652, 4653, 4654, 4656, 4658, 4659, 4660, 4661, 4662, 4663, 4664, 4665, 4666, 4667, 4668, 4670, 4672, 4673, 4678, 4679, 4682, 4683, 4685, 4686, 4687]
-
-    #csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_gammaregion_*.csv'))
-
     csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_C1testforclustermap_*.csv'))
 
     all_df = []
@@ -32,29 +22,15 @@ if __name__ == "__main__":
         df = pd.read_csv(file)
         all_df.append(df)
 
-    '''all_df = []
-    for file in csv_files:
-        match = re.search(r'_(\d+)\.csv$', file)
-        if match:
-            value = int(match.group(1))
-            if value in outside_tank:
-                print(f"Processing file for Outside Tank: {file}")
-                df = pd.read_csv(file)
-                all_df.append(df)'''
 
     combined_df = pd.concat(all_df, ignore_index=True)
         
     events_counts = combined_df['eventID'].value_counts()
 
-    unique_event_count = combined_df['eventID'].nunique()
-    #print(f"Total unique events aka neutron triggers: {unique_event_count}")
-
-
     # Separate the counts into two groups
     single_events = events_counts[events_counts == 1]
     multi_events = events_counts[events_counts > 1]
     #print(multi_events)
-
 
     PE = combined_df['clusterPE']
     CCB = combined_df['clusterChargeBalance']
@@ -103,8 +79,6 @@ if __name__ == "__main__":
         plt.show()
 
 
-
-
     # neutron multiplicty
     plt.figure()
     plt.hist(events_counts, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
@@ -120,6 +94,17 @@ if __name__ == "__main__":
     plt.ylabel('Counts')
     plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0 (PE < 100, CCB < 0.45)')
     #plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0PE100CB0.45.png", dpi=300, bbox_inches='tight')
+    plt.show()
+
+    # Cluster PE vs Charge Balance plot
+    plt.figure()
+    plt.hist2d(PE, CCB, bins=100, cmap='viridis', 
+            range=[[-10, 120], [0.1, 1.0]], cmin=1, )
+    plt.colorbar(label='Counts')
+    plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0 C1")
+    plt.xlabel("Cluster PE")
+    plt.ylabel("Cluster Charge Balance")
+    #plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0PE100CBB0.45updated.png", dpi=300, bbox_inches='tight')
     plt.show()
 
     # Plot Neutron Capture Time
@@ -162,17 +147,6 @@ if __name__ == "__main__":
     plt.legend()
     plt.title(f"Neutron Capture Time for AmBe 2.0 (PE < 100, CCB < 0.45)")
     #plt.savefig("OutputPlots/NeutronCaptureTime_AmBe2.0PE100CB0.45updated.png", dpi=300, bbox_inches='tight')
-    plt.show()'''
-
-
-    plt.figure()
-    plt.hist2d(PE, CCB, bins=100, cmap='viridis', 
-            range=[[-10, 120], [0.1, 1.0]], cmin=1, )
-    plt.colorbar(label='Counts')
-    plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0 C1")
-    plt.xlabel("Cluster PE")
-    plt.ylabel("Cluster Charge Balance")
-    #plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0PE100CBB0.45updated.png", dpi=300, bbox_inches='tight')
     plt.show()
 
     residuals = (fit_y - fit_y_expected) / fit_y_errors
@@ -183,7 +157,4 @@ if __name__ == "__main__":
     plt.ylabel("Normalized Residual")
     plt.title("Fit Residuals for AmBe 2.0 Neutron Capture Time (PE < 100, CCB < 0.45)")
     #plt.savefig("OutputPlots/FitResiduals_AmBe2.0PE100CB0.45updated.png", dpi=300, bbox_inches='tight')
-    plt.show()
-
-
-
+    plt.show()'''

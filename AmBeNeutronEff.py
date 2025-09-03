@@ -59,12 +59,13 @@ def source_loc(run):
         4593: (0, 100, -75), 4590: (0, 50, -75), 4589: (0, 0, -75), 4596: (0, -50, -75), 4598: (0, -100, -75),
         
         # Port 4 data
-        4656: (-75, 100, 0), 4658: (-75, 50, 0), 4660: (-75, 0, 0),
-        4662: (-75, -50, 0), 4664: (-75, -50, 0), 4665: (-75, -50, 0), 4666: (-75, -50, 0), 4667: (-75, -50, 0), 4670: (-75, -50, 0),
-        4678: (-75, -100, 0), 4683: (-75, -100, 0), 4687: (-75, -100, 0),
+        4656: (75, 100, 0), 4658: (75, 50, 0), 4660: (75, 0, 0),
+        4662: (75, -50, 0), 4664: (75, -50, 0), 4665: (75, -50, 0), 4666: (75, -50, 0), 4667: (75, -50, 0), 4670: (75, -50, 0),
+        4678: (75, -100, 0), 4683: (75, -100, 0), 4687: (75, -100, 0),
         
         # Port 3 data
-        4628: (0, 100, 102), 4629: (0, 100, 102), 4633: (0, 50, 102),
+        4633: (0, 50, 102),
+        #4628: (0, 100, 102), 4629: (0, 100, 102), #Need to determine position of these runs
         4635: (0, 0, 102), 4636: (0, 0, 102), 4640: (0, 0, 102), 4646: (0, 0, 102),
         4649: (0, -50, 102), 4651: (0, -100, 102),
 
@@ -104,7 +105,7 @@ waveformsample = input("Do you want to see samples of waveforms? (y/n): ")
 IC_plots = input('Do you want to plot IC values? (y/n): ')
 def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                       pulse_start=300, pulse_end=1200, pulse_gamma=400, lower_pulse=175,
-                      pulse_max=2000, NS_PER_ADC_SAMPLE=2, ADC_IMPEDANCE=50, runinfo='default', campaign=1): #pulse_gamma = 400, lower_pulse = 175
+                      pulse_max=3000, NS_PER_ADC_SAMPLE=2, ADC_IMPEDANCE=50, runinfo='default', campaign=1): #pulse_gamma = 400, lower_pulse = 175
 
 
     file_names = []
@@ -164,27 +165,21 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                         hist_values = hist.values()
                         hist_edges = hist.axes[0].edges()
 
-                        baseline, sigma = norm.fit(hist_values[10000:30000])
+                        baseline, sigma = norm.fit(hist_values)
                         
                         hist_values_bs = hist_values - baseline
 
                         pulse_mask = (hist_edges[:-1] > pulse_start) & (hist_edges[:-1] < pulse_end)
-                        #baseline, sigma = norm.fit(pulse_mask)
-                       # print(f'Baseline: {baseline}, Sigma: {sigma}')
                         ADC_TO_VOLT = 2.415 / (2 ** 12)
                         IC = np.sum(hist_values[pulse_mask]-baseline ) #*ADC_TO_VOLT #- baseline
                         IC_adjusted = (NS_PER_ADC_SAMPLE / ADC_IMPEDANCE) * IC
                         ref_integral = 2.6e-2  # Reference integral value for normalization
                         REF_ENERGY = 4.42  # MeV, energy of the AmBe neutron source
                         IC_MeV = (IC_adjusted / ref_integral) * REF_ENERGY
-                        #print(f'IC_MeV: {IC_MeV:.2f} MeV, Timestamp: {timestamp}')
-                       # IC_values.append(IC_adjusted)
                         combined_IC_values.append(IC_adjusted)
                         IC_values.append(IC)
-                        #print(f'IC_adjusted: {IC_adjusted:.2f} ns, Timestamp: {timestamp}')
 
                         if pulse_max > IC_adjusted > pulse_gamma:
-                        #if IC_MeV > 4.42:
                             post_pulse_mask = hist_edges[:-1] > pulse_end
                             post_pulse_values = hist_values[post_pulse_mask]
                             another_pulse = np.any(post_pulse_values > (7 + sigma + baseline))
@@ -287,8 +282,9 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
 
     if IC_plots == 'y':
         plt.figure(figsize=(8, 5))
-        plt.hist(combined_IC_values, bins=200, alpha=0.7, color='blue', range=(0, 3000))
+        plt.hist(combined_IC_values, bins=200, alpha=0.7, color='blue', range=(0, 1000))
         plt.xlabel('IC_adjusted')
+        #plt.xticks(np.arange(0, 1000, 25))
         plt.ylabel('Number of Events')
         plt.title('All IC adjusted Values for all runs')
         plt.tight_layout()
@@ -298,9 +294,10 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
         
 
         plt.figure(figsize=(8, 5))
-        plt.hist(IC_values, bins=200, alpha=0.7, color='blue', range=(0, 3000))
+        plt.hist(IC_values, bins=200, alpha=0.7, color='blue', range=(0, 1000))
         plt.xlabel('IC')
         plt.ylabel('Number of Events')
+        #plt.xticks(np.arange(0, 1000, 25))
         plt.title('All IC Values for all runs')
         plt.tight_layout()
         plt.savefig(f'verbose/IC_AllEvents_{runinfo}.png', dpi=300)
@@ -310,9 +307,10 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
 
         # Second histogram
         plt.figure(figsize=(8, 5))
-        plt.hist(combined_IC_accepted, bins=200, alpha=0.7, color='orange', range=(0, 3000))
+        plt.hist(combined_IC_accepted, bins=200, alpha=0.7, color='orange', range=(0, 1000))
         plt.xlabel('IC_adjusted accepted')
         plt.ylabel('Number of Events')
+        #plt.xticks(np.arange(0, 1000, 25))
         plt.title('Accepted IC_adjusted Values for all runs')
         plt.tight_layout()
         plt.savefig(f'verbose/IC_adjusted_AcceptedEvents_{runinfo}.png', dpi=300)

@@ -14,7 +14,7 @@ import ast
 ##This one to make plots of different ports and depths for AmBe neutron source positions####
 
 files = './EventAmBeNeutronCandidatesData/' 
-csvs = glob.glob(os.path.join(files, 'EventAmBeNeutronCandidates_PE100CB0.45updated_*.csv'))
+csvs = glob.glob(os.path.join(files, 'EventAmBeNeutronCandidates_AmBeC2NewPMT*.csv'))
 
 source_groups = {}
 def NeutCapture(t, A, therm, tau, B):
@@ -126,7 +126,7 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
         plt.xlabel(fr"Cluster Time [$\mu s$]")
         plt.ylabel("Counts")
         plt.legend()
-        plt.title(f"Neutron Capture Time for AmBe 2.0 (PE < 100, CCB < 0.45), run positions:({sx}, {sy}, {sz})")
+        plt.title(f"Neutron Capture Time for AmBe 2.0 C1 (PE < 100, CCB < 0.45), run positions:({sx}, {sy}, {sz})")
         #plt.savefig("OutputPlots/NeutronCaptureTime_AmBe2.0PE100CB0.45.png", dpi=300, bbox_inches='tight')
         #plt.show()
         plt.tight_layout()
@@ -166,16 +166,16 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
     Info['CaptureTime'] = Info['CaptureTime'].astype(float)
     Info['CaptureTimeErr'] = Info['CaptureTimeErr'].astype(float)
 
-    #print(Info.head())
+    print(Info)
 
     # Save the DataFrame to a CSV file
 
 
 # Your port information
     port_info = {
-    (0, 100, 0): 'Port 5', (0, 50, 0): 'Port 5', (0, 0, 0): 'Port 5', (0, -50, 0): 'Port 5', (0, -100, 0): 'Port 5',
+    (0, 100, 0): 'Port 5', (0, 50, 0): 'Port 5', (0, 0, 0): 'Port 5', (0, -50, 0): 'Port 5', (0, -100, 0): 'Port 5', (0, 55, 0): 'Port 5',
     (0, 100, -75): 'Port 1', (0, 50, -75): 'Port 1', (0, 0, -75): 'Port 1', (0, -50, -75): 'Port 1', (0, -100, -75): 'Port 1',
-    (-75, 100, 0): 'Port 4', (-75, 50, 0): 'Port 4', (-75, 0, 0): 'Port 4', (-75, -50, 0): 'Port 4', (-75, -100, 0): 'Port 4',
+    (75, 100, 0): 'Port 4', (75, 50, 0): 'Port 4', (75, 0, 0): 'Port 4', (75, -50, 0): 'Port 4', (75, -100, 0): 'Port 4',
     (0, 100, 102): 'Port 3', (0, 50, 102): 'Port 3', (0, 0, 102): 'Port 3', (0, -50, 102): 'Port 3', (0, -100, 102): 'Port 3',
     (0, 100, 75): 'Port 2', (0, 50, 75): 'Port 2', (0, 0, 75): 'Port 2', (0, -50, 75): 'Port 2', (0, -100, 75): 'Port 2'}
 
@@ -196,17 +196,16 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
     vectorized_label = np.vectorize(make_label_se)
     labels_SE = vectorized_label(pivot_capturetime.values, pivot_capturetimeerr.values)
 
-    16598
     Info['LenEvents'] = Info['LenEvents'].astype(int)
-    Info['LenEvents'] = Info['LenEvents'] * (100/16598)
+    Info['LenEvents'] = Info['LenEvents'] * (100/17436)
     pivot_lenEvents = Info.pivot(index="Y", columns="Port", values="LenEvents").round(2)
     pivot_lenEvents = pivot_lenEvents.reindex(columns=port_order)
 
-    print(Info)
+    #print(Info)
 
     plt.figure(figsize=(8, 6))
     sns.heatmap(pivot_capturetime, annot=labels_SE, fmt="", cmap="YlOrBr", cbar=True, annot_kws={"size": 12}, linecolor='black', linewidths=0.2, cbar_kws={"label": "Capture Time (μs)"})
-    plt.title("Capture Time Heatmap")
+    plt.title("Capture Time of All Statistics of AmBe 2.0")
     plt.xlabel("Port")
     plt.ylabel("Y Position")
     plt.gca().invert_yaxis()
@@ -216,8 +215,8 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
 
 
     plt.figure(figsize=(8, 6))
-    sns.heatmap(pivot_lenEvents, annot=True, fmt="", cmap="YlOrBr", cbar=True, annot_kws={"size": 12}, linecolor='black', linewidths=0.2, cbar_kws={"label": "Length of Events"})
-    plt.title("Length of Events Heatmap")
+    sns.heatmap(pivot_lenEvents, annot=True, fmt="", cmap="YlOrBr", cbar=True, annot_kws={"size": 12}, linecolor='black', linewidths=0.2, cbar_kws={"label": "%"})
+    plt.title("Normalized Statistics of all AmBe Neutron-like Events")
     plt.xlabel("Port")
     plt.ylabel("Y Position")
     plt.gca().invert_yaxis()
