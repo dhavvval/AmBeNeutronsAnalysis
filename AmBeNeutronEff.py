@@ -7,6 +7,7 @@ import re
 from collections import defaultdict
 import matplotlib.pyplot as plt
 from numpy.fft import fft, ifft, fftfreq
+from matplotlib.backends.backend_pdf import PdfPages
 
 
 
@@ -74,9 +75,7 @@ def source_loc(run):
 
         #outside the tank data
         4707: (0, 328, 0), 4708: (0, 328, 0),
-
-
-        
+ 
         ##########Analysis Quality C2 - AmBe v2 Campaign 2 - July 2025#########
         #port 5 
         5682: (0, 0, 0), 5696: (0, -100, 0), 5707: (0, 55.3, 0), 5708: (0, 100, 0), 5710: (0, 100, 0), 5740: (0, 0, 0), 
@@ -92,8 +91,6 @@ def source_loc(run):
 
         #outside the tank without source
         5743: (0, 328, 0),  5778: (0, 328, 0),  5779: (0, 328, 0) #dummy positions
-
-
     }
         
     if run in source_positions:
@@ -108,163 +105,168 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                       pulse_max=3000, NS_PER_ADC_SAMPLE=2, ADC_IMPEDANCE=50, runinfo='default', campaign=1): #pulse_gamma = 400, lower_pulse = 175
 
 
-    file_names = []
-    run_numbers = []
+    with PdfPages('IC_Values_per_Run.pdf') as pdf:
+        file_names = []
+        run_numbers = []
+        for file_name in os.listdir(data_directory):
+            match = file_pattern.match(file_name)
+            print('Checking file: ' + file_name)
+            print('Match: ', match)
+            if match:
+                run_number = int(match.group(1))
+                run_numbers.append(str(run_number))
+                file_names.append(os.path.join(data_directory, file_name))
+        if campaign == 1:
+            folder_pattern = re.compile(r'^RWM_\d+')
+        elif campaign == 2:
+            folder_pattern = re.compile(r'^BRF_\d+')
+        results = {}
 
-    for file_name in os.listdir(data_directory):
-        match = file_pattern.match(file_name)
-        print('Checking file: ' + file_name)
-        print('Match: ', match)
-        if match:
-            run_number = int(match.group(1))
-            run_numbers.append(str(run_number))
-            file_names.append(os.path.join(data_directory, file_name))
-    if campaign == 1:
-        folder_pattern = re.compile(r'^RWM_\d+')
-    elif campaign == 2:
-        folder_pattern = re.compile(r'^BRF_\d+')
-    results = {}
+        combined_IC_values = []
+        combined_IC_accepted = []
+        IC_values = [] 
 
-    combined_IC_values = []
-    combined_IC_accepted = []
-    IC_values = [] 
+        for c1, run in enumerate(run_numbers): 
+            IC_accepted = []
+            seen_timestamps = set()    
+            print(f"\n\nRun: {run} ({c1+1}/{len(file_names)})")
+            print('-----------------------------------------------------------------')
 
-    for c1, run in enumerate(run_numbers): 
-        IC_accepted = []
-        seen_timestamps = set()    
-        print(f"\n\nRun: {run} ({c1+1}/{len(file_names)})")
-        print('-----------------------------------------------------------------')
+            x_pos, y_pos, z_pos = source_loc(run)
+            key = (x_pos, y_pos, z_pos)
+            print(f'Source position (x,y,z): ({x_pos},{y_pos},{z_pos})')
 
-        x_pos, y_pos, z_pos = source_loc(run)
-        key = (x_pos, y_pos, z_pos)
-        print(f'Source position (x,y,z): ({x_pos},{y_pos},{z_pos})')
+            good_events = []
+            accepted_events = 0
+            rejected_events = 0
+            counter = 0
 
-        good_events = []
-        accepted_events = 0
-        rejected_events = 0
-        counter = 0
-
-        waveform_files = os.listdir(os.path.join(waveform_dir, run))
+            waveform_files = os.listdir(os.path.join(waveform_dir, run))
 
 
-        print('\nLoading Raw Waveforms...')
-        for file_idx in trange(len(waveform_files)):
-            waveform_filepath = os.path.join(waveform_dir, run, waveform_files[file_idx])
+            print('\nLoading Raw Waveforms...')
+            for file_idx in trange(len(waveform_files)):
+                waveform_filepath = os.path.join(waveform_dir, run, waveform_files[file_idx])
 
-            with uproot.open(waveform_filepath) as root:
-                folder_names = [name for name in root.keys() if folder_pattern.match(name)]
+                with uproot.open(waveform_filepath) as root:
+                    folder_names = [name for name in root.keys() if folder_pattern.match(name)]
 
-                for folder in folder_names:
-                    timestamp = folder.split('_')[-1].split(';')[0]
-                    if timestamp in seen_timestamps:
-                        continue
-                    seen_timestamps.add(timestamp)
+                    for folder in folder_names:
+                        timestamp = folder.split('_')[-1].split(';')[0]
+                        if timestamp in seen_timestamps:
+                            continue
+                        seen_timestamps.add(timestamp)
 
-                    try:
-                        hist = root[folder]
-                        hist_values = hist.values()
-                        hist_edges = hist.axes[0].edges()
+                        try:
+                            hist = root[folder]
+                            hist_values = hist.values()
+                            hist_edges = hist.axes[0].edges()
 
-                        baseline, sigma = norm.fit(hist_values)
-                        
-                        hist_values_bs = hist_values - baseline
+                            baseline, sigma = norm.fit(hist_values)
+                            
+                            hist_values_bs = hist_values - baseline
 
-                        pulse_mask = (hist_edges[:-1] > pulse_start) & (hist_edges[:-1] < pulse_end)
-                        ADC_TO_VOLT = 2.415 / (2 ** 12)
-                        IC = np.sum(hist_values[pulse_mask]-baseline ) #*ADC_TO_VOLT #- baseline
-                        IC_adjusted = (NS_PER_ADC_SAMPLE / ADC_IMPEDANCE) * IC
-                        ref_integral = 2.6e-2  # Reference integral value for normalization
-                        REF_ENERGY = 4.42  # MeV, energy of the AmBe neutron source
-                        IC_MeV = (IC_adjusted / ref_integral) * REF_ENERGY
-                        combined_IC_values.append(IC_adjusted)
-                        IC_values.append(IC)
+                            pulse_mask = (hist_edges[:-1] > pulse_start) & (hist_edges[:-1] < pulse_end)                        
+                            IC = np.sum(hist_values[pulse_mask]-baseline ) #*ADC_TO_VOLT #- baseline
+                            IC_adjusted = (NS_PER_ADC_SAMPLE / ADC_IMPEDANCE) * IC
+                            combined_IC_values.append(IC_adjusted)
+                            IC_values.append(IC)
 
-                        if pulse_max > IC_adjusted > pulse_gamma:
-                            post_pulse_mask = hist_edges[:-1] > pulse_end
-                            post_pulse_values = hist_values[post_pulse_mask]
-                            another_pulse = np.any(post_pulse_values > (7 + sigma + baseline))
-                           # IC_accepted.append(IC_adjusted)
-                            combined_IC_accepted.append(IC_adjusted)
+                            if pulse_max > IC_adjusted > pulse_gamma:
+                                post_pulse_mask = hist_edges[:-1] > pulse_end
+                                post_pulse_values = hist_values[post_pulse_mask]
+                                another_pulse = np.any(post_pulse_values > (7 + sigma + baseline))
+                                combined_IC_accepted.append(IC_adjusted)
 
-                            if not another_pulse:
-                                good_events.append(int(timestamp))
-                                accepted_events += 1
+                                if not another_pulse:
+                                    good_events.append(int(timestamp))
+                                    accepted_events += 1
 
-                                if waveformsample == 'y':
-                                    if accepted_events in range(1, 11):
-                                        #print(IC)
-                                        plt.figure(figsize=(10, 4))
-                                        plt.plot(hist_edges[:-1], hist_values_bs, label='Waveform')
-                                        #plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
-                                        plt.axvspan(pulse_start, pulse_end, color='yellow', alpha=0.3, label='Integration Window')
-                                        plt.title(f'Accepted Waveform (timestamp: {timestamp}, Run: {run}), IC: {IC_adjusted:.2f}')
-                                        plt.xlabel('Time (ns)')
-                                        plt.ylabel('ADC counts')
-                                        plt.legend()
-                                        plt.tight_layout()
-                                        plt.savefig(f'verbose/AcceptedWaveform_{timestamp}_Run{run}.png', dpi=300)
-                                       
-                                        plt.close()
-                                        #plt.show()
+                                    if waveformsample == 'y':
+                                        if accepted_events in range(1, 11):
+                                            #print(IC)
+                                            plt.figure(figsize=(10, 4))
+                                            plt.plot(hist_edges[:-1], hist_values_bs, label='Waveform')
+                                            #plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
+                                            plt.axvspan(pulse_start, pulse_end, color='yellow', alpha=0.3, label='Integration Window')
+                                            plt.title(f'Accepted Waveform (timestamp: {timestamp}, Run: {run}), IC: {IC_adjusted:.2f}')
+                                            plt.xlabel('Time (ns)')
+                                            plt.ylabel('ADC counts')
+                                            plt.legend()
+                                            plt.tight_layout()
+                                            plt.savefig(f'verbose/AcceptedWaveform_{timestamp}_Run{run}.png', dpi=300)    
+                                            plt.close()
+                                            #plt.show()
+                                    else:
+                                        continue
+                                        
                                 else:
-                                    continue
-                                    
+                                    rejected_events += 1
+
+                                    if waveformsample == 'y':
+                                        if rejected_events in [1, 10, 20]:
+                                            plt.figure(figsize=(10, 4))
+                                            plt.plot(hist_edges[:-1], hist_values_bs, label='Waveform')
+                                            #plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
+                                            plt.axvspan(pulse_start, pulse_end, color='yellow', alpha=0.3, label='Integration Window')
+                                            plt.title(f'Rejected Waveform (2nd pulse) (timestamp: {timestamp}), run: {run}, IC: {IC_adjusted:.2f}')
+                                            plt.xlabel('Time (ns)')
+                                            plt.ylabel('ADC counts')
+                                            plt.legend()
+                                            plt.tight_layout()
+                                            plt.savefig(f'verbose/RejectedWaveform_2ndPulse_{timestamp}_Run{run}.png', dpi=300)
+                                            #plt.show()
+                                            plt.close()
+                                            #plt.show()
+                                    else:
+                                        continue
+
                             else:
                                 rejected_events += 1
-
                                 if waveformsample == 'y':
-                                    if rejected_events in [1, 10, 20]:
+                                    if rejected_events in [3, 6, 9]:
                                         plt.figure(figsize=(10, 4))
                                         plt.plot(hist_edges[:-1], hist_values_bs, label='Waveform')
                                         #plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
                                         plt.axvspan(pulse_start, pulse_end, color='yellow', alpha=0.3, label='Integration Window')
-                                        plt.title(f'Rejected Waveform (2nd pulse) (timestamp: {timestamp}), run: {run}, IC: {IC_adjusted:.2f}')
+                                        plt.title(f'Rejected Waveform (pulse max < IC_adjusted) (timestamp: {timestamp}), Run: {run}, IC: {IC_adjusted:.2f}')
                                         plt.xlabel('Time (ns)')
                                         plt.ylabel('ADC counts')
                                         plt.legend()
                                         plt.tight_layout()
-                                        plt.savefig(f'verbose/RejectedWaveform_2ndPulse_{timestamp}_Run{run}.png', dpi=300)
+                                        plt.savefig(f'verbose/RejectedWaveform_PulseMax_{timestamp}_Run{run}.png', dpi=300)
                                         #plt.show()
                                         plt.close()
                                         #plt.show()
                                 else:
                                     continue
 
-                        else:
-                            rejected_events += 1
-                            if waveformsample == 'y':
-                                if rejected_events in [3, 6, 9]:
-                                    plt.figure(figsize=(10, 4))
-                                    plt.plot(hist_edges[:-1], hist_values_bs, label='Waveform')
-                                    #plt.axhline(baseline + sigma + 7, color='r', linestyle='--', label='Second Pulse Threshold')
-                                    plt.axvspan(pulse_start, pulse_end, color='yellow', alpha=0.3, label='Integration Window')
-                                    plt.title(f'Rejected Waveform (pulse max < IC_adjusted) (timestamp: {timestamp}), Run: {run}, IC: {IC_adjusted:.2f}')
-                                    plt.xlabel('Time (ns)')
-                                    plt.ylabel('ADC counts')
-                                    plt.legend()
-                                    plt.tight_layout()
-                                    plt.savefig(f'verbose/RejectedWaveform_PulseMax_{timestamp}_Run{run}.png', dpi=300)
-                                    #plt.show()
-                                    plt.close()
-                                    #plt.show()
-                            else:
-                                continue
+                        except Exception as e:
+                            print(f"Could not access '{folder}': {e}")
 
-                    except Exception as e:
-                        print(f"Could not access '{folder}': {e}")
+                        counter += 1
 
-                    counter += 1
+            total = accepted_events + rejected_events
 
-        total = accepted_events + rejected_events
+            plt.figure(figsize=(8, 5))
+            plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 3000))
+            plt.xlabel('IC_adjusted')
+            plt.ylabel('Number of Events')
+            plt.title('All IC adjusted values for run: ' + str(run))
+            plt.tight_layout()
+            pdf.savefig(bbox_inches='tight')
+            #plt.savefig(f'verbose/IC_adjusted_AllEvents_{runinfo}_{run}.png', dpi=300)
+            plt.close()
 
-        plt.figure(figsize=(8, 5))
-        plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 3000))
-        plt.xlabel('IC_adjusted')
-        plt.ylabel('Number of Events')
-        plt.title('All IC adjusted values for run: ' + str(run))
-        plt.tight_layout()
-        plt.savefig(f'verbose/IC_adjusted_AllEvents_{runinfo}_{run}.png', dpi=300)
-        plt.close()
+            plt.figure(figsize=(8, 5))
+            plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 3000), log=True)
+            plt.xlabel('IC_adjusted')
+            plt.ylabel('Number of Events')
+            plt.title('All IC adjusted values for run: ' + str(run))
+            plt.tight_layout()
+            pdf.savefig(bbox_inches='tight')
+            #plt.savefig(f'verbose/IC_adjusted_AllEvents_{runinfo}_{run}.png', dpi=300)
+            plt.close()
         #plt.show()
 
         print(f'\nThere were a total of {total} acquisitions')
@@ -281,6 +283,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
         }
 
     if IC_plots == 'y':
+       
         plt.figure(figsize=(8, 5))
         plt.hist(combined_IC_values, bins=200, alpha=0.7, color='blue', range=(0, 1000))
         plt.xlabel('IC_adjusted')
@@ -291,7 +294,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
         plt.savefig(f'verbose/IC_adjusted_AllEvents_{runinfo}.png', dpi=300)
         plt.close()
         #plt.show()
-        
+            
 
         plt.figure(figsize=(8, 5))
         plt.hist(IC_values, bins=200, alpha=0.7, color='blue', range=(0, 1000))
