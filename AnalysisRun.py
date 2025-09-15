@@ -95,6 +95,7 @@ for c1, run in enumerate(run_numbers):
     hit_ids = []
     source_position = [[], [], []]
     event_ids = []
+    event_tank_time = []
     prompt_cluster_time = []
     prompt_cluster_charge = []
     prompt_cluster_QB = []
@@ -110,7 +111,7 @@ for c1, run in enumerate(run_numbers):
         event_data, good_events, x_pos, y_pos, z_pos,
         ane.cosmic, ane.AmBe, ane.AmBeMultiple,
         cluster_time, cluster_charge, cluster_QB, cluster_hits,
-        hit_times, hit_charges, hit_ids, source_position, event_ids,
+        hit_times, hit_charges, hit_ids, source_position, event_ids, event_tank_time,
         prompt_cluster_time, prompt_cluster_charge, prompt_cluster_QB, efficiency_data
     )
 
@@ -132,7 +133,8 @@ for c1, run in enumerate(run_numbers):
         "sourceX": source_position[0],
         "sourceY": source_position[1],
         "sourceZ": source_position[2],
-        "eventID": event_ids
+        "eventID": event_ids,
+        "eventTankTime": event_tank_time
     })
     print(df.head())
     df.to_csv(f'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_{runinfo}_{run}.csv', index=False) ##This files to do analysis for multiplicty, capture time, and other plots of Charge current vs Cluster time etc

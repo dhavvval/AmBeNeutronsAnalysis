@@ -7,7 +7,7 @@ import glob
 
 
 path = './'  # Directory containing the CSV files
-efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummary_AmBeC2OldPMT.csv'))
+efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummary_AmBeC1.csv'))
 
 
 all_df = []
@@ -38,7 +38,10 @@ for pos in positions:
             "total_events": 1,
         }])], ignore_index=True)
 
-df["port"] = df.apply(lambda row: port_info.get((row["x_pos"], row["y_pos"], row["z_pos"]), "Unknown"), axis=1)
+df["SourcePosition"] = list(zip(df["x_pos"], df["y_pos"], df["z_pos"]))
+df["port"] = df["SourcePosition"].map(lambda pos: port_info.get(pos, "Unknown"))
+
+#df["port"] = df.apply(lambda row: port_info.get((row["x_pos"], row["y_pos"], row["z_pos"]), "Unknown"), axis=1)
 df["efficiency"] = df["unique_neutron_triggers"]/df["ambe_triggers"]
 df["err_A"] = np.sqrt(df["unique_neutron_triggers"])/df["ambe_triggers"]
 df["err_B"] = np.sqrt(df["efficiency"] * (1 - df["efficiency"]) / df["ambe_triggers"])  
@@ -46,12 +49,16 @@ df["err_B"] = np.sqrt(df["efficiency"] * (1 - df["efficiency"]) / df["ambe_trigg
 df["efficiency"] = df["efficiency"]*100  # Convert to percentage
 df["err_A"] = df["err_A"]*100  # Convert to percentage
 df["err_B"] = df["err_B"]*100  # Convert to percentage
+print(df["unique_neutron_triggers"].max())
+df["unique_neutron_triggers"] = (df["unique_neutron_triggers"]/df["unique_neutron_triggers"].max())*100  # Convert to percentage
 
 print(df["err_B"])
 
 pivot_eff = df.pivot(index="y_pos", columns="port", values="efficiency")
 pivot_err = df.pivot(index="y_pos", columns="port", values="err_B")
-pivot_n = df.pivot(index="y_pos", columns="port", values="neutron_candidates")
+pivot_n = df.pivot(index="y_pos", columns="port", values="unique_neutron_triggers")
+pivot_counts = df.pivot(index="y_pos", columns="port", values="unique_neutron_triggers").round(2)
+pivot_counts = pivot_counts.dropna(how="all")
 
 
 port_order = ["Port 1", "Port 5", "Port 2", "Port 3", "Port 4"]
@@ -60,7 +67,23 @@ port_order = ["Port 1", "Port 5", "Port 2", "Port 3", "Port 4"]
 pivot_eff = pivot_eff.reindex(columns=port_order)
 pivot_err = pivot_err.reindex(columns=port_order)
 pivot_n = pivot_n.reindex(columns=port_order)
+pivot_counts = pivot_counts.reindex(columns=port_order)
+pivot_eff = pivot_eff.loc[pivot_counts.index]
+pivot_err = pivot_err.loc[pivot_counts.index]
+pivot_n   = pivot_n.loc[pivot_counts.index]
 mask = (pivot_n == 0)
+
+plt.figure(figsize=(8, 6))
+sns.heatmap(pivot_counts, annot=True, fmt="", cmap="YlOrBr", cbar=True, annot_kws={"size": 12}, mask=mask, linecolor='black', linewidths=0.2, cbar_kws={"label": "Percentage (%)"})
+plt.title("Statistics of AmBe neutrons from AmBe 2.0 C1 (PE < 100, CB < 0.45)")
+plt.xlabel("Ports")
+plt.ylabel("Y Position (cm)")
+plt.xticks(rotation=45)
+plt.yticks(rotation=0)
+plt.gca().invert_yaxis()
+plt.tight_layout()
+plt.savefig("OutputPlots/Statistics_AmBeNeutronEfficiency_AmBe2.0C1.png", dpi=300, bbox_inches='tight')
+plt.show()
 
 # Label function for SE
 def make_label_se(eff, err, n):
@@ -73,14 +96,14 @@ labels_SE = vectorized_label(pivot_eff.values, pivot_err.values, pivot_n.values)
 
 plt.figure(figsize=(8, 6))
 sns.heatmap(pivot_eff, annot=labels_SE, fmt="", cmap="YlOrBr", cbar=True, annot_kws={"size": 12}, mask=mask, linecolor='black', linewidths=0.2, cbar_kws={"label": "Efficiency (%)"})
-plt.title("AmBe neutron efficiency from AmBe 2.0 C2 Old PMT (PE < 100, CB < 0.45)")
+plt.title("AmBe neutron efficiency from AmBe 2.0 C1 (PE < 100, CB < 0.45)")
 plt.xlabel("Ports")
 plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)
 plt.yticks(rotation=0)
 plt.gca().invert_yaxis()
 plt.tight_layout()
-plt.savefig("OutputPlots/AmBeNeutronEfficiency_AmBe2.0C2OldPMT.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/AmBeNeutronEfficiency_AmBe2.0C1.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 ##Residuals plot using AmBe 1.0 and AmBe 2.0 data
@@ -103,11 +126,16 @@ residuals = pivot_eff - ambe1_df
 plt.figure(figsize=(8, 6))
 sns.heatmap(residuals, annot=True, fmt=".1f", cmap="coolwarm", center=0, cbar_kws={'label': 'Residual (AmBe 2.0 - AmBe 1.0)'}, mask=mask, linecolor='black', linewidths=0.2)
 
-plt.title("Residual Efficiency of AmBe 2.0 C1 Old PMT compare to AmBe 1.0 (PE < 100, CB < 0.45)")
+plt.title("Residual Efficiency of AmBe 2.0 C1 compare to AmBe 1.0 (PE < 100, CB < 0.45)")
 plt.xlabel("Ports")
 plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)
 plt.gca().invert_yaxis()
 plt.tight_layout()
-plt.savefig("OutputPlots/ResidualEfficiency_AmBe2.0C2OldPMT.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/ResidualEfficiency_AmBe2.0C1.png", dpi=300, bbox_inches='tight')
 plt.show()
+
+
+
+
+
