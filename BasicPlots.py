@@ -117,7 +117,7 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
         chi2_value = np.sum(((ydata - ydata_expected) ** 2) / (ydata_errors ** 2))
         ndof = len(ydata) - len(popt)
         chi2_ndof = chi2_value / ndof
-        p_value = 1 - chi2.cdf(chi2_value, ndof)
+        p_value = chi2.sf(chi2_value, ndof)
 
         time_fit_values.append((f"{popt[1]:.2f}", f"{perr[1]:.2f}", f"{popt[2]:.2f}", f"{perr[2]:.2f}", (sx, sy, sz), len(EventTime), f"{chi2_ndof:.2f}", f"{p_value:.3f}"))
         print(f"Thermal time:{popt[1]:.2f}", f"{perr[1]:.2f}", f"Capture time:{popt[2]:.2f}", f"{perr[2]:.2f}", (sx, sy, sz), len(EventTime), f"{chi2_ndof:.2f}", f"{p_value:.3f}")
@@ -130,11 +130,11 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
         params['A'].min = 0
         params['therm'].min = 1e-9
         params['tau'].min = 1e-9
-        params['B'].min = -1
+        params['B'].min = -5
         result = model.fit(ydata, params, t=xdata, weights=1/ydata_errors)
         print(result.fit_report()) ## Make a dataframe out of it.
         best_fit_curve = result.best_fit
-
+        
         lm_run_summary = {
             "Thermal": result.params['therm'].value,
             "Thermal_err": result.params['therm'].stderr,
@@ -142,7 +142,8 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
             "Tau_err": result.params['tau'].stderr,
             "Coordination": (sx, sy, sz),
             "chi2": result.chisqr,
-            "reduced_chi2": result.redchi
+            "reduced_chi2": result.redchi,
+            "p_value": chi2.sf(result.chisqr, result.nfree)    
         }
         lmfit_summary.append(lm_run_summary)
         ##########
@@ -335,11 +336,11 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
     NeutThermalTime, NeutThermalTimeErr = weighted_average(Info, 'ThermalTime', 'ThermalTimeErr')
     print(f"Weighted Average Thermal Time: {NeutThermalTime:.2f} ± {NeutThermalTimeErr:.2f} μs")
 
-    PyMCNeutCaptureTime, PyMCNeutCaptureTimeErr = weighted_average(pyMC_df, 'Tau', 'Tauerr')
-    print(f"Weighted Average PyMC Capture Time: {PyMCNeutCaptureTime:.2f} ± {PyMCNeutCaptureTimeErr:.2f} μs")
-
     PyMCNeutThermalTime, PyMCNeutThermalTimeErr = weighted_average(pyMC_df, 'Therm', 'Thermerr')
     print(f"Weighted Average PyMC Thermal Time: {PyMCNeutThermalTime:.2f} ± {PyMCNeutThermalTimeErr:.2f} μs")
+
+    PyMCNeutCaptureTime, PyMCNeutCaptureTimeErr = weighted_average(pyMC_df, 'Tau', 'Tauerr')
+    print(f"Weighted Average PyMC Capture Time: {PyMCNeutCaptureTime:.2f} ± {PyMCNeutCaptureTimeErr:.2f} μs")
 
     lmfitThermalTime, lmfitThermalTimeErr = weighted_average(lmfit_df, 'Thermal', 'Thermal_err')
     print(f"Weighted Average LMFIT Thermal Time: {lmfitThermalTime:.2f} ± {lmfitThermalTimeErr:.2f} μs")

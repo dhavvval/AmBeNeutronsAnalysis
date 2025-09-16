@@ -91,7 +91,7 @@ bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 init = [np.max(counts), 6, 25, np.min(counts)]
 
 
-fit_mask = (bin_centers > 4) & (bin_centers < 66)
+fit_mask = (bin_centers > 2) & (bin_centers < 67)
 fit_x = bin_centers[fit_mask]
 
 fit_y = counts[fit_mask]
