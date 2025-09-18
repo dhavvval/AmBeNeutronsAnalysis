@@ -79,17 +79,25 @@ def source_loc(run):
 
         
         ##########Analysis Quality C2 - AmBe v2 Campaign 2 - July 2025#########
+        #####Old PMT######
         #port 5 
-        5682: (0, 0, 0), 5696: (0, -100, 0), 5707: (0, 55.3, 0), 5708: (0, 100, 0), 5710: (0, 100, 0), 5740: (0, 0, 0), 
-
+        5682: (0, 0, 0), 5696: (0, -100, 0), 5707: (0, 55.3, 0), 5708: (0, 100, 0), 5710: (0, 100, 0),
         #port 1
         5711: (0, -100, -75), 5712: (0, 0, -75), 5715: (0, 0, -75), 5716: (0, 0, -75), 5730: (0, 100, -75),
-      
-        #port 4
+        
+
+        #####New PMT########
+        #port 5
+        5740: (0, 0, 0), 5797: (0, 100, 0),
+
+       #port 4
         5741: (75, 100, 0),  5742: (75, 100, 0), 5774: (75, 0, 0), 5775: (75, -100, 0),
 
         #port 3
         5776: (0, 100, 102), 5780: (0, 100, 102), 5782: (0, 0, 102), 5783: (0, -105.5, 102),
+
+        #port 2
+        5785:(0, 100, 75), 5789: (0, 0, 75), 5791:(0, 0, 75),
 
         #outside the tank without source
         5743: (0, 328, 0),  5778: (0, 328, 0),  5779: (0, 328, 0) #dummy positions
@@ -187,7 +195,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                         combined_IC_values.append(IC_adjusted)
                         IC_values.append(IC)
 
-                        if pulse_max > IC_adjusted > pulse_gamma:
+                        if 575 > IC_adjusted > pulse_gamma:
                             post_pulse_mask = hist_edges[:-1] > pulse_end
                             post_pulse_values = hist_values[post_pulse_mask]
                             another_pulse = np.any(post_pulse_values > (7 + sigma + baseline))
@@ -263,7 +271,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
         total = accepted_events + rejected_events
 
         plt.figure(figsize=(8, 5))
-        plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 3000))
+        plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1400))
         plt.xlabel('IC_adjusted')
         plt.ylabel('Number of Events')
         plt.title('All IC adjusted values for run: ' + str(run))
@@ -274,7 +282,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
         #plt.show()
 
         plt.figure(figsize=(8, 5))
-        plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 3000), log=True)
+        plt.hist(combined_IC_values, bins=500, alpha=0.7, color='blue', range=(0, 1400), log=True)
         plt.xlabel('IC_adjusted')
         plt.ylabel('Number of Events')
         plt.title('Log scale of All IC adjusted values for run: ' + str(run))

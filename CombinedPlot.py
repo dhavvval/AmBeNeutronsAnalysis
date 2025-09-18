@@ -15,7 +15,7 @@ if __name__ == "__main__":
 
     path = './'  # Directory containing the CSV files
 
-    csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_C1testforclustermap_*.csv'))
+    csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBeC1Gammaregion_*.csv'))
 
     all_df = []
     for file in csv_files:
@@ -51,10 +51,10 @@ if __name__ == "__main__":
         plt.hist2d(PE, CCB, bins=300, cmap='viridis', 
                 range=[[-10, 120], [0.1, 1.0]], cmin=1, )
         plt.colorbar(label='Counts')
-        plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0 for single neutron candidate (PE < 100, CCB < 0.45)")
+        plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0v1 for single neutron candidate (PE < 100, CCB < 0.45)")
         plt.xlabel("Cluster PE")
         plt.ylabel("Cluster Charge Balance")
-        #plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0PE100CB0.45updated.png", dpi=300, bbox_inches='tight')
+        plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0v1.png", dpi=300, bbox_inches='tight')
         plt.show()
 
     # Plot for multiple multiplicity events (if any)
@@ -75,24 +75,24 @@ if __name__ == "__main__":
         plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0 for multiple neutron candidates(PE < 100, CCB < 0.45)")
         plt.xlabel("Cluster PE")
         plt.ylabel("Cluster Charge Balance")
-        #plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0PE100CB0.45updated.png", dpi=300, bbox_inches='tight')
+        plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0v1.png", dpi=300, bbox_inches='tight')
         plt.show()
 
 
     # neutron multiplicty
     plt.figure()
     plt.hist(events_counts, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
-    plt.xlabel('Neutron multiplicity for background events')
+    plt.xlabel('Neutron multiplicity')
     plt.ylabel('Counts')
-    plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0 (PE < 100, CCB < 0.45)')
-    #plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0PE100CB0.45.png", dpi=300, bbox_inches='tight')
+    plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0v1 with g-ROI (PE < 100, CCB < 0.45)')
+    plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0v1gROI.png", dpi=300, bbox_inches='tight')
     plt.show()
 
     plt.figure()
     plt.hist(events_counts, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
-    plt.xlabel('Neutron multiplicity for background events')
+    plt.xlabel('Neutron multiplicity')
     plt.ylabel('Counts')
-    plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0 (PE < 100, CCB < 0.45)')
+    plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 100, CCB < 0.45)')
     #plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0PE100CB0.45.png", dpi=300, bbox_inches='tight')
     plt.show()
 
@@ -101,20 +101,20 @@ if __name__ == "__main__":
     plt.hist2d(PE, CCB, bins=100, cmap='viridis', 
             range=[[-10, 120], [0.1, 1.0]], cmin=1, )
     plt.colorbar(label='Counts')
-    plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0 C1")
+    plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0v1")
     plt.xlabel("Cluster PE")
     plt.ylabel("Cluster Charge Balance")
-    #plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0PE100CBB0.45updated.png", dpi=300, bbox_inches='tight')
+    plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0v1.png", dpi=300, bbox_inches='tight')
     plt.show()
 
     # Plot Neutron Capture Time
-    '''counts, bin_edges = np.histogram(CT, bins=200, range=(0, 70))
+    counts, bin_edges = np.histogram(CT, bins=200, range=(0, 70))
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
     init = [np.max(counts), 5, 25, np.min(counts)]
 
 
-    fit_mask = (bin_centers > 2) & (bin_centers < 66)
+    fit_mask = (bin_centers > 2) & (bin_centers < 65)
     fit_x = bin_centers[fit_mask]
     fit_y = counts[fit_mask]
     fit_y_errors = np.sqrt(fit_y)
@@ -122,8 +122,6 @@ if __name__ == "__main__":
     popt, pcov = curve_fit(NeutCapture, fit_x, fit_y, p0=init, sigma=fit_y_errors, absolute_sigma=True, 
                         bounds=([0, 0.1, 0.1, 0], [np.inf, 100, 100, np.inf]))
     perr = np.sqrt(np.diag(pcov))
-
-
     fit_y_expected = NeutCapture(fit_x, *popt)
     fit_y_errors[fit_y_errors == 0] = 1e-10
     chi2_value = np.sum(((fit_y - fit_y_expected) ** 2) / (fit_y_errors ** 2))
@@ -145,8 +143,8 @@ if __name__ == "__main__":
     plt.xlabel(fr"Cluster Time [$\mu s$]")
     plt.ylabel("Counts")
     plt.legend()
-    plt.title(f"Neutron Capture Time for AmBe 2.0 (PE < 100, CCB < 0.45)")
-    #plt.savefig("OutputPlots/NeutronCaptureTime_AmBe2.0PE100CB0.45updated.png", dpi=300, bbox_inches='tight')
+    plt.title(f"Neutron Capture Time for AmBe 2.0v1 (PE < 100, CCB < 0.45)")
+    plt.savefig("OutputPlots/NeutronCaptureTime_AmBe2.0v1.png", dpi=300, bbox_inches='tight')
     plt.show()
 
     residuals = (fit_y - fit_y_expected) / fit_y_errors
@@ -155,6 +153,6 @@ if __name__ == "__main__":
     plt.axhline(0, color='gray', linestyle='--')
     plt.xlabel("Time [μs]")
     plt.ylabel("Normalized Residual")
-    plt.title("Fit Residuals for AmBe 2.0 Neutron Capture Time (PE < 100, CCB < 0.45)")
-    #plt.savefig("OutputPlots/FitResiduals_AmBe2.0PE100CB0.45updated.png", dpi=300, bbox_inches='tight')
-    plt.show()'''
+    plt.title("Fit Residuals for AmBe 2.0v1 Neutron Capture Time (PE < 100, CCB < 0.45)")
+    plt.savefig("OutputPlots/FitResiduals_AmBe2.0v1.png", dpi=300, bbox_inches='tight')
+    plt.show()

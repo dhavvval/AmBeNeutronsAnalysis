@@ -19,14 +19,14 @@ import arviz as az
 ##It has three different types of fitting models to determine the neutron capture time distribution
 
 files = './EventAmBeNeutronCandidatesData/' 
-csvs = glob.glob(os.path.join(files, 'EventAmBeNeutronCandidates_AmBeC1_*.csv'))
+csvs = glob.glob(os.path.join(files, 'EventAmBeNeutronCandidates_AmBeC1Gammaregion_*.csv'))
 
 source_groups = {}
 def NeutCapture(t, A, therm, tau, B):
     return A * (1-np.exp(-t / therm)) * np.exp(-t / tau) + B
 
 
-with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
+with PdfPages('AllAmBePositionsPlotstestAmBeC1gROI.pdf') as pdf:
     for file in csvs:
         filename = os.path.basename(file)
         print(f"Processing file: {filename}")
@@ -56,6 +56,8 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
 
         x, y, z = df["sourceX"].iloc[0], df["sourceY"].iloc[0], df["sourceZ"].iloc[0]
         source_key = (round(x, 3), round(y, 3), round(z, 3))
+        if source_key == (0, -105.5, 102):
+            source_key = (0, -100, 102)
         if source_key not in source_groups:
             source_groups[source_key] = []
         source_groups[source_key].append(df)
@@ -76,10 +78,10 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
         # Plot
         sx, sy, sz = (int(v) for v in source_key)
         plt.figure()
-        plt.hist(events_counts, bins=range(1, 10, 1), log=True, edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
+        plt.hist(EventTime, bins=range(1, 10, 1), log=True, edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
         plt.xlabel('Neutron multiplicity for Events')
         plt.ylabel('Counts')
-        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0 (PE < 100, CCB < 0.45), run positions:({sx}, {sy}, {sz})')
+        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v1 g-ROI (PE < 100, CCB < 0.45), run positions:({sx}, {sy}, {sz})')
         #plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0PE100CB0.45.png", dpi=300, bbox_inches='tight')
         #plt.show()
         plt.tight_layout()
@@ -87,10 +89,10 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
         plt.close()
 
         plt.figure()
-        plt.hist(events_counts, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
+        plt.hist(EventTime, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
         plt.xlabel('Neutron multiplicity for Events')
         plt.ylabel('Counts')
-        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0 (PE < 100, CCB < 0.45), run positions:({sx}, {sy}, {sz})')
+        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v1 g-ROI (PE < 100, CCB < 0.45), run positions:({sx}, {sy}, {sz})')
         #plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0PE100CB0.45.png", dpi=300, bbox_inches='tight')
         #plt.show()
         plt.tight_layout()
@@ -119,7 +121,7 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
         chi2_ndof = chi2_value / ndof
         p_value = chi2.sf(chi2_value, ndof)
 
-        time_fit_values.append((f"{popt[1]:.2f}", f"{perr[1]:.2f}", f"{popt[2]:.2f}", f"{perr[2]:.2f}", (sx, sy, sz), len(EventTime), f"{chi2_ndof:.2f}", f"{p_value:.3f}"))
+        time_fit_values.append((f"{popt[1]:.2f}", f"{perr[1]:.2f}", f"{popt[2]:.2f}", f"{perr[2]:.2f}", (sx, sy, sz), len(EventTime), f"{chi2_ndof:.2f}", f"{p_value:.3f}", f"{popt[3]:.2f}"))
         print(f"Thermal time:{popt[1]:.2f}", f"{perr[1]:.2f}", f"Capture time:{popt[2]:.2f}", f"{perr[2]:.2f}", (sx, sy, sz), len(EventTime), f"{chi2_ndof:.2f}", f"{p_value:.3f}")
 
         ##########
@@ -130,8 +132,10 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
         params['A'].min = 0
         params['therm'].min = 1e-9
         params['tau'].min = 1e-9
-        params['B'].min = -5
-        result = model.fit(ydata, params, t=xdata, weights=1/ydata_errors)
+        params['B'].vary = True
+        params['B'].min = 0
+        params['B'].max = 18
+        result = model.fit(ydata, params, t=xdata, weights=1/ydata_errors, method="basinhopping")
         print(result.fit_report()) ## Make a dataframe out of it.
         best_fit_curve = result.best_fit
         
@@ -199,8 +203,8 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
         label = (
             fr"$\mathrm{{therm}} = {popt[1]:.2f} \pm {perr[1]:.2f}\ \mu s$" + "\n"
             fr"$\tau = {popt[2]:.2f} \pm {perr[2]:.2f}\ \mu s$" + "\n"
-            fr"$\chi^2 = {chi2_value:.2f},\ \mathrm{{ndof}} = {ndof}$" + "\n"
-            fr"$\frac{{\chi^2}}{{\mathrm{{ndof}}}} = {chi2_ndof:.2f}$, p = {p_value:.3f}"
+            fr"$\chi^2 = {chi2_value:.2f},\ \mathrm{{ndof}} = {ndof}$, " + "\n"
+            fr"$\frac{{\chi^2}}{{\mathrm{{ndof}}}} = {chi2_ndof:.2f}$"
             
         )
 
@@ -208,7 +212,7 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
         plt.xlabel(fr"Cluster Time [$\mu s$]")
         plt.ylabel("Counts")
         plt.legend()
-        plt.title(f"Neutron Capture Time for AmBe 2.0 C1 (PE < 100, CCB < 0.45), run positions:({sx}, {sy}, {sz})")
+        plt.title(f"Neutron Capture Time for AmBe 2.0v1 g-ROI (PE < 100, CCB < 0.45), run positions:({sx}, {sy}, {sz})")
         #plt.savefig("OutputPlots/NeutronCaptureTime_AmBe2.0PE100CB0.45.png", dpi=300, bbox_inches='tight')
         #plt.show()
         plt.tight_layout()
@@ -242,7 +246,7 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
         pdf.savefig(bbox_inches='tight')
         plt.close()
 
-    Info = pd.DataFrame(time_fit_values, columns=['ThermalTime','ThermalTimeErr', 'CaptureTime','CaptureTimeErr', 'SourcePosition', 'LenEvents', "Chi2Ndof", "p-value"])
+    Info = pd.DataFrame(time_fit_values, columns=['ThermalTime','ThermalTimeErr', 'CaptureTime','CaptureTimeErr', 'SourcePosition', 'LenEvents', "Chi2Ndof", "p-value", "B"])
     Info['ThermalTime'] = Info['ThermalTime'].astype(float)
     Info['ThermalTimeErr'] = Info['ThermalTimeErr'].astype(float)
     Info['CaptureTime'] = Info['CaptureTime'].astype(float)
@@ -267,7 +271,7 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
     (0, 100, 0): 'Port 5', (0, 50, 0): 'Port 5', (0, 0, 0): 'Port 5', (0, -50, 0): 'Port 5', (0, -100, 0): 'Port 5', (0, 55, 0): 'Port 5',
     (0, 100, -75): 'Port 1', (0, 50, -75): 'Port 1', (0, 0, -75): 'Port 1', (0, -50, -75): 'Port 1', (0, -100, -75): 'Port 1',
     (75, 100, 0): 'Port 4', (75, 50, 0): 'Port 4', (75, 0, 0): 'Port 4', (75, -50, 0): 'Port 4', (75, -100, 0): 'Port 4',
-    (0, 100, 102): 'Port 3', (0, 50, 102): 'Port 3', (0, 0, 102): 'Port 3', (0, -50, 102): 'Port 3', (0, -100, 102): 'Port 3',
+    (0, 100, 102): 'Port 3', (0, 50, 102): 'Port 3', (0, 0, 102): 'Port 3', (0, -50, 102): 'Port 3', (0, -100, 102): 'Port 3', (0, -105, 102): 'Port 3',
     (0, 100, 75): 'Port 2', (0, 50, 75): 'Port 2', (0, 0, 75): 'Port 2', (0, -50, 75): 'Port 2', (0, -100, 75): 'Port 2'}
 
     port_order = ["Port 1", "Port 5", "Port 2", "Port 3", "Port 4"]
@@ -303,11 +307,12 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
 
     plt.figure(figsize=(8, 6))
     sns.heatmap(pivot_capturetime, annot=labels_SE, fmt="", cmap="YlOrBr", cbar=True, annot_kws={"size": 12}, linecolor='black', linewidths=0.2, cbar_kws={"label": "Capture Time (μs)"})
-    plt.title("Capture Time of AmBe 2.0 C1")
+    plt.title("Capture Time of AmBe 2.0v1 g-ROI")
     plt.xlabel("Port")
     plt.ylabel("Y Position")
     plt.gca().invert_yaxis()
     plt.tight_layout()
+    plt.savefig("OutputPlots/CaptureTime_AmBeNeutrons_AmBe2.0v1gROI.png", dpi=300, bbox_inches='tight')
     plt.show()
     plt.close()
 
@@ -317,12 +322,14 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
     #Thermal time
     plt.figure(figsize=(8, 6))
     sns.heatmap(pivot_thermal_time, annot=labels_SE, fmt="", cmap="YlOrBr", cbar=True, annot_kws={"size": 12}, linecolor='black', linewidths=0.2, cbar_kws={"label": "Thermal Time (μs)"})
-    plt.title("Thermal Time of AmBe 2.0 C1")
+    plt.title("Thermal Time of AmBe 2.0v1 g-ROI")
     plt.xlabel("Port")
     plt.ylabel("Y Position")
     plt.gca().invert_yaxis()
     plt.tight_layout()
+    plt.savefig("OutputPlots/ThermalTime_AmBeNeutrons_AmBe2.0v1gROI.png", dpi=300, bbox_inches='tight')
     plt.show()
+    plt.close()
 
     def weighted_average(df, value, error):
         weights = 1.0 / (df[error] ** 2)
@@ -350,10 +357,11 @@ with PdfPages('AllAmBePositionsPlots.pdf') as pdf:
 
     plt.figure(figsize=(8, 6))
     sns.heatmap(pivot_lenEvents, annot=True, fmt="", cmap="YlOrBr", cbar=True, annot_kws={"size": 12}, linecolor='black', linewidths=0.2, cbar_kws={"label": "%"})
-    plt.title("Normalized Statistics of all AmBe Neutron-like Events")
+    plt.title("Normalized Statistics of all AmBe Neutron-like Events for AmBe 2.0v1 g-ROI")
     plt.xlabel("Port")
     plt.ylabel("Y Position")
     plt.gca().invert_yaxis()
     plt.tight_layout()
+    plt.savefig("OutputPlots/Statistics_AmBeNeutronEvents_AmBe2.0v1gROI.png", dpi=300, bbox_inches='tight')
     plt.show()
     plt.close()

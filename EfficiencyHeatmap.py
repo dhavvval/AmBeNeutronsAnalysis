@@ -7,7 +7,7 @@ import glob
 
 
 path = './'  # Directory containing the CSV files
-efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummary_AmBeC1.csv'))
+efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummary_AmBeC1Gammaregion.csv'))
 
 
 all_df = []
@@ -16,6 +16,10 @@ for file in efficiency_data:
     all_df.append(cdf)
 
 df = pd.concat(all_df, ignore_index=True)
+
+condition = (df['x_pos'] == 0) & (df['y_pos'] == -105.5) & (df['z_pos'] == 102)
+if condition.any():
+    df.loc[condition, 'y_pos'] = -100
 
 port_info = {(0, 100, 0): 'Port 5', (0, 50, 0): 'Port 5', (0, 0, 0): 'Port 5', (0, -50, 0): 'Port 5', (0, -100, 0): 'Port 5', (0, 55.3, 0): 'Port 5',
  (0, 100, -75): 'Port 1', (0, 50, -75): 'Port 1', (0, 0, -75): 'Port 1', (0, -50, -75): 'Port 1', (0, -100, -75): 'Port 1',
@@ -75,14 +79,14 @@ mask = (pivot_n == 0)
 
 plt.figure(figsize=(8, 6))
 sns.heatmap(pivot_counts, annot=True, fmt="", cmap="YlOrBr", cbar=True, annot_kws={"size": 12}, mask=mask, linecolor='black', linewidths=0.2, cbar_kws={"label": "Percentage (%)"})
-plt.title("Statistics of AmBe neutrons from AmBe 2.0 C1 (PE < 100, CB < 0.45)")
+plt.title("Statistics of AmBe neutrons from AmBe 2.0v1 for gamma-ROI (PE < 100, CB < 0.45)")
 plt.xlabel("Ports")
 plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)
 plt.yticks(rotation=0)
 plt.gca().invert_yaxis()
 plt.tight_layout()
-plt.savefig("OutputPlots/Statistics_AmBeNeutronEfficiency_AmBe2.0C1.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/Statistics_AmBeNeutronEfficiency_AmBe2.0v1gROI.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 # Label function for SE
@@ -96,14 +100,14 @@ labels_SE = vectorized_label(pivot_eff.values, pivot_err.values, pivot_n.values)
 
 plt.figure(figsize=(8, 6))
 sns.heatmap(pivot_eff, annot=labels_SE, fmt="", cmap="YlOrBr", cbar=True, annot_kws={"size": 12}, mask=mask, linecolor='black', linewidths=0.2, cbar_kws={"label": "Efficiency (%)"})
-plt.title("AmBe neutron efficiency from AmBe 2.0 C1 (PE < 100, CB < 0.45)")
+plt.title("AmBe neutron efficiency from AmBe 2.0v1 for gamma-ROI (PE < 100, CB < 0.45)")
 plt.xlabel("Ports")
 plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)
 plt.yticks(rotation=0)
 plt.gca().invert_yaxis()
 plt.tight_layout()
-plt.savefig("OutputPlots/AmBeNeutronEfficiency_AmBe2.0C1.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/AmBeNeutronEfficiency_AmBe2.0v1gROI.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 ##Residuals plot using AmBe 1.0 and AmBe 2.0 data
@@ -126,13 +130,13 @@ residuals = pivot_eff - ambe1_df
 plt.figure(figsize=(8, 6))
 sns.heatmap(residuals, annot=True, fmt=".1f", cmap="coolwarm", center=0, cbar_kws={'label': 'Residual (AmBe 2.0 - AmBe 1.0)'}, mask=mask, linecolor='black', linewidths=0.2)
 
-plt.title("Residual Efficiency of AmBe 2.0 C1 compare to AmBe 1.0 (PE < 100, CB < 0.45)")
+plt.title("Residual Efficiency of AmBe 2.0v1 g-ROI compare to AmBe 1.0 (PE < 100, CB < 0.45)")
 plt.xlabel("Ports")
 plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)
 plt.gca().invert_yaxis()
 plt.tight_layout()
-plt.savefig("OutputPlots/ResidualEfficiency_AmBe2.0C1.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/ResidualEfficiency_AmBe2.0v1gROI.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 
