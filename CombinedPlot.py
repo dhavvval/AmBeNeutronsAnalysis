@@ -15,7 +15,7 @@ if __name__ == "__main__":
 
     path = './'  # Directory containing the CSV files
 
-    csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBeC1Gammaregion_*.csv'))
+    csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBeC1_*.csv'))
 
     all_df = []
     for file in csv_files:
@@ -26,6 +26,7 @@ if __name__ == "__main__":
     combined_df = pd.concat(all_df, ignore_index=True)
         
     events_counts = combined_df['eventID'].value_counts()
+    EventTime = combined_df['eventTankTime'].value_counts()
 
     # Separate the counts into two groups
     single_events = events_counts[events_counts == 1]
@@ -81,15 +82,15 @@ if __name__ == "__main__":
 
     # neutron multiplicty
     plt.figure()
-    plt.hist(events_counts, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
+    plt.hist(EventTime, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
     plt.xlabel('Neutron multiplicity')
     plt.ylabel('Counts')
-    plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0v1 with g-ROI (PE < 100, CCB < 0.45)')
+    plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 100, CCB < 0.45)')
     plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0v1gROI.png", dpi=300, bbox_inches='tight')
     plt.show()
 
     plt.figure()
-    plt.hist(events_counts, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
+    plt.hist(EventTime, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False, log=True)
     plt.xlabel('Neutron multiplicity')
     plt.ylabel('Counts')
     plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 100, CCB < 0.45)')
@@ -98,8 +99,8 @@ if __name__ == "__main__":
 
     # Cluster PE vs Charge Balance plot
     plt.figure()
-    plt.hist2d(PE, CCB, bins=100, cmap='viridis', 
-            range=[[-10, 120], [0.1, 1.0]], cmin=1, )
+    plt.hist2d(PE, CCB, bins=200, cmap='viridis', 
+            range=[[-10, 500], [0.1, 1.0]], cmin=1, )
     plt.colorbar(label='Counts')
     plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0v1")
     plt.xlabel("Cluster PE")

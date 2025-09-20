@@ -88,7 +88,7 @@ def source_loc(run):
 
         #####New PMT########
         #port 5
-        5740: (0, 0, 0), 5797: (0, 100, 0),
+        5740: (0, 0, 0), 5797: (0, 100, 0), 5815: (0, -100, 0),
 
        #port 4
         5741: (75, 100, 0),  5742: (75, 100, 0), 5774: (75, 0, 0), 5775: (75, -100, 0),
@@ -195,7 +195,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                         combined_IC_values.append(IC_adjusted)
                         IC_values.append(IC)
 
-                        if 575 > IC_adjusted > pulse_gamma:
+                        if 1400 > IC_adjusted > 500:
                             post_pulse_mask = hist_edges[:-1] > pulse_end
                             post_pulse_values = hist_values[post_pulse_mask]
                             another_pulse = np.any(post_pulse_values > (7 + sigma + baseline))
@@ -307,7 +307,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
 
     if IC_plots == 'y':
         plt.figure(figsize=(8, 5))
-        plt.hist(combined_IC_values, bins=200, alpha=0.7, color='blue', range=(0, 1000))
+        plt.hist(combined_IC_values, bins=200, alpha=0.7, color='blue', range=(0, 1400))
         plt.xlabel('IC_adjusted')
         #plt.xticks(np.arange(0, 1000, 25))
         plt.ylabel('Number of Events')
@@ -318,7 +318,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
         #plt.show()
 
         plt.figure(figsize=(8, 5))
-        plt.hist(combined_IC_values, bins=200, alpha=0.7, color='blue', range=(0, 1000), log=True)
+        plt.hist(combined_IC_values, bins=200, alpha=0.7, color='blue', range=(0, 1400), log=True)
         plt.xlabel('IC_adjusted')
         #plt.xticks(np.arange(0, 1000, 25))
         plt.ylabel('Number of Events')
@@ -329,7 +329,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
         
 
         plt.figure(figsize=(8, 5))
-        plt.hist(IC_values, bins=200, alpha=0.7, color='blue', range=(0, 1000))
+        plt.hist(IC_values, bins=200, alpha=0.7, color='blue', range=(0, 1400))
         plt.xlabel('IC')
         plt.ylabel('Number of Events')
         #plt.xticks(np.arange(0, 1000, 25))
@@ -342,7 +342,7 @@ def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
 
         # Second histogram
         plt.figure(figsize=(8, 5))
-        plt.hist(combined_IC_accepted, bins=200, alpha=0.7, color='orange', range=(0, 1000))
+        plt.hist(combined_IC_accepted, bins=200, alpha=0.7, color='orange', range=(0, 1400))
         plt.xlabel('IC_adjusted accepted')
         plt.ylabel('Number of Events')
         #plt.xticks(np.arange(0, 1000, 25))
