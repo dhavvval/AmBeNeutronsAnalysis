@@ -1,4 +1,5 @@
 from cmath import tau
+from itertools import chain
 import os          
 import numpy as np
 import pandas as pd
@@ -14,6 +15,7 @@ import lmfit
 import pymc as pm
 import arviz as az
 from typing import Dict, List, Tuple, Optional
+import matplotlib.colors as mcolors
 
 
 class AmBeNeutronAnalyzer:
@@ -22,7 +24,7 @@ class AmBeNeutronAnalyzer:
     """
     
     def __init__(self, data_directory: str = './EventAmBeNeutronCandidatesData/', 
-                 output_pdf: str = 'AllAmBePositionsPlotstestAmBeC1gROI.pdf'):
+                 output_pdf: str = 'AllAmBePositionsPlottest.pdf'):
         self.data_directory = data_directory
         self.output_pdf = output_pdf
         self.source_groups = {}
@@ -45,7 +47,7 @@ class AmBeNeutronAnalyzer:
         }
         self.port_order = ["Port 1", "Port 5", "Port 2", "Port 3", "Port 4"]
 
-    def load_and_group_data(self, file_pattern: str = 'EventAmBeNeutronCandidates_AmBeC1NewCuts-g-ROI_4453.csv'):
+    def load_and_group_data(self, file_pattern: str = 'EventAmBeNeutronCandidates_FullPECBWindow_4640.csv'):
         """Load CSV files and group them by source position."""
         files = self.data_directory
         csvs = glob.glob(os.path.join(files, file_pattern))
@@ -78,6 +80,18 @@ class AmBeNeutronAnalyzer:
                 print(f"No data in file: {filename}")
                 continue
 
+            ###### Correct hitID swap as per johannes' suggestion ########
+            id1, id2 = 453, 455
+            if df['hitID'].astype(str).str.contains(f'{id1}|{id2}').any():
+                original_hitids = df['hitID'].copy()
+                df['hitID'] = (df['hitID'].astype(str)
+                              .str.replace(f'{id1}', 'TEMP', regex=False)
+                              .str.replace(f'{id2}', f'{id1}', regex=False)
+                              .str.replace('TEMP', f'{id2}', regex=False))
+                
+                if (df['hitID'] != original_hitids).any():
+                    print(f"Swapped hitID {id1} and {id2} in file: {filename}")
+
             x, y, z = df["sourceX"].iloc[0], df["sourceY"].iloc[0], df["sourceZ"].iloc[0]
             source_key = (round(x, 3), round(y, 3), round(z, 3))
             if source_key == (0, -105.5, 102):
@@ -96,21 +110,44 @@ class AmBeNeutronAnalyzer:
         PE = combined_df['clusterPE']
         CCB = combined_df['clusterChargeBalance']
         CT = combined_df['clusterTime']
-        
+        hit_delta_t = combined_df['hit_delta_t']
+        CvX = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[0]))
+        CvY = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[1]))
+        CvZ = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))
+
+
         # Multi-cluster event analysis
+
+        '''
+        hit_delta_t represents the time spread of individual hits within a cluster,
+        while delta_t_values represents the time difference between the first cluster and subsequent clusters in multi-cluster events.
+        '''
+
         event_counts = combined_df.groupby('eventTankTime')['clusterTime'].transform('count')
         multi_cluster_df = combined_df[event_counts > 1].copy()
         multi_cluster_df['first_cluster_time'] = multi_cluster_df.groupby('eventTankTime')['clusterTime'].transform('min')
         multi_cluster_df['delta_t'] = multi_cluster_df['clusterTime'] - multi_cluster_df['first_cluster_time']
         delta_t_values = multi_cluster_df[multi_cluster_df['delta_t'] > 0]['delta_t']
-        
+
+        single_hit_delta_t = combined_df[event_counts == 1]['hit_delta_t']
+        multi_hit_delta_t = combined_df[event_counts > 1]['hit_delta_t']
+        filtered_EventTime = combined_df[combined_df['hit_delta_t'] > 20]['eventTankTime'].value_counts()
+
+
         return {
             'EventTime': EventTime,
             'PE': PE,
             'CCB': CCB,
             'CT': CT,
+            'CvX': CvX,
+            'CvY': CvY,
+            'CvZ': CvZ,
             'delta_t_values': delta_t_values,
-            'combined_df': combined_df
+            'combined_df': combined_df,
+            'hit_delta_t': hit_delta_t,
+            'single_hit_delta_t': single_hit_delta_t,
+            'multi_hit_delta_t': multi_hit_delta_t,
+            'filtered_EventTime': filtered_EventTime
         }
 
     def plot_2d_histograms(self, data_dict: Dict, source_key: Tuple, pdf):
@@ -118,27 +155,68 @@ class AmBeNeutronAnalyzer:
         PE = data_dict['PE']
         CCB = data_dict['CCB']
         CT = data_dict['CT']
+        CvX = data_dict['CvX']
+        CvY = data_dict['CvY']
+        CvZ = data_dict['CvZ']
+
         sx, sy, sz = (int(v) for v in source_key)
-        
-        # PE vs Cluster Time
-        plt.figure(figsize=(10, 6))
-        plt.hist2d(PE, CT, bins=100, cmap='viridis', range=[[-10, 100], [0.1, 70]], cmin=1)
-        plt.colorbar(label='Counts')
-        plt.xlabel('Cluster PE')
-        plt.ylabel('Cluster Time (μs)')
-        plt.title(f'AmBe Neutron Capture Time vs PE (run positions:({sx}, {sy}, {sz}))')
-        plt.tight_layout()
-        pdf.savefig(bbox_inches='tight')
-        plt.close()
+
+
+        # Compute 2D histograms first to find global max for normalization
+        Hxy, _, _ = np.histogram2d(CvX, CvY, bins=100, range=[[-1, 1], [-1, 1]])
+        Hxz, _, _ = np.histogram2d(CvX, CvZ, bins=100, range=[[-1, 1], [-1, 1]])
+        Hyz, _, _ = np.histogram2d(CvY, CvZ, bins=100, range=[[-1, 1], [-1, 1]])
+
+        # Find maximum bin count across all three histograms
+        vmax = max(Hxy.max(), Hxz.max(), Hyz.max())
+       
+
+        # Create a Normalize object to share across subplots
+        norm = mcolors.Normalize(vmin=0, vmax=vmax)
+
+        # Create figure with 3 subplots for CvX, CvY, CvZ
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+        # Plot XY
+        im0 = axes[0].hist2d(CvX, CvY, bins=100, cmap='viridis', range=[[-1, 1], [-1, 1]], cmin=1, norm=norm)
+        axes[0].set_xlabel('X'); axes[0].set_ylabel('Y'); axes[0].set_title('XY')
+        fig.colorbar(im0[3], ax=axes[0], label='Counts')
+
+        # Plot XZ
+        im1 = axes[1].hist2d(CvX, CvZ, bins=100, cmap='viridis', range=[[-1, 1], [-1, 1]], cmin=1, norm=norm)
+        axes[1].set_xlabel('X'); axes[1].set_ylabel('Z'); axes[1].set_title('XZ')
+        fig.colorbar(im1[3], ax=axes[1], label='Counts')
+
+        # Plot YZ
+        im2 = axes[2].hist2d(CvY, CvZ, bins=100, cmap='viridis', range=[[-1, 1], [-1, 1]], cmin=1, norm=norm)
+        axes[2].set_xlabel('Y'); axes[2].set_ylabel('Z'); axes[2].set_title('YZ')
+        fig.colorbar(im2[3], ax=axes[2], label='Counts')
+
+        plt.suptitle(f'Cluster vector distributions for AmBe 2.0v1 (PE < 80, CCB < 0.40), run positions:({sx}, {sy}, {sz})')
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        pdf.savefig(fig, bbox_inches='tight')
+        plt.close(fig)
+
 
         # PE vs Charge Balance
         plt.figure(figsize=(10, 6))
         plt.hist2d(PE, CCB, bins=100, cmap='viridis', 
                 range=[[-10, 120], [0.1, 0.5]], cmin=1)
         plt.colorbar(label='Counts')
-        plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0v1 (PE < 100, CCB < 0.40), run positions:({sx}, {sy}, {sz})")
+        plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0v1 (PE < 80, CCB < 0.40), run positions:({sx}, {sy}, {sz})")
         plt.xlabel("Cluster PE")
         plt.ylabel("Cluster Charge Balance")
+        plt.tight_layout()
+        pdf.savefig(bbox_inches='tight')
+        plt.close()
+
+        # PE vs Cluster Time
+        plt.figure(figsize=(10, 6))
+        plt.hist2d(CT, PE, bins=100, cmap='viridis', range=[[0.1, 70], [-10, 100]], cmin=1)
+        plt.colorbar(label='Counts')
+        plt.xlabel('Cluster Time (μs)')
+        plt.ylabel('Cluster PE')
+        plt.title(f'AmBe Neutron Capture Time vs PE (run positions:({sx}, {sy}, {sz}))')
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         plt.close()
@@ -148,7 +226,7 @@ class AmBeNeutronAnalyzer:
         plt.hist2d(CT, CCB, bins=100, cmap='viridis', 
                 range=[[0, 70], [0.1, 0.5]], cmin=1)
         plt.colorbar(label='Counts')
-        plt.title(f"Cluster Time vs Charge Balance for AmBe 2.0v1 (PE < 100, CCB < 0.40), run positions:({sx}, {sy}, {sz})")
+        plt.title(f"Cluster Time vs Charge Balance for AmBe 2.0v1 (PE < 80, CCB < 0.40), run positions:({sx}, {sy}, {sz})")
         plt.xlabel("Cluster Time (μs)")
         plt.ylabel("Cluster Charge Balance")
         plt.tight_layout()
@@ -158,23 +236,23 @@ class AmBeNeutronAnalyzer:
     def plot_1d_histograms(self, data_dict: Dict, source_key: Tuple, pdf):
         """Generate 1D histogram plots."""
         EventTime = data_dict['EventTime']
+        filtered_EventTime = data_dict['filtered_EventTime']
         PE = data_dict['PE']
         delta_t_values = data_dict['delta_t_values']
+        hit_delta_t = data_dict['hit_delta_t']
+        single_hit_delta_t = data_dict['single_hit_delta_t']
+        multi_hit_delta_t = data_dict['multi_hit_delta_t']
         sx, sy, sz = (int(v) for v in source_key)
 
-        # Delta t histogram
-        if not delta_t_values.empty:
-            plt.figure(figsize=(10, 6))
-            plt.hist(delta_t_values, bins=50, color='coral', edgecolor='black')
-            plt.title(f'Time Difference (Δt) Between First and Subsequent Clusters for ({sx}, {sy}, {sz})', fontsize=16)
-            plt.xlabel('Δt (μs)', fontsize=12)
-            plt.ylabel('Number of Subsequent Clusters', fontsize=12)
-            plt.grid(axis='y', linestyle='--', alpha=0.7)
-            plt.tight_layout()
-            pdf.savefig(bbox_inches='tight')
-            plt.close()
-        else:
-            print(f"No delta_t_values for source position ({sx}, {sy}, {sz})")
+        plt.figure(figsize=(10, 6))
+        plt.hist(delta_t_values, bins=50, color='coral', edgecolor='black')
+        plt.title(f'Time Difference (Δt) Between First and Subsequent Clusters for ({sx}, {sy}, {sz})', fontsize=16)
+        plt.xlabel('Δt (μs)', fontsize=12)
+        plt.ylabel('Number of Subsequent Clusters', fontsize=12)
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        pdf.savefig(bbox_inches='tight')
+        plt.close()
 
         # Neutron multiplicity
         plt.figure(figsize=(10, 6))
@@ -182,7 +260,17 @@ class AmBeNeutronAnalyzer:
                 color="lightblue", linewidth=0.5, align='left', density=False)
         plt.xlabel('Neutron multiplicity for Events')
         plt.ylabel('Counts')
-        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 100, CCB < 0.40), run positions:({sx}, {sy}, {sz})')
+        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 80, CCB < 0.40), run positions:({sx}, {sy}, {sz})')
+        plt.tight_layout()
+        pdf.savefig(bbox_inches='tight')
+        plt.close()
+
+        plt.figure(figsize=(10, 6))
+        plt.hist(filtered_EventTime, bins=range(1, 10, 1), log=True, edgecolor='blue', 
+                color="lightblue", linewidth=0.5, align='left', density=False)
+        plt.xlabel('Neutron multiplicity for Events')
+        plt.ylabel('Counts')
+        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 80, CCB < 0.40), run positions:({sx}, {sy}, {sz})')
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         plt.close()
@@ -193,6 +281,35 @@ class AmBeNeutronAnalyzer:
         plt.xlabel("Cluster PE")
         plt.ylabel("Counts")
         plt.title(f"PE Spectrum for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
+        plt.tight_layout()
+        pdf.savefig(bbox_inches='tight')
+        plt.close()
+
+        plt.figure(figsize=(10, 6))
+        plt.hist(hit_delta_t, bins=200, color='coral', edgecolor='black')
+        plt.xlabel("hit Δt (ns)")
+        plt.ylabel("Counts")
+        plt.title(f"Δt Distribution for cluster collection for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
+        plt.tight_layout()
+        pdf.savefig(bbox_inches='tight')
+        plt.close()
+
+        plt.figure(figsize=(10, 6))
+        plt.hist(single_hit_delta_t, bins=50, color='coral', edgecolor='black')
+        plt.title(f'SINGLE CLUSTER - Time Difference (Δt) Between First and Subsequent Clusters for ({sx}, {sy}, {sz})', fontsize=16)
+        plt.xlabel('Δt (ns)', fontsize=12)
+        plt.ylabel('Number of Subsequent Clusters', fontsize=12)
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        pdf.savefig(bbox_inches='tight')
+        plt.close()
+
+        plt.figure(figsize=(10, 6))
+        plt.hist(multi_hit_delta_t, bins=50, color='coral', edgecolor='black')
+        plt.title(f'MULTI CLUSTER - Time Difference (Δt) Between First and Subsequent Clusters for ({sx}, {sy}, {sz})', fontsize=16)
+        plt.xlabel('Δt (ns)', fontsize=12)
+        plt.ylabel('Number of Subsequent Clusters', fontsize=12)
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         plt.close()
@@ -511,7 +628,7 @@ class AmBeNeutronAnalyzer:
 
         return Info
 
-    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_AmBeC1NewCuts-g-ROI_4453.csv',
+    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_FullPECBWindow_4640.csv',
                     tasks: List[str] = None):
         """
         Run the complete analysis with specified tasks.
@@ -537,9 +654,9 @@ class AmBeNeutronAnalyzer:
             for source_key, df_list in self.source_groups.items():
                 combined_df = pd.concat(df_list, ignore_index=True)
                 data_dict = self.prepare_data(combined_df)
-                
-                print(f"Analyzing source position: {source_key}")
-                
+
+                print(f"Analyzing source position: ({source_key[0]}, {source_key[1]}, {source_key[2]})")
+
                 # Run selected tasks
                 if '2d_histograms' in tasks:
                     self.plot_2d_histograms(data_dict, source_key, pdf)
@@ -573,7 +690,7 @@ def main():
     # Example 1: Run only 2D histograms for quick testing
     print("=== Running only 2D histograms ===")
     analyzer.run_analysis(tasks=['2d_histograms', '1d_histograms'])
-    
+
     # Example 2: Run full analysis with all tasks
     # print("=== Running full analysis ===")
     # analyzer.run_analysis(tasks=['2d_histograms', '1d_histograms', 'scipy_fit', 'lmfit_fit', 'pymc_fit', 'summary'])

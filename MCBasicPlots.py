@@ -160,7 +160,3 @@ print(f"Weighted Average LMFIT Thermal Time: {lmfitThermalTime:.2f} ± {lmfitThe
 
 lmfitCaptureTime, lmfitCaptureTimeErr = weighted_average(lmfit_df, 'Tau', 'Tau_err')
 print(f"Weighted Average LMFIT Capture Time: {lmfitCaptureTime:.2f} ± {lmfitCaptureTimeErr:.2f} μs")    
-
-
-
-    

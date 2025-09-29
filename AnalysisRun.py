@@ -17,8 +17,8 @@ import pandas as pd
 
 # edit accordingly
 
-#data_directory = '../AmBe_BeamCluster/'                                    # directory containing BeamClusterAnalysis ntuples
-#waveform_dir = '../AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
+data_directory = '../AmBe_BeamCluster/'                                    # directory containing BeamClusterAnalysis ntuples
+waveform_dir = '../AmBe_waveforms/'                             # directory containing raw AmBe PMT waveforms
 
 
 #data_directory = '../test/'                                    # directory containing BeamClusterAnalysis ntuples
@@ -31,8 +31,8 @@ import pandas as pd
 #data_directory = '../NewRun/test'                                    # directory containing BeamClusterAnalysis ntuples
 #waveform_dir = '../NewRun/test'
 
-data_directory = '../AnalysisQualityC2/newPMTPhysics'                                    # directory containing BeamClusterAnalysis ntuples
-waveform_dir = '../AnalysisQualityC2/newPMTPhysics'
+#data_directory = '../AnalysisQualityC2/newPMTPhysics'                                    # directory containing BeamClusterAnalysis ntuples
+#waveform_dir = '../AnalysisQualityC2/newPMTPhysics'
 
 campaign = int(input('What campaign is this? (1/2): '))  # Campaign 1 or 2
 

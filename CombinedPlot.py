@@ -15,7 +15,7 @@ if __name__ == "__main__":
 
     path = './'  # Directory containing the CSV files
 
-    csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBeC1_*.csv'))
+    csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBeC1NewCuts-g-ROI_*.csv'))
 
     all_df = []
     for file in csv_files:
@@ -24,60 +24,27 @@ if __name__ == "__main__":
 
 
     combined_df = pd.concat(all_df, ignore_index=True)
-        
-    events_counts = combined_df['eventID'].value_counts()
-    EventTime = combined_df['eventTankTime'].value_counts()
-
-    # Separate the counts into two groups
-    single_events = events_counts[events_counts == 1]
-    multi_events = events_counts[events_counts > 1]
-    #print(multi_events)
-
     PE = combined_df['clusterPE']
     CCB = combined_df['clusterChargeBalance']
-    CT = combined_df['clusterTime'] / 1000  # Convert to microseconds
+    combined_df['clusterTime'] = combined_df['clusterTime']/1000
+    CT = combined_df['clusterTime']  # Convert to microseconds
+    EventTime = combined_df['eventTankTime'].value_counts()
+    event_counts = combined_df.groupby('eventTankTime')['clusterTime'].transform('count')
+    multi_cluster_df = combined_df[event_counts > 1].copy()
+    multi_cluster_df['first_cluster_time'] = multi_cluster_df.groupby('eventTankTime')['clusterTime'].transform('min')
+    multi_cluster_df['delta_t'] = multi_cluster_df['clusterTime'] - multi_cluster_df['first_cluster_time']
+    delta_t_values = multi_cluster_df[multi_cluster_df['delta_t'] > 0]['delta_t']
 
-    # Plot for single multiplicity events (if any)
-    if not single_events.empty:
-        plt.figure()
-        counts, bins, patches=plt.hist(single_events, bins=range(1, 10, 1), edgecolor='blue', color="lightgreen", linewidth=0.5, align='left')
-        text = "\n".join([f"{int(counts[i])}" for i in range(len(counts)) if counts[i] > 0])
-        plt.text(0.05, 0.95, text, transform=plt.gca().transAxes, fontsize=10, va='top')
-        plt.xlabel('Multiplicity')
-        plt.ylabel('Counts')
-        plt.title('Events with multiplicity = 1')
-        plt.show()
+    plt.figure(figsize=(10, 6))
+    plt.hist(delta_t_values, bins=50, color='coral', edgecolor='black')
+    plt.title('Time Difference (Δt) Between First and Subsequent Clusters', fontsize=16)
+    plt.xlabel('Δt (μs)', fontsize=12)
+    plt.ylabel('Number of Subsequent Clusters', fontsize=12)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.show()
 
-        plt.figure()
-        plt.hist2d(PE, CCB, bins=300, cmap='viridis', 
-                range=[[-10, 120], [0.1, 1.0]], cmin=1, )
-        plt.colorbar(label='Counts')
-        plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0v1 for single neutron candidate (PE < 100, CCB < 0.45)")
-        plt.xlabel("Cluster PE")
-        plt.ylabel("Cluster Charge Balance")
-        plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0v1.png", dpi=300, bbox_inches='tight')
-        plt.show()
 
-    # Plot for multiple multiplicity events (if any)
-    if not multi_events.empty:
-        plt.figure()
-        counts, bins, patches = plt.hist(multi_events, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left')
-        text = "\n".join([f"bin{int(bins[i])}: {int(counts[i])}" for i in range(len(counts)) if counts[i] > 0])
-        plt.text(0.05, 0.95, text, transform=plt.gca().transAxes, fontsize=10, va='top')
-        plt.xlabel('Multiplicity')
-        plt.ylabel('Counts')
-        plt.title('Events with multiplicity > 1')
-        plt.show()
 
-        plt.figure()
-        plt.hist2d(PE, CCB, bins=300, cmap='viridis', 
-                range=[[-10, 120], [0.1, 1.0]], cmin=1, )
-        plt.colorbar(label='Counts')
-        plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0 for multiple neutron candidates(PE < 100, CCB < 0.45)")
-        plt.xlabel("Cluster PE")
-        plt.ylabel("Cluster Charge Balance")
-        plt.savefig("OutputPlots/ClusterPE_vs_ChargeBalance_AmBe2.0v1.png", dpi=300, bbox_inches='tight')
-        plt.show()
 
 
     # neutron multiplicty
@@ -85,7 +52,7 @@ if __name__ == "__main__":
     plt.hist(EventTime, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
     plt.xlabel('Neutron multiplicity')
     plt.ylabel('Counts')
-    plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 100, CCB < 0.45)')
+    plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 100, CCB < 0.40)')
     plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0v1gROI.png", dpi=300, bbox_inches='tight')
     plt.show()
 
@@ -93,8 +60,8 @@ if __name__ == "__main__":
     plt.hist(EventTime, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False, log=True)
     plt.xlabel('Neutron multiplicity')
     plt.ylabel('Counts')
-    plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 100, CCB < 0.45)')
-    #plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0PE100CB0.45.png", dpi=300, bbox_inches='tight')
+    plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 100, CCB < 0.40)')
+    #plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0PE100CB0.40.png", dpi=300, bbox_inches='tight')
     plt.show()
 
     # Cluster PE vs Charge Balance plot
@@ -144,7 +111,7 @@ if __name__ == "__main__":
     plt.xlabel(fr"Cluster Time [$\mu s$]")
     plt.ylabel("Counts")
     plt.legend()
-    plt.title(f"Neutron Capture Time for AmBe 2.0v1 (PE < 100, CCB < 0.45)")
+    plt.title(f"Neutron Capture Time for AmBe 2.0v1 (PE < 100, CCB < 0.40)")
     plt.savefig("OutputPlots/NeutronCaptureTime_AmBe2.0v1.png", dpi=300, bbox_inches='tight')
     plt.show()
 
@@ -154,6 +121,6 @@ if __name__ == "__main__":
     plt.axhline(0, color='gray', linestyle='--')
     plt.xlabel("Time [μs]")
     plt.ylabel("Normalized Residual")
-    plt.title("Fit Residuals for AmBe 2.0v1 Neutron Capture Time (PE < 100, CCB < 0.45)")
+    plt.title("Fit Residuals for AmBe 2.0v1 Neutron Capture Time (PE < 100, CCB < 0.4)")
     plt.savefig("OutputPlots/FitResiduals_AmBe2.0v1.png", dpi=300, bbox_inches='tight')
     plt.show()

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 
+
 @dataclass
 class WaveformConfig:
     """Configuration parameters for waveform analysis."""
@@ -32,12 +33,13 @@ class WaveformConfig:
 class CutCriteria:
     """Event selection criteria."""
     pe_min: float = 0
-    pe_max: float = 80
+    pe_max: float = 100
     ccb_min: float = 0
     ccb_max: float = 0.40
     ct_min: float = 2000
+    chits_min: int = 0
     cosmic_ct_threshold: float = 2000
-    cosmic_pe_threshold: float = 80
+    cosmic_pe_threshold: float = 100
 
 
 class AmBeNeutronProcessing:
@@ -110,24 +112,91 @@ class AmBeNeutronProcessing:
         
         raise ValueError(f'RUN NUMBER {run} DOESNT HAVE A SOURCE LOCATION!')
 
-    def ambe_single_cut(self, cpe: float, ccb: float, ct: float, cn: int) -> bool:
+    def ambe_single_cut(self, cpe: float, ccb: float, ct: float, cn: int, chits: int) -> bool:
         """Apply AmBe single neutron selection cuts."""
         return (self.cuts.pe_min < cpe <= self.cuts.pe_max and
                 self.cuts.ccb_min < ccb < self.cuts.ccb_max and
-                ct >= self.cuts.ct_min and
+                ct >= self.cuts.ct_min and chits >= self.cuts.chits_min and
                 cn == 1)
 
-    def ambe_multiple_cut(self, cpe: float, ccb: float, ct: float, cn: int) -> bool:
+    def ambe_multiple_cut(self, cpe: float, ccb: float, ct: float, cn: int, chits: int) -> bool:
         """Apply AmBe multiple neutron selection cuts."""
         return (self.cuts.pe_min < cpe <= self.cuts.pe_max and
                 self.cuts.ccb_min < ccb < self.cuts.ccb_max and
-                ct >= self.cuts.ct_min and
+                ct >= self.cuts.ct_min and chits >= self.cuts.chits_min and
                 cn != 1)
 
     def cosmic_cut(self, ct: float, cpe: float) -> bool:
         """Apply cosmic muon selection cuts."""
         return (ct < self.cuts.cosmic_ct_threshold or 
                 cpe > self.cuts.cosmic_pe_threshold)
+
+    def pairwise_relative_direction(self, hitX, hitY, hitZ, hitPE, hitT, sourceX, sourceY, sourceZ) -> Tuple[np.ndarray, float]:
+        """
+        Calculate cluster anisotropy/coherence from hit positions and timing.
+        
+        Args:
+            hitX, hitY, hitZ: Hit position arrays
+            hitPE: Hit photoelectron values
+            hitT: Hit timing values
+            
+        Returns:
+            Normalized direction vector (3D numpy array)
+        """
+        # pass cluster hits to this function, return anisotropy / coherence of the cluster
+        
+        hitX = np.asarray(hitX, dtype=np.float64)
+        hitY = np.asarray(hitY, dtype=np.float64)
+        hitZ = np.asarray(hitZ, dtype=np.float64)
+        hitPE = np.asarray(hitPE, dtype=np.float64)
+        hitT = np.asarray(hitT, dtype=np.float64)
+
+        # combine and sort by time
+        hits = list(zip(hitX, hitY, hitZ, hitPE, hitT))
+        hits.sort(key=lambda h: h[4])
+        
+        mini = min(hitT)
+        filtered_hits = []
+        
+        for hit in hits:
+            x_i, y_i, z_i, pe_i, t_i = hit
+
+            # remove very late times (chained to the first cluster hit)
+            if (t_i - mini) > 13:  # 13 ns is the maximum distance between the PMT rack (shortest path for direct light)
+                continue           # any hit times after this are assumed to be from reflections
+                
+            filtered_hits.append(hit)
+
+        # extract filtered values
+        filtX = np.array([h[0] for h in filtered_hits])
+        filtY = np.array([h[1] for h in filtered_hits])
+        filtZ = np.array([h[2] for h in filtered_hits])
+        filtPE = np.array([h[3] for h in filtered_hits])
+        
+        n = len(filtX)
+        if n < 2:
+            return np.array([0.0, 0.0, 0.0]), 0.0
+
+        vec = np.zeros(3)
+        for i in range(n):
+            for j in range(i+1, n):
+                dx = filtX[j] - filtX[i]
+                dy = filtY[j] - filtY[i]
+                dz = filtZ[j] - filtZ[i]
+                r = np.sqrt(dx**2 + dy**2 + dz**2)
+                if r == 0:
+                    continue
+                
+                # weighted direction between hits
+                dvec = np.array([dx, dy, dz]) / r
+                weight = filtPE[i] * filtPE[j]
+                vec += weight * dvec
+                Neutron_vertex = np.sqrt((dvec[0]-(sourceX/100))**2 + (dvec[1]-(sourceY/100))**2 + (dvec[2]-(sourceZ/100))**2)
+
+        norm = np.linalg.norm(vec)
+        if norm == 0:
+            return np.array([0.0, 0.0, 0.0]), 0.0
+        return vec / norm, Neutron_vertex
 
     def analyze_waveform(self, hist_values: np.ndarray, hist_edges: np.ndarray) -> Tuple[float, float, bool]:
         """
@@ -443,6 +512,9 @@ class AmBeNeutronProcessing:
                 "clusterPE": Event["clusterPE"].array(),
                 "clusterChargeBalance": Event["clusterChargeBalance"].array(),
                 "clusterHits": Event["clusterHits"].array(),
+                "hitX": Event["Cluster_HitX"].array(),
+                "hitY": Event["Cluster_HitY"].array(),
+                "hitZ": Event["Cluster_HitZ"].array()
             }
             
             # Tree-dependent branches
@@ -487,15 +559,20 @@ class AmBeNeutronProcessing:
         CH = event_data["clusterHits"]
         CN = event_data["clusterNumber"]
         hT = event_data["hitT"]
+        hX = event_data["hitX"]
+        hY = event_data["hitY"]
+        hZ = event_data["hitZ"]
         hPE = event_data["hitPE"]
         hID = event_data["hitDetID"]
+
         
         # Initialize storage lists
         processed_data = {
             'cluster_time': [], 'cluster_charge': [], 'cluster_QB': [], 'cluster_hits': [],
-            'hit_times': [], 'hit_charges': [], 'hit_ids': [],
+            'hit_times': [], 'hit_x': [], 'hit_y': [], 'hit_z': [], 'hit_charges': [], 'hit_ids': [],
             'source_position': [[], [], []], 'event_ids': [], 'event_tank_time': [],
-            'prompt_cluster_time': [], 'prompt_cluster_charge': [], 'prompt_cluster_QB': []
+            'prompt_cluster_time': [], 'prompt_cluster_charge': [], 'prompt_cluster_QB': [], 'hit_delta_t': [],
+            'cluster_direction': [], 'neutron_vertex': []
         }
         
         # Initialize counters
@@ -539,19 +616,19 @@ class AmBeNeutronProcessing:
                     break  # Skip other cuts for this event
                 
                 # Check single neutron cuts
-                if self.ambe_single_cut(CPE[i][k], CCB[i][k], CT[i][k], CN[i]):
+                if self.ambe_single_cut(CPE[i][k], CCB[i][k], CT[i][k], CN[i], CH[i][k]):
                     if CPE[i][k] != float('-inf'):
                         event_neutron_candidates.append(k)
                 
                 # Check multiple neutron cuts
-                if self.ambe_multiple_cut(CPE[i][k], CCB[i][k], CT[i][k], CN[i]):
+                if self.ambe_multiple_cut(CPE[i][k], CCB[i][k], CT[i][k], CN[i], CH[i][k]):
                     if CPE[i][k] != float('-inf'):
                         event_multiple_candidates.append(k)
             
             # Process single neutron candidates
             for k in event_neutron_candidates:
                 self._append_cluster_data(processed_data, i, k, EN, ETT, CT, CPE, CCB, CH, 
-                                        hT, hPE, hID, x_pos, y_pos, z_pos)
+                                        hT, hX, hY, hZ, hPE, hID, x_pos, y_pos, z_pos)
                 stats['neutron_cand_count'] += 1
                 if efficiency_data is not None:
                     efficiency_data[key][2] += 1
@@ -560,8 +637,8 @@ class AmBeNeutronProcessing:
             if event_multiple_candidates:
                 for k in event_multiple_candidates:
                     self._append_cluster_data(processed_data, i, k, EN, ETT, CT, CPE, CCB, CH, 
-                                            hT, hPE, hID, x_pos, y_pos, z_pos)
-                
+                                            hT, hX, hY, hZ, hPE, hID, x_pos, y_pos, z_pos)
+
                 if EN[i] not in repeated_event_id:
                     stats['multiple_neutron_cand_count'] += 1
                     repeated_event_id.add(EN[i])
@@ -574,7 +651,7 @@ class AmBeNeutronProcessing:
         return processed_data, stats
 
     def _append_cluster_data(self, processed_data: Dict, i: int, k: int,
-                           EN, ETT, CT, CPE, CCB, CH, hT, hPE, hID,
+                           EN, ETT, CT, CPE, CCB, CH, hT, hX, hY, hZ, hPE, hID,
                            x_pos: float, y_pos: float, z_pos: float):
         """Helper function to append cluster data to processed_data dictionary."""
         processed_data['cluster_time'].append(CT[i][k])
@@ -582,6 +659,9 @@ class AmBeNeutronProcessing:
         processed_data['cluster_QB'].append(CCB[i][k])
         processed_data['cluster_hits'].append(CH[i][k])
         processed_data['hit_times'].append(hT[i][k])
+        processed_data['hit_x'].append(hX[i][k])
+        processed_data['hit_y'].append(hY[i][k])
+        processed_data['hit_z'].append(hZ[i][k])
         processed_data['hit_charges'].append(hPE[i][k])
         processed_data['hit_ids'].append(hID[i][k])
         processed_data['source_position'][0].append(x_pos)
@@ -589,6 +669,13 @@ class AmBeNeutronProcessing:
         processed_data['source_position'][2].append(z_pos)
         processed_data['event_ids'].append(EN[i])
         processed_data['event_tank_time'].append(ETT[i])
+        processed_data['hit_delta_t'].append(np.max(hT[i][k] - np.min(hT[i][k])) if CH[i][k] > 1 else 0)
+        
+        # Calculate cluster direction/anisotropy
+        direction_vec, neutron_vertex = self.pairwise_relative_direction(hX[i][k], hY[i][k], hZ[i][k], hPE[i][k], hT[i][k], x_pos, y_pos, z_pos)
+        processed_data['cluster_direction'].append(direction_vec)
+        processed_data['neutron_vertex'].append(neutron_vertex)
+
 
     def _print_processing_stats(self, stats: Dict[str, int]):
         """Print processing statistics."""
@@ -699,22 +786,28 @@ class AmBeNeutronProcessing:
             # Create DataFrames for this run
             run_int = int(run)
             print(f'Event run number: {run_int}')
-            
+                        
             # Main neutron candidates DataFrame
             df = pd.DataFrame({
                 "clusterTime": processed_data['cluster_time'],
                 "clusterPE": processed_data['cluster_charge'],
                 "clusterChargeBalance": processed_data['cluster_QB'],
                 "clusterHits": processed_data['cluster_hits'],
-                "hitT": processed_data['hit_times'],
+                "hitT": processed_data['hit_times'],  # Keep as lists for now
+                "hitX": processed_data['hit_x'],
+                "hitY": processed_data['hit_y'],
+                "hitZ": processed_data['hit_z'],
                 "hitQ": processed_data['hit_charges'],
                 "hitPE": processed_data['hit_charges'],
                 "hitID": processed_data['hit_ids'],
+                "hit_delta_t": processed_data['hit_delta_t'],
                 "sourceX": processed_data['source_position'][0],
                 "sourceY": processed_data['source_position'][1],
                 "sourceZ": processed_data['source_position'][2],
                 "eventID": processed_data['event_ids'],
-                "eventTankTime": processed_data['event_tank_time']
+                "eventTankTime": processed_data['event_tank_time'],
+                "clusterDirection": processed_data['cluster_direction'],
+                "neutronVertex": processed_data['neutron_vertex']
             })
             
             print("Sample of neutron candidates data:")
@@ -722,7 +815,7 @@ class AmBeNeutronProcessing:
             
             # Save neutron candidates data
             output_file = f'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_{runinfo}_{run_int}.csv'
-            df.to_csv(output_file, index=False)
+            df.to_csv(output_file, float_format="%.6f", index=False)
             print(f"✓ Saved neutron candidates to {output_file}")
             
             # Prompt neutrons DataFrame
@@ -890,7 +983,7 @@ def main():
         )
         
         # Final summary
-        print(f"\n🎉 ANALYSIS COMPLETE!")
+        print(f"\n ANALYSIS COMPLETE!")
         print(f"✓ Successfully processed {len(results['run_numbers'])} runs")
         print(f"✓ Output files saved in TriggerSummary/ and EventAmBeNeutronCandidatesData/")
         
@@ -900,7 +993,7 @@ def main():
         return results
         
     except Exception as e:
-        print(f"\n❌ ANALYSIS FAILED: {e}")
+        print(f"\n ANALYSIS FAILED: {e}")
         import traceback
         traceback.print_exc()
         return None
