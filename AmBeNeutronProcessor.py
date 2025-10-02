@@ -19,7 +19,7 @@ class WaveformConfig:
     """Configuration parameters for waveform analysis."""
     pulse_start: int = 300
     pulse_end: int = 1200
-    pulse_gamma: int = 400
+    pulse_gamma: int = 500
     lower_pulse: int = 175
     pulse_max: int = 1000
     NS_PER_ADC_SAMPLE: int = 2
@@ -90,7 +90,7 @@ class AmBeNeutronProcessing:
             5716: (0, 0, -75), 5730: (0, 100, -75),
             
             # New PMT - Port 5
-            5740: (0, 0, 0), 5797: (0, 100, 0), 5815: (0, -100, 0),
+            5740: (0, 0, 0), 5797: (0, 100, 0), 5815: (0, -100, 0), 5816: (0, -100, 0), 5820: (0, -100, 0), 5822: (0, -100, 0), 5823: (0, 100, 0),
 
             # New PMT - Port 4
             5741: (75, 100, 0), 5742: (75, 100, 0), 5774: (75, 0, 0), 5775: (75, -100, 0),
@@ -100,6 +100,9 @@ class AmBeNeutronProcessing:
 
             # New PMT - Port 2
             5785: (0, 100, 75), 5789: (0, 0, 75), 5791: (0, -100, 75),
+
+            # new PMT - Port 1
+            5824:(0, 100, -75), 5825:(0, 0, -75),  5826:(0, -100, -75), 5828:(0, -100, -75),
 
             # Outside the tank without source
             5743: (0, 328, 0), 5778: (0, 328, 0), 5779: (0, 328, 0)
@@ -215,7 +218,7 @@ class AmBeNeutronProcessing:
         IC_adjusted = (self.config.NS_PER_ADC_SAMPLE / self.config.ADC_IMPEDANCE) * IC
         
         # Check acceptance criteria
-        if not (self.config.pulse_gamma < IC_adjusted < 600):
+        if not (self.config.pulse_gamma < IC_adjusted < 1400):
             return IC_adjusted, baseline, False
             
         # Check for second pulse
@@ -930,8 +933,11 @@ def main():
     print(f"✓ Using tree type: {'ANNIEEventTreeMaker' if which_tree == 1 else 'PhaseIITreeMaker'}")
     
     # Directory configuration (matching AnalysisRun.py)
-    data_directory = '../AmBe_BeamCluster/'
-    waveform_dir = '../AmBe_waveforms/'
+    #data_directory = '../AnalysisQualityC2/newPMTPhysics/'
+    #waveform_dir = '../AnalysisQualityC2/newPMTPhysics/'
+
+    data_directory = '/Volumes/One Touch/AmBe/'
+    waveform_dir = '/Volumes/One Touch/AmBe/'
     
     print(f"\nDirectory Configuration:")
     print(f"  Data directory: {data_directory}")

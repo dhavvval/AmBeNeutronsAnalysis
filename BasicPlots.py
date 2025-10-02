@@ -24,13 +24,30 @@ class AmBeNeutronAnalyzer:
     """
     
     def __init__(self, data_directory: str = './EventAmBeNeutronCandidatesData/', 
-                 output_pdf: str = 'AllAmBePositionsPlottest.pdf'):
+                 output_pdf: str = 'SingleCluster.pdf'):
         self.data_directory = data_directory
         self.output_pdf = output_pdf
         self.source_groups = {}
         self.time_fit_values = []
         self.pyMC_summary = []
         self.lmfit_summary = []
+        
+        # ===== FITTING CONFIGURATION - SINGLE SOURCE OF TRUTH =====
+        # Change parameters here and all fitting methods will use them automatically
+        self.fitting_config = {
+            'time_bins': 70,
+            'time_range': (0, 70),
+            'fit_min_time': 2.0,
+            'fit_max_time': 67.0,
+            'initial_amplitude': 200.0,
+            'initial_thermal_time': 5.0,
+            'initial_capture_time': 25.0,
+            'initial_background': 0.0,
+            'amplitude_bounds': (0, np.inf),
+            'thermal_bounds': (0.1, 10.0),
+            'capture_bounds': (10.0, 70.0),
+            'background_bounds': (0, 15.0)
+        }
         
         # Port information mapping
         self.port_info = {
@@ -47,7 +64,20 @@ class AmBeNeutronAnalyzer:
         }
         self.port_order = ["Port 1", "Port 5", "Port 2", "Port 3", "Port 4"]
 
-    def load_and_group_data(self, file_pattern: str = 'EventAmBeNeutronCandidates_FullPECBWindow_4640.csv'):
+    def update_fitting_config(self, **kwargs):
+        """
+        Update fitting configuration parameters easily.
+        Example: analyzer.update_fitting_config(fit_min_time=1.5, initial_capture_time=30)
+        """
+        for key, value in kwargs.items():
+            if key in self.fitting_config:
+                self.fitting_config[key] = value
+                print(f"Updated {key} to {value}")
+            else:
+                print(f"Warning: {key} is not a valid configuration parameter")
+        print("Updated fitting configuration:", self.fitting_config)
+
+    def load_and_group_data(self, file_pattern: str = 'EventAmBeNeutronCandidates_AMBeC2_*.csv'):
         """Load CSV files and group them by source position."""
         files = self.data_directory
         csvs = glob.glob(os.path.join(files, file_pattern))
@@ -107,14 +137,16 @@ class AmBeNeutronAnalyzer:
         
         # Extract relevant columns
         EventTime = combined_df['eventTankTime'].value_counts()
-        PE = combined_df['clusterPE']
+        '''PE = combined_df['clusterPE']
         CCB = combined_df['clusterChargeBalance']
         CT = combined_df['clusterTime']
         hit_delta_t = combined_df['hit_delta_t']
         CvX = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[0]))
         CvY = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[1]))
         CvZ = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))
-
+        Neutron_vertex = combined_df['neutronVertex']'''
+        event_counts = combined_df.groupby('eventTankTime')['clusterTime'].transform('count')
+        
 
         # Multi-cluster event analysis
 
@@ -122,9 +154,18 @@ class AmBeNeutronAnalyzer:
         hit_delta_t represents the time spread of individual hits within a cluster,
         while delta_t_values represents the time difference between the first cluster and subsequent clusters in multi-cluster events.
         '''
+        multi_cluster_df = combined_df[event_counts == 1].copy()
+        PE = multi_cluster_df['clusterPE']
+        CCB = multi_cluster_df['clusterChargeBalance']
+        CT = multi_cluster_df['clusterTime']
+        hit_delta_t = multi_cluster_df['hit_delta_t']
+        CvX = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[0]))
+        CvY = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[1]))
+        CvZ = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))
+        Neutron_vertex = multi_cluster_df['neutronVertex']
 
-        event_counts = combined_df.groupby('eventTankTime')['clusterTime'].transform('count')
-        multi_cluster_df = combined_df[event_counts > 1].copy()
+
+
         multi_cluster_df['first_cluster_time'] = multi_cluster_df.groupby('eventTankTime')['clusterTime'].transform('min')
         multi_cluster_df['delta_t'] = multi_cluster_df['clusterTime'] - multi_cluster_df['first_cluster_time']
         delta_t_values = multi_cluster_df[multi_cluster_df['delta_t'] > 0]['delta_t']
@@ -147,7 +188,8 @@ class AmBeNeutronAnalyzer:
             'hit_delta_t': hit_delta_t,
             'single_hit_delta_t': single_hit_delta_t,
             'multi_hit_delta_t': multi_hit_delta_t,
-            'filtered_EventTime': filtered_EventTime
+            'filtered_EventTime': filtered_EventTime,
+            'Neutron_vertex': Neutron_vertex
         }
 
     def plot_2d_histograms(self, data_dict: Dict, source_key: Tuple, pdf):
@@ -197,41 +239,43 @@ class AmBeNeutronAnalyzer:
         pdf.savefig(fig, bbox_inches='tight')
         plt.close(fig)
 
+        Hpeccb, _, _ = np.histogram2d(PE, CCB, bins=100, range=[[-10, 120], [0.1, 0.5]])
+        Hctpe, _, _  = np.histogram2d(CT, PE,  bins=100, range=[[0.1, 70], [-10, 100]])
+        Hctccb, _, _ = np.histogram2d(CT, CCB, bins=100, range=[[0, 70], [0.1, 0.5]])
+
+        vmax2 = max(Hpeccb.max(), Hctpe.max(), Hctccb.max())
+        norm2 = mcolors.Normalize(vmin=0, vmax=vmax2)
 
         # PE vs Charge Balance
-        plt.figure(figsize=(10, 6))
-        plt.hist2d(PE, CCB, bins=100, cmap='viridis', 
-                range=[[-10, 120], [0.1, 0.5]], cmin=1)
-        plt.colorbar(label='Counts')
-        plt.title(f"Cluster PE vs Charge Balance for AmBe 2.0v1 (PE < 80, CCB < 0.40), run positions:({sx}, {sy}, {sz})")
-        plt.xlabel("Cluster PE")
-        plt.ylabel("Cluster Charge Balance")
-        plt.tight_layout()
-        pdf.savefig(bbox_inches='tight')
-        plt.close()
+        fig2, ax2 = plt.subplots(1,3, figsize=(18, 6))
+        im3= ax2[0].hist2d(PE, CCB, bins=100, cmap='viridis', 
+                range=[[-10, 120], [0.1, 0.5]], cmin=1, norm=norm2)
+        fig2.colorbar(im3[3], ax=ax2[0], label='Counts')
+        ax2[0].set_title(f"Cluster PE vs Charge Balance")
+        ax2[0].set_xlabel("Cluster PE")
+        ax2[0].set_ylabel("Cluster Charge Balance")
+
 
         # PE vs Cluster Time
-        plt.figure(figsize=(10, 6))
-        plt.hist2d(CT, PE, bins=100, cmap='viridis', range=[[0.1, 70], [-10, 100]], cmin=1)
-        plt.colorbar(label='Counts')
-        plt.xlabel('Cluster Time (μs)')
-        plt.ylabel('Cluster PE')
-        plt.title(f'AmBe Neutron Capture Time vs PE (run positions:({sx}, {sy}, {sz}))')
-        plt.tight_layout()
-        pdf.savefig(bbox_inches='tight')
-        plt.close()
+        im4 = ax2[1].hist2d(CT, PE, bins=100, cmap='viridis', range=[[0.1, 70], [-10, 100]], cmin=1, norm=norm2)
+        fig2.colorbar(im4[3], ax=ax2[1], label='Counts')
+        ax2[1].set_title(f"Cluster Time vs PE")
+        ax2[1].set_xlabel("Cluster Time (μs)")
+        ax2[1].set_ylabel("Cluster PE")
 
         # Cluster Time vs Charge Balance
-        plt.figure(figsize=(10, 6))
-        plt.hist2d(CT, CCB, bins=100, cmap='viridis', 
-                range=[[0, 70], [0.1, 0.5]], cmin=1)
-        plt.colorbar(label='Counts')
-        plt.title(f"Cluster Time vs Charge Balance for AmBe 2.0v1 (PE < 80, CCB < 0.40), run positions:({sx}, {sy}, {sz})")
-        plt.xlabel("Cluster Time (μs)")
-        plt.ylabel("Cluster Charge Balance")
-        plt.tight_layout()
-        pdf.savefig(bbox_inches='tight')
-        plt.close()
+        im5 = ax2[2].hist2d(CT, CCB, bins=100, cmap='viridis', 
+                      range=[[0, 70], [0.1, 0.5]], cmin=1, norm=norm2)
+        fig2.colorbar(im5[3], ax=ax2[2], label='Counts')
+        ax2[2].set_title(f"Cluster Time vs Charge Balance")
+        ax2[2].set_xlabel("Cluster Time (μs)")
+        ax2[2].set_ylabel("Cluster Charge Balance")
+
+        plt.suptitle(f'Cluster PE, Charge Balance and Time distributions for AmBe 2.0v1 (PE < 80, CCB < 0.40), run positions:({sx}, {sy}, {sz})')
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        pdf.savefig(fig2, bbox_inches='tight')
+        plt.close(fig2)
+
 
     def plot_1d_histograms(self, data_dict: Dict, source_key: Tuple, pdf):
         """Generate 1D histogram plots."""
@@ -242,6 +286,7 @@ class AmBeNeutronAnalyzer:
         hit_delta_t = data_dict['hit_delta_t']
         single_hit_delta_t = data_dict['single_hit_delta_t']
         multi_hit_delta_t = data_dict['multi_hit_delta_t']
+        Neutron_vertex = data_dict['Neutron_vertex']
         sx, sy, sz = (int(v) for v in source_key)
 
         plt.figure(figsize=(10, 6))
@@ -314,6 +359,36 @@ class AmBeNeutronAnalyzer:
         pdf.savefig(bbox_inches='tight')
         plt.close()
 
+        plt.figure(figsize=(10, 6))
+        plt.hist(Neutron_vertex, bins=100, range=(0, 2.5), color='coral', edgecolor='black')
+        plt.xlabel("Neutron Vertex Distance from Source (m)")
+        plt.ylabel("Counts")
+        plt.title(f"Neutron Vertex Distribution for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
+        plt.tight_layout()
+        pdf.savefig(bbox_inches='tight')
+        plt.close()
+
+    def _prepare_fitting_data(self, CT):
+        """
+        Centralized data preparation for fitting to ensure consistency across all methods.
+        This prevents the parameter inconsistency issue you identified.
+        """
+        # Use configuration parameters - single source of truth
+        counts, bin_edges = np.histogram(CT, bins=self.fitting_config['time_bins'], 
+                                       range=self.fitting_config['time_range'])
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        
+        # Apply consistent fitting mask
+        fit_mask = ((bin_centers > self.fitting_config['fit_min_time']) & 
+                   (bin_centers < self.fitting_config['fit_max_time']))
+        
+        xdata = bin_centers[fit_mask]
+        ydata = counts[fit_mask]
+        ydata_errors = np.sqrt(ydata)
+        ydata_errors[ydata_errors == 0] = 1e-10
+        
+        return xdata, ydata, ydata_errors, counts, bin_centers
+
     @staticmethod
     def NeutCapture(t, A, therm, tau, B):
         """Neutron capture time model."""
@@ -325,23 +400,29 @@ class AmBeNeutronAnalyzer:
         EventTime = data_dict['EventTime']
         sx, sy, sz = (int(v) for v in source_key)
 
-        # Prepare data for fitting
-        counts, bin_edges = np.histogram(CT, bins=70, range=(0, 70))
-        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-        fit_mask = (bin_centers > 2) & (bin_centers < 67)
-        xdata = bin_centers[fit_mask]
-        ydata = counts[fit_mask]
-        ydata_errors = np.sqrt(ydata)
-        ydata_errors[ydata_errors == 0] = 1e-10
+        # Use centralized data preparation - guarantees consistency
+        xdata, ydata, ydata_errors, counts, bin_centers = self._prepare_fitting_data(CT)
 
-        # Initial parameters
-        init = [np.max(counts), 5, 25, np.min(counts)]
+        # Use configuration parameters instead of hardcoded values
+        init = [self.fitting_config['initial_amplitude'], 
+                self.fitting_config['initial_thermal_time'], 
+                self.fitting_config['initial_capture_time'], 
+                self.fitting_config['initial_background']]
 
-        # Perform fit
+        # Perform fit using configuration bounds
         try:
+            bounds = ([self.fitting_config['amplitude_bounds'][0], 
+                      self.fitting_config['thermal_bounds'][0],
+                      self.fitting_config['capture_bounds'][0], 
+                      self.fitting_config['background_bounds'][0]],
+                     [self.fitting_config['amplitude_bounds'][1], 
+                      self.fitting_config['thermal_bounds'][1],
+                      self.fitting_config['capture_bounds'][1], 
+                      self.fitting_config['background_bounds'][1]])
+            
             popt, pcov = curve_fit(self.NeutCapture, xdata, ydata, p0=init, 
                                  sigma=ydata_errors, absolute_sigma=True,
-                                 bounds=([0, 0.1, 10, 0], [np.inf, 10, 70, 15]))
+                                 bounds=bounds)
             perr = np.sqrt(np.diag(pcov))
             ydata_expected = self.NeutCapture(xdata, *popt)
             
@@ -360,9 +441,11 @@ class AmBeNeutronAnalyzer:
             print(f"Scipy fit results for position {source_key}:")
             print(f"Thermal time:{popt[1]:.2f}±{perr[1]:.2f}, Capture time:{popt[2]:.2f}±{perr[2]:.2f}")
 
-            # Plot results
+            # Plot results using consistent parameters
             plt.figure(figsize=(10, 6))
-            plt.hist(CT, bins=70, range=(0, 70), histtype='step', color='blue', label="Data")
+            plt.hist(CT, bins=self.fitting_config['time_bins'], 
+                    range=self.fitting_config['time_range'], 
+                    histtype='step', color='blue', label="Data")
             plt.errorbar(xdata, ydata, yerr=ydata_errors, color='blue', linestyle='None', alpha=0.7)
 
             label = (
@@ -401,21 +484,24 @@ class AmBeNeutronAnalyzer:
         CT = data_dict['CT']
         sx, sy, sz = (int(v) for v in source_key)
 
-        # Prepare data for fitting
-        counts, bin_edges = np.histogram(CT, bins=70, range=(0, 70))
-        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-        fit_mask = (bin_centers > 2) & (bin_centers < 67)
-        xdata = bin_centers[fit_mask]
-        ydata = counts[fit_mask]
-        ydata_errors = np.sqrt(ydata)
-        ydata_errors[ydata_errors == 0] = 1e-10
+        # Use centralized data preparation - guarantees same setup as scipy
+        xdata, ydata, ydata_errors, counts, bin_centers = self._prepare_fitting_data(CT)
 
         try:
             model = lmfit.Model(self.NeutCapture)
-            params = model.make_params(A=200, therm=5, tau=25, B=0)
-            params['A'].min = 0
-            params['therm'].min = 1e-9
-            params['tau'].min = 1e-9
+            # Use configuration parameters - same as scipy method
+            params = model.make_params(
+                A=self.fitting_config['initial_amplitude'], 
+                therm=self.fitting_config['initial_thermal_time'], 
+                tau=self.fitting_config['initial_capture_time'], 
+                B=self.fitting_config['initial_background']
+            )
+            # Apply consistent bounds
+            params['A'].min = self.fitting_config['amplitude_bounds'][0]
+            params['therm'].min = self.fitting_config['thermal_bounds'][0]
+            params['therm'].max = self.fitting_config['thermal_bounds'][1]
+            params['tau'].min = self.fitting_config['capture_bounds'][0]
+            params['tau'].max = self.fitting_config['capture_bounds'][1]
             params['B'].vary = False
             
             result = model.fit(ydata, params, t=xdata, weights=1/ydata_errors, method="basinhopping")
@@ -436,9 +522,11 @@ class AmBeNeutronAnalyzer:
             }
             self.lmfit_summary.append(lm_run_summary)
 
-            # Plot results
+            # Plot results using consistent parameters
             plt.figure(figsize=(10, 6))
-            plt.hist(CT, bins=70, range=(0, 70), histtype='step', color='blue', label="Data")
+            plt.hist(CT, bins=self.fitting_config['time_bins'], 
+                    range=self.fitting_config['time_range'], 
+                    histtype='step', color='blue', label="Data")
             plt.errorbar(xdata, ydata, yerr=ydata_errors, color='blue', linestyle='None', alpha=0.7)
             plt.plot(xdata, best_fit_curve, 'g-', linewidth=2, 
                     label=f'LMFIT: τ={result.params["tau"].value:.2f}±{result.params["tau"].stderr:.2f}μs')
@@ -458,14 +546,8 @@ class AmBeNeutronAnalyzer:
         CT = data_dict['CT']
         sx, sy, sz = (int(v) for v in source_key)
 
-        # Prepare data for fitting
-        counts, bin_edges = np.histogram(CT, bins=70, range=(0, 70))
-        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-        fit_mask = (bin_centers > 2) & (bin_centers < 67)
-        xdata = bin_centers[fit_mask]
-        ydata = counts[fit_mask]
-        ydata_errors = np.sqrt(ydata)
-        ydata_errors[ydata_errors == 0] = 1e-10
+        # Use centralized data preparation - same as other methods
+        xdata, ydata, ydata_errors, counts, bin_centers = self._prepare_fitting_data(CT)
 
         try:
             print(f"PyMC model running for position {source_key}")
@@ -478,12 +560,22 @@ class AmBeNeutronAnalyzer:
         
             with pm.Model() as neutron_model:
                 A = pm.HalfNormal("A", sigma=500)
-                therm = pm.Uniform("therm", lower=1.0, upper=15.0)
-                tau = pm.Uniform("tau", lower=15.0, upper=50.0)
+                # Use consistent bounds from configuration
+                therm = pm.Uniform("therm", 
+                                  lower=self.fitting_config['thermal_bounds'][0], 
+                                  upper=self.fitting_config['thermal_bounds'][1])
+                tau = pm.Uniform("tau", 
+                                lower=self.fitting_config['capture_bounds'][0], 
+                                upper=self.fitting_config['capture_bounds'][1])
 
                 mu = NeutCapture_safe(xdata, A, therm, tau)
                 Y_obs = pm.Normal("Y_obs", mu=mu, sigma=ydata_errors, observed=ydata)
-                starting_values = {"A": 200, "therm": 6.00, "tau": 27.00}
+                # Use consistent starting values from configuration
+                starting_values = {
+                    "A": self.fitting_config['initial_amplitude'], 
+                    "therm": self.fitting_config['initial_thermal_time'], 
+                    "tau": self.fitting_config['initial_capture_time']
+                }
 
                 with neutron_model:
                     idata = pm.sample(2000, tune=1000, initvals=starting_values, chains=4, cores=4)
@@ -628,7 +720,7 @@ class AmBeNeutronAnalyzer:
 
         return Info
 
-    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_FullPECBWindow_4640.csv',
+    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_AMBeC2_*.csv',
                     tasks: List[str] = None):
         """
         Run the complete analysis with specified tasks.
@@ -689,7 +781,7 @@ def main():
     
     # Example 1: Run only 2D histograms for quick testing
     print("=== Running only 2D histograms ===")
-    analyzer.run_analysis(tasks=['2d_histograms', '1d_histograms'])
+    analyzer.run_analysis(tasks=['2d_histograms', 'summary', 'scipy_fit', 'lmfit_fit', 'pymc_fit'])
 
     # Example 2: Run full analysis with all tasks
     # print("=== Running full analysis ===")
