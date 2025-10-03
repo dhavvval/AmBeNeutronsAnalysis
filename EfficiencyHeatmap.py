@@ -7,7 +7,7 @@ import glob
 
 
 path = './'  # Directory containing the CSV files
-efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummary_AMBeC2.csv'))
+efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummary_AmBeC1CB0.35.csv'))
 
 
 all_df = []

@@ -24,7 +24,7 @@ class AmBeNeutronAnalyzer:
     """
     
     def __init__(self, data_directory: str = './EventAmBeNeutronCandidatesData/', 
-                 output_pdf: str = 'SingleCluster.pdf'):
+                 output_pdf: str = 'AllAmBetestJustSingleCluster.pdf'):
         self.data_directory = data_directory
         self.output_pdf = output_pdf
         self.source_groups = {}
@@ -77,7 +77,7 @@ class AmBeNeutronAnalyzer:
                 print(f"Warning: {key} is not a valid configuration parameter")
         print("Updated fitting configuration:", self.fitting_config)
 
-    def load_and_group_data(self, file_pattern: str = 'EventAmBeNeutronCandidates_AMBeC2_*.csv'):
+    def load_and_group_data(self, file_pattern: str = 'EventAmBeNeutronCandidates_AmBeC1_*.csv'):
         """Load CSV files and group them by source position."""
         files = self.data_directory
         csvs = glob.glob(os.path.join(files, file_pattern))
@@ -134,6 +134,7 @@ class AmBeNeutronAnalyzer:
         """Prepare and process data for analysis."""
         # Convert cluster time to microseconds
         combined_df['clusterTime'] = combined_df['clusterTime'] / 1000
+        combined_df['neutronVertex'] = combined_df['neutronVertex']/0.299792458  # converting from ns to μs
         
         # Extract relevant columns
         EventTime = combined_df['eventTankTime'].value_counts()
@@ -144,7 +145,7 @@ class AmBeNeutronAnalyzer:
         CvX = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[0]))
         CvY = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[1]))
         CvZ = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))
-        Neutron_vertex = combined_df['neutronVertex']'''
+        Neutron_vertex_tof = combined_df['neutronVertex']'''
         event_counts = combined_df.groupby('eventTankTime')['clusterTime'].transform('count')
         
 
@@ -162,7 +163,7 @@ class AmBeNeutronAnalyzer:
         CvX = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[0]))
         CvY = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[1]))
         CvZ = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))
-        Neutron_vertex = multi_cluster_df['neutronVertex']
+        Neutron_vertex_tof = multi_cluster_df['neutronVertex']
 
 
 
@@ -189,7 +190,7 @@ class AmBeNeutronAnalyzer:
             'single_hit_delta_t': single_hit_delta_t,
             'multi_hit_delta_t': multi_hit_delta_t,
             'filtered_EventTime': filtered_EventTime,
-            'Neutron_vertex': Neutron_vertex
+            'Neutron_vertex_tof': Neutron_vertex_tof
         }
 
     def plot_2d_histograms(self, data_dict: Dict, source_key: Tuple, pdf):
@@ -286,7 +287,7 @@ class AmBeNeutronAnalyzer:
         hit_delta_t = data_dict['hit_delta_t']
         single_hit_delta_t = data_dict['single_hit_delta_t']
         multi_hit_delta_t = data_dict['multi_hit_delta_t']
-        Neutron_vertex = data_dict['Neutron_vertex']
+        Neutron_vertex_tof = data_dict['Neutron_vertex_tof']
         sx, sy, sz = (int(v) for v in source_key)
 
         plt.figure(figsize=(10, 6))
@@ -360,10 +361,10 @@ class AmBeNeutronAnalyzer:
         plt.close()
 
         plt.figure(figsize=(10, 6))
-        plt.hist(Neutron_vertex, bins=100, range=(0, 2.5), color='coral', edgecolor='black')
-        plt.xlabel("Neutron Vertex Distance from Source (m)")
+        plt.hist(Neutron_vertex_tof, bins=100, range=(0, 8), color='coral', edgecolor='black')
+        plt.xlabel("Neutron Vertex Distance from Source (m/us)")
         plt.ylabel("Counts")
-        plt.title(f"Neutron Vertex Distribution for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
+        plt.title(f"Neutron Vertex TOF for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         plt.close()
@@ -720,7 +721,7 @@ class AmBeNeutronAnalyzer:
 
         return Info
 
-    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_AMBeC2_*.csv',
+    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_AmBeC1_*.csv',
                     tasks: List[str] = None):
         """
         Run the complete analysis with specified tasks.
@@ -781,7 +782,7 @@ def main():
     
     # Example 1: Run only 2D histograms for quick testing
     print("=== Running only 2D histograms ===")
-    analyzer.run_analysis(tasks=['2d_histograms', 'summary', 'scipy_fit', 'lmfit_fit', 'pymc_fit'])
+    analyzer.run_analysis(tasks=['2d_histograms', '1d_histograms'])
 
     # Example 2: Run full analysis with all tasks
     # print("=== Running full analysis ===")

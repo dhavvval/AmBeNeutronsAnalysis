@@ -19,7 +19,7 @@ class WaveformConfig:
     """Configuration parameters for waveform analysis."""
     pulse_start: int = 300
     pulse_end: int = 1200
-    pulse_gamma: int = 500
+    pulse_gamma: int = 400
     lower_pulse: int = 175
     pulse_max: int = 1000
     NS_PER_ADC_SAMPLE: int = 2
@@ -145,6 +145,7 @@ class AmBeNeutronProcessing:
             
         Returns:
             Normalized direction vector (3D numpy array)
+            PE weighted neutron vertex distance from source (float)
         """
         # pass cluster hits to this function, return anisotropy / coherence of the cluster
         
@@ -194,11 +195,18 @@ class AmBeNeutronProcessing:
                 dvec = np.array([dx, dy, dz]) / r
                 weight = filtPE[i] * filtPE[j]
                 vec += weight * dvec
-                Neutron_vertex = np.sqrt((dvec[0]-(sourceX/100))**2 + (dvec[1]-(sourceY/100))**2 + (dvec[2]-(sourceZ/100))**2)
+                #Neutron_vertex = np.sqrt((dvec[0]-(sourceX/100))**2 + (dvec[1]-(sourceY/100))**2 + (dvec[2]-(sourceZ/100))**2)
 
         norm = np.linalg.norm(vec)
         if norm == 0:
             return np.array([0.0, 0.0, 0.0]), 0.0
+        if np.sum(filtPE)> 0:
+            CentX = np.sum(filtX * filtPE) / np.sum(filtPE)
+            CentY = np.sum(filtY * filtPE) / np.sum(filtPE)
+            CentZ = np.sum(filtZ * filtPE) / np.sum(filtPE)
+        else:
+            CentX, CentY, CentZ = np.mean(filtX), np.mean(filtY), np.mean(filtZ)
+        Neutron_vertex = np.sqrt((CentX-(sourceX/100))**2 + (CentY-(sourceY/100))**2 + (CentZ-(sourceZ/100))**2)
         return vec / norm, Neutron_vertex
 
     def analyze_waveform(self, hist_values: np.ndarray, hist_edges: np.ndarray) -> Tuple[float, float, bool]:
@@ -218,7 +226,7 @@ class AmBeNeutronProcessing:
         IC_adjusted = (self.config.NS_PER_ADC_SAMPLE / self.config.ADC_IMPEDANCE) * IC
         
         # Check acceptance criteria
-        if not (self.config.pulse_gamma < IC_adjusted < 1400):
+        if not (self.config.pulse_gamma < IC_adjusted < 600):
             return IC_adjusted, baseline, False
             
         # Check for second pulse
@@ -933,11 +941,11 @@ def main():
     print(f"✓ Using tree type: {'ANNIEEventTreeMaker' if which_tree == 1 else 'PhaseIITreeMaker'}")
     
     # Directory configuration (matching AnalysisRun.py)
-    #data_directory = '../AnalysisQualityC2/newPMTPhysics/'
-    #waveform_dir = '../AnalysisQualityC2/newPMTPhysics/'
+    data_directory = '../AmBe_BeamCluster/'
+    waveform_dir = '../AmBe_waveforms/'
 
-    data_directory = '/Volumes/One Touch/AmBe/'
-    waveform_dir = '/Volumes/One Touch/AmBe/'
+    #data_directory = '/Volumes/One Touch/AmBe/'
+    #waveform_dir = '/Volumes/One Touch/AmBe/'
     
     print(f"\nDirectory Configuration:")
     print(f"  Data directory: {data_directory}")

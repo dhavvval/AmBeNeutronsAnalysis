@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import seaborn as sns
 
-WaveformFile = "TriggerSummary/AmBeWaveformResults_AmBeC1.csv"
-TriggerFile = "TriggerSummary/AmBeTriggerSummary_AmBeC1.csv"
+WaveformFile = "TriggerSummary/AmBeWaveformResults_AmBeC1CB0.35.csv"
+TriggerFile = "TriggerSummary/AmBeTriggerSummary_AmBeC1CB0.35.csv"
 
 Wdf = pd.read_csv(WaveformFile)
 Tdf = pd.read_csv(TriggerFile)
@@ -65,7 +65,7 @@ plot_df[["% Accepted waveforms","% AmBe triggers", "% Cosmic events", "% Uniques
 # Define colors (Okabe-Ito)
 colors = ["#0371B1", "#E69F00", "#009E73", "#F0E442", "#D55E00", "#CC79A7"]  # Blue, Orange, Green, Yellow, Red, Pink
 
-pdf_file = "StatsofAmBeC1.pdf"
+pdf_file = "StatsofAmBeC1CB0.35.pdf"
 with PdfPages(pdf_file) as pdf:
     ports = plot_df["port"].unique()
     
