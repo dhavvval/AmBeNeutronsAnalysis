@@ -33,13 +33,13 @@ class WaveformConfig:
 class CutCriteria:
     """Event selection criteria."""
     pe_min: float = 0
-    pe_max: float = 100
+    pe_max: float = 700
     ccb_min: float = 0
-    ccb_max: float = 0.40
+    ccb_max: float = 1.0
     ct_min: float = 2000
     chits_min: int = 0
     cosmic_ct_threshold: float = 2000
-    cosmic_pe_threshold: float = 100
+    cosmic_pe_threshold: float = 700
 
 
 class AmBeNeutronProcessing:
@@ -134,7 +134,7 @@ class AmBeNeutronProcessing:
         return (ct < self.cuts.cosmic_ct_threshold or 
                 cpe > self.cuts.cosmic_pe_threshold)
 
-    def pairwise_relative_direction(self, hitX, hitY, hitZ, hitPE, hitT, sourceX, sourceY, sourceZ) -> Tuple[np.ndarray, float]:
+    def pairwise_relative_direction(self, hitX, hitY, hitZ, hitPE, hitT) -> Tuple[np.ndarray]:
         """
         Calculate cluster anisotropy/coherence from hit positions and timing.
         
@@ -155,6 +155,7 @@ class AmBeNeutronProcessing:
         hitPE = np.asarray(hitPE, dtype=np.float64)
         hitT = np.asarray(hitT, dtype=np.float64)
 
+
         # combine and sort by time
         hits = list(zip(hitX, hitY, hitZ, hitPE, hitT))
         hits.sort(key=lambda h: h[4])
@@ -166,7 +167,7 @@ class AmBeNeutronProcessing:
             x_i, y_i, z_i, pe_i, t_i = hit
 
             # remove very late times (chained to the first cluster hit)
-            if (t_i - mini) > 13:  # 13 ns is the maximum distance between the PMT rack (shortest path for direct light)
+            if (t_i - mini) > 50:  # 50 ns is the maximum distance between the PMT rack (shortest path for direct light)
                 continue           # any hit times after this are assumed to be from reflections
                 
             filtered_hits.append(hit)
@@ -179,7 +180,7 @@ class AmBeNeutronProcessing:
         
         n = len(filtX)
         if n < 2:
-            return np.array([0.0, 0.0, 0.0]), 0.0
+            return np.array([0.0, 0.0, 0.0])
 
         vec = np.zeros(3)
         for i in range(n):
@@ -199,15 +200,70 @@ class AmBeNeutronProcessing:
 
         norm = np.linalg.norm(vec)
         if norm == 0:
-            return np.array([0.0, 0.0, 0.0]), 0.0
-        if np.sum(filtPE)> 0:
-            CentX = np.sum(filtX * filtPE) / np.sum(filtPE)
-            CentY = np.sum(filtY * filtPE) / np.sum(filtPE)
-            CentZ = np.sum(filtZ * filtPE) / np.sum(filtPE)
+            return np.array([0.0, 0.0, 0.0])
+
+        return vec / norm
+    
+    def time_of_flight_correction(self, hitX, hitY, hitZ, hitPE, hitT, sourceX, sourceY, sourceZ, event_hits_data=None) -> str:
+        """
+        Calculate time of flight correction from hit positions and timing.
+        
+        Args:
+            hitX, hitY, hitZ: Hit position arrays
+            hitPE: Hit photoelectron values
+            hitT: Hit timing values
+            sourceX, sourceY, sourceZ: Source position coordinates
+            event_hits_data: Optional list of tuples for multi-cluster calculation
+        Returns:
+            Time of flight corrected time differences as space-separated string
+        """
+        SoL = 0.299792458 * 3/4
+        
+        # If event_hits_data is provided, use multi-cluster approach
+        if event_hits_data is not None:
+            all_hits = []
+            for cluster_hits in event_hits_data:
+                cluster_hitX, cluster_hitY, cluster_hitZ, cluster_hitPE, cluster_hitT = cluster_hits
+                cluster_hitX = np.asarray(cluster_hitX, dtype=np.float64)
+                cluster_hitY = np.asarray(cluster_hitY, dtype=np.float64)
+                cluster_hitZ = np.asarray(cluster_hitZ, dtype=np.float64)
+                cluster_hitPE = np.asarray(cluster_hitPE, dtype=np.float64)
+                cluster_hitT = np.asarray(cluster_hitT, dtype=np.float64)
+                
+                cluster_hit_list = list(zip(cluster_hitX, cluster_hitY, cluster_hitZ, cluster_hitPE, cluster_hitT))
+                all_hits.extend(cluster_hit_list)
+            
+            hits = all_hits
         else:
-            CentX, CentY, CentZ = np.mean(filtX), np.mean(filtY), np.mean(filtZ)
-        Neutron_vertex = np.sqrt((CentX-(sourceX/100))**2 + (CentY-(sourceY/100))**2 + (CentZ-(sourceZ/100))**2)
-        return vec / norm, Neutron_vertex
+            # Single cluster approach (original logic)
+            hitX = np.asarray(hitX, dtype=np.float64)
+            hitY = np.asarray(hitY, dtype=np.float64)
+            hitZ = np.asarray(hitZ, dtype=np.float64)
+            hitPE = np.asarray(hitPE, dtype=np.float64)
+            hitT = np.asarray(hitT, dtype=np.float64)
+            hits = list(zip(hitX, hitY, hitZ, hitPE, hitT))
+        
+        # Sort by time and calculate differences (same logic for both cases)
+        hits.sort(key=lambda h: h[4])
+        n = len(hits)
+        if n < 2:
+            return ""
+        
+        tdiffs = []
+        for i in range(n):
+            x_i, y_i, z_i, pe_i, t_i = hits[i]
+            dist_i = np.sqrt((x_i - sourceX)**2 + (y_i - sourceY)**2 + (z_i - sourceZ)**2)
+            tcorr_i = t_i - dist_i/SoL
+            
+            for j in range(i+1, n):
+                x_j, y_j, z_j, pe_j, t_j = hits[j]
+                dist_j = np.sqrt((x_j - sourceX)**2 + (y_j - sourceY)**2 + (z_j - sourceZ)**2)
+                tcorr_j = t_j - dist_j/SoL
+                
+                tdiffs.append(tcorr_j - tcorr_i)
+        
+        # Return as space-separated string for easy parsing
+        return " ".join(f"{val:.6f}" for val in tdiffs)
 
     def analyze_waveform(self, hist_values: np.ndarray, hist_edges: np.ndarray) -> Tuple[float, float, bool]:
         """
@@ -226,7 +282,7 @@ class AmBeNeutronProcessing:
         IC_adjusted = (self.config.NS_PER_ADC_SAMPLE / self.config.ADC_IMPEDANCE) * IC
         
         # Check acceptance criteria
-        if not (self.config.pulse_gamma < IC_adjusted < 600):
+        if not (self.config.pulse_gamma < IC_adjusted < 675):
             return IC_adjusted, baseline, False
             
         # Check for second pulse
@@ -583,7 +639,7 @@ class AmBeNeutronProcessing:
             'hit_times': [], 'hit_x': [], 'hit_y': [], 'hit_z': [], 'hit_charges': [], 'hit_ids': [],
             'source_position': [[], [], []], 'event_ids': [], 'event_tank_time': [],
             'prompt_cluster_time': [], 'prompt_cluster_charge': [], 'prompt_cluster_QB': [], 'hit_delta_t': [],
-            'cluster_direction': [], 'neutron_vertex': []
+            'cluster_direction': [], 'neutron_tof_correction': []
         }
         
         # Initialize counters
@@ -596,6 +652,9 @@ class AmBeNeutronProcessing:
         
         key = (x_pos, y_pos, z_pos)
         repeated_event_id = set()
+        
+        # Dictionary to group clusters by eventTankTime for multi-cluster ToF correction
+        event_clusters = defaultdict(list)
         
         print(f"Processing {len(EN)} events...")
         
@@ -636,10 +695,21 @@ class AmBeNeutronProcessing:
                     if CPE[i][k] != float('-inf'):
                         event_multiple_candidates.append(k)
             
+            # Collect hit data for all clusters in this event for multi-cluster ToF calculation
+            all_candidates = event_neutron_candidates + event_multiple_candidates
+            if all_candidates:
+                event_hit_data = []
+                for k in all_candidates:
+                    event_hit_data.append((hX[i][k], hY[i][k], hZ[i][k], hPE[i][k], hT[i][k]))
+                
+                # Store event-level hit data for multi-cluster ToF calculation
+                event_clusters[ETT[i]] = event_hit_data
+            
             # Process single neutron candidates
             for k in event_neutron_candidates:
                 self._append_cluster_data(processed_data, i, k, EN, ETT, CT, CPE, CCB, CH, 
-                                        hT, hX, hY, hZ, hPE, hID, x_pos, y_pos, z_pos)
+                                        hT, hX, hY, hZ, hPE, hID, x_pos, y_pos, z_pos, 
+                                        event_clusters.get(ETT[i]))
                 stats['neutron_cand_count'] += 1
                 if efficiency_data is not None:
                     efficiency_data[key][2] += 1
@@ -648,7 +718,8 @@ class AmBeNeutronProcessing:
             if event_multiple_candidates:
                 for k in event_multiple_candidates:
                     self._append_cluster_data(processed_data, i, k, EN, ETT, CT, CPE, CCB, CH, 
-                                            hT, hX, hY, hZ, hPE, hID, x_pos, y_pos, z_pos)
+                                            hT, hX, hY, hZ, hPE, hID, x_pos, y_pos, z_pos,
+                                            event_clusters.get(ETT[i]))
 
                 if EN[i] not in repeated_event_id:
                     stats['multiple_neutron_cand_count'] += 1
@@ -663,7 +734,8 @@ class AmBeNeutronProcessing:
 
     def _append_cluster_data(self, processed_data: Dict, i: int, k: int,
                            EN, ETT, CT, CPE, CCB, CH, hT, hX, hY, hZ, hPE, hID,
-                           x_pos: float, y_pos: float, z_pos: float):
+                           x_pos: float, y_pos: float, z_pos: float,
+                           event_hit_data=None):
         """Helper function to append cluster data to processed_data dictionary."""
         processed_data['cluster_time'].append(CT[i][k])
         processed_data['cluster_charge'].append(CPE[i][k])
@@ -683,9 +755,15 @@ class AmBeNeutronProcessing:
         processed_data['hit_delta_t'].append(np.max(hT[i][k] - np.min(hT[i][k])) if CH[i][k] > 1 else 0)
         
         # Calculate cluster direction/anisotropy
-        direction_vec, neutron_vertex = self.pairwise_relative_direction(hX[i][k], hY[i][k], hZ[i][k], hPE[i][k], hT[i][k], x_pos, y_pos, z_pos)
+        direction_vec = self.pairwise_relative_direction(hX[i][k], hY[i][k], hZ[i][k], hPE[i][k], hT[i][k])
         processed_data['cluster_direction'].append(direction_vec)
-        processed_data['neutron_vertex'].append(neutron_vertex)
+        
+        # Calculate ToF correction - multi-cluster if event_hit_data provided, otherwise single-cluster
+        neutron_tof_correction = self.time_of_flight_correction(
+            hX[i][k], hY[i][k], hZ[i][k], hPE[i][k], hT[i][k], 
+            x_pos, y_pos, z_pos, event_hit_data
+        )
+        processed_data['neutron_tof_correction'].append(neutron_tof_correction)
 
 
     def _print_processing_stats(self, stats: Dict[str, int]):
@@ -818,7 +896,8 @@ class AmBeNeutronProcessing:
                 "eventID": processed_data['event_ids'],
                 "eventTankTime": processed_data['event_tank_time'],
                 "clusterDirection": processed_data['cluster_direction'],
-                "neutronVertex": processed_data['neutron_vertex']
+                'neutronTofCorrection': processed_data['neutron_tof_correction']
+
             })
             
             print("Sample of neutron candidates data:")

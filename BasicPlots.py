@@ -24,7 +24,7 @@ class AmBeNeutronAnalyzer:
     """
     
     def __init__(self, data_directory: str = './EventAmBeNeutronCandidatesData/', 
-                 output_pdf: str = 'AllAmBetestJustSingleCluster.pdf'):
+                 output_pdf: str = 'AllAmBetest.pdf'):
         self.data_directory = data_directory
         self.output_pdf = output_pdf
         self.source_groups = {}
@@ -134,20 +134,34 @@ class AmBeNeutronAnalyzer:
         """Prepare and process data for analysis."""
         # Convert cluster time to microseconds
         combined_df['clusterTime'] = combined_df['clusterTime'] / 1000
-        combined_df['neutronVertex'] = combined_df['neutronVertex']/0.299792458  # converting from ns to μs
-        
+
         # Extract relevant columns
         EventTime = combined_df['eventTankTime'].value_counts()
-        '''PE = combined_df['clusterPE']
+        PE = combined_df['clusterPE']
         CCB = combined_df['clusterChargeBalance']
         CT = combined_df['clusterTime']
         hit_delta_t = combined_df['hit_delta_t']
         CvX = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[0]))
         CvY = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[1]))
         CvZ = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))
-        Neutron_vertex_tof = combined_df['neutronVertex']'''
         event_counts = combined_df.groupby('eventTankTime')['clusterTime'].transform('count')
         
+        # Keep one entry per eventTankTime (single or multi-cluster)
+        unique_events_df = combined_df.drop_duplicates(subset='eventTankTime').copy()
+
+        # Parse neutronTofCorrection into arrays
+        unique_events_df['neutronTofCorrection'] = unique_events_df['neutronTofCorrection'].apply(
+            lambda x: np.array([float(val) for val in str(x).split()])
+            if pd.notna(x) and str(x).strip() else np.array([])
+        )
+
+        # Collect all valid arrays
+        valid_arrays = [arr for arr in unique_events_df['neutronTofCorrection'].values if len(arr) > 0]
+        all_neutron_tof = np.concatenate(valid_arrays) if valid_arrays else np.array([])
+
+        # Parse hitPE values (simple one-liner like neutronTofCorrection)
+        all_hits_pe = np.concatenate([np.array([float(v) for v in str(x).strip('[]').replace(',', ' ').split() if v.strip() and v != '...']) for x in combined_df['hitPE'] if not (pd.isna(x) or str(x).strip() in ('', '[]'))]) if any(not (pd.isna(x) or str(x).strip() in ('', '[]')) for x in combined_df['hitPE']) else np.array([])
+
 
         # Multi-cluster event analysis
 
@@ -155,17 +169,21 @@ class AmBeNeutronAnalyzer:
         hit_delta_t represents the time spread of individual hits within a cluster,
         while delta_t_values represents the time difference between the first cluster and subsequent clusters in multi-cluster events.
         '''
-        multi_cluster_df = combined_df[event_counts == 1].copy()
-        PE = multi_cluster_df['clusterPE']
+        multi_cluster_df = combined_df[event_counts > 1].copy()
+        '''PE = multi_cluster_df['clusterPE']
         CCB = multi_cluster_df['clusterChargeBalance']
         CT = multi_cluster_df['clusterTime']
         hit_delta_t = multi_cluster_df['hit_delta_t']
         CvX = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[0]))
         CvY = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[1]))
         CvZ = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))
-        Neutron_vertex_tof = multi_cluster_df['neutronVertex']
-
-
+        
+        multi_cluster_df["neutronTofCorrection"] = multi_cluster_df["neutronTofCorrection"].apply(
+            lambda x: np.array([float(val) for val in str(x).split()]) if pd.notna(x) and str(x).strip() else np.array([])
+        )
+        valid_arrays = [arr for arr in multi_cluster_df["neutronTofCorrection"].values if len(arr) > 0]
+        all_neutron_tof = np.concatenate(valid_arrays) if valid_arrays else np.array([])'''
+        
 
         multi_cluster_df['first_cluster_time'] = multi_cluster_df.groupby('eventTankTime')['clusterTime'].transform('min')
         multi_cluster_df['delta_t'] = multi_cluster_df['clusterTime'] - multi_cluster_df['first_cluster_time']
@@ -173,7 +191,7 @@ class AmBeNeutronAnalyzer:
 
         single_hit_delta_t = combined_df[event_counts == 1]['hit_delta_t']
         multi_hit_delta_t = combined_df[event_counts > 1]['hit_delta_t']
-        filtered_EventTime = combined_df[combined_df['hit_delta_t'] > 20]['eventTankTime'].value_counts()
+        
 
 
         return {
@@ -189,8 +207,8 @@ class AmBeNeutronAnalyzer:
             'hit_delta_t': hit_delta_t,
             'single_hit_delta_t': single_hit_delta_t,
             'multi_hit_delta_t': multi_hit_delta_t,
-            'filtered_EventTime': filtered_EventTime,
-            'Neutron_vertex_tof': Neutron_vertex_tof
+            'Neutron_vertex_tof': all_neutron_tof,
+            'all_hits_pe': all_hits_pe
         }
 
     def plot_2d_histograms(self, data_dict: Dict, source_key: Tuple, pdf):
@@ -281,13 +299,13 @@ class AmBeNeutronAnalyzer:
     def plot_1d_histograms(self, data_dict: Dict, source_key: Tuple, pdf):
         """Generate 1D histogram plots."""
         EventTime = data_dict['EventTime']
-        filtered_EventTime = data_dict['filtered_EventTime']
         PE = data_dict['PE']
         delta_t_values = data_dict['delta_t_values']
         hit_delta_t = data_dict['hit_delta_t']
         single_hit_delta_t = data_dict['single_hit_delta_t']
         multi_hit_delta_t = data_dict['multi_hit_delta_t']
         Neutron_vertex_tof = data_dict['Neutron_vertex_tof']
+        all_hits_pe = data_dict['all_hits_pe']
         sx, sy, sz = (int(v) for v in source_key)
 
         plt.figure(figsize=(10, 6))
@@ -311,15 +329,6 @@ class AmBeNeutronAnalyzer:
         pdf.savefig(bbox_inches='tight')
         plt.close()
 
-        plt.figure(figsize=(10, 6))
-        plt.hist(filtered_EventTime, bins=range(1, 10, 1), log=True, edgecolor='blue', 
-                color="lightblue", linewidth=0.5, align='left', density=False)
-        plt.xlabel('Neutron multiplicity for Events')
-        plt.ylabel('Counts')
-        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 80, CCB < 0.40), run positions:({sx}, {sy}, {sz})')
-        plt.tight_layout()
-        pdf.savefig(bbox_inches='tight')
-        plt.close()
 
         # PE spectrum
         plt.figure(figsize=(10, 6))
@@ -361,13 +370,24 @@ class AmBeNeutronAnalyzer:
         plt.close()
 
         plt.figure(figsize=(10, 6))
-        plt.hist(Neutron_vertex_tof, bins=100, range=(0, 8), color='coral', edgecolor='black')
-        plt.xlabel("Neutron Vertex Distance from Source (m/us)")
+        plt.hist(Neutron_vertex_tof, bins=100, range=(-20, 50), color='coral', edgecolor='black')
+        plt.xlabel("Neutron Vertex Distance from Source (ns)")
         plt.ylabel("Counts")
-        plt.title(f"Neutron Vertex TOF for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
+        plt.title(f"Multi - Neutron Vertex TOF for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         plt.close()
+
+        # Plot all hits PE values
+        if len(all_hits_pe) > 0:
+            plt.figure(figsize=(10, 6))
+            plt.hist(all_hits_pe, bins=50, range=(0, 20), log=True, color='skyblue', edgecolor='black')
+            plt.xlabel("Hit PE Values")
+            plt.ylabel("Counts")
+            plt.title(f"All Cluster Hits PE Distribution for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
+            plt.tight_layout()
+            pdf.savefig(bbox_inches='tight')
+            plt.close()
 
     def _prepare_fitting_data(self, CT):
         """
@@ -782,7 +802,7 @@ def main():
     
     # Example 1: Run only 2D histograms for quick testing
     print("=== Running only 2D histograms ===")
-    analyzer.run_analysis(tasks=['2d_histograms', '1d_histograms'])
+    analyzer.run_analysis(tasks=['1d_histograms', '2d_histograms'])
 
     # Example 2: Run full analysis with all tasks
     # print("=== Running full analysis ===")
