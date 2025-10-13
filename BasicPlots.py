@@ -16,6 +16,7 @@ import pymc as pm
 import arviz as az
 from typing import Dict, List, Tuple, Optional
 import matplotlib.colors as mcolors
+from scipy.special import erfc
 
 
 class AmBeNeutronAnalyzer:
@@ -48,6 +49,7 @@ class AmBeNeutronAnalyzer:
             'capture_bounds': (10.0, 70.0),
             'background_bounds': (0, 15.0)
         }
+
         
         # Port information mapping
         self.port_info = {
@@ -77,7 +79,7 @@ class AmBeNeutronAnalyzer:
                 print(f"Warning: {key} is not a valid configuration parameter")
         print("Updated fitting configuration:", self.fitting_config)
 
-    def load_and_group_data(self, file_pattern: str = 'EventAmBeNeutronCandidates_AmBeC1_*.csv'):
+    def load_and_group_data(self, file_pattern: str = 'EventAmBeNeutronCandidates_AmBeC1ClusterAlgorithm_*.csv'):
         """Load CSV files and group them by source position."""
         files = self.data_directory
         csvs = glob.glob(os.path.join(files, file_pattern))
@@ -388,6 +390,152 @@ class AmBeNeutronAnalyzer:
             plt.tight_layout()
             pdf.savefig(bbox_inches='tight')
             plt.close()
+
+    @staticmethod
+    def emg_fitting(x, A_emg, mu_emg, sigma_emg, lambda_emg, B_emg):
+        tau_emg = 1 / lambda_emg
+        mu_minus = mu_emg - x
+
+        exp_term = np.exp( (sigma_emg**2) / (2.0 * tau_emg**2) - (mu_minus / tau_emg) )
+        erfc_arg = ( (sigma_emg / tau_emg) - (mu_minus / sigma_emg) ) / np.sqrt(2)
+        result = (A_emg * 0.5) * exp_term * erfc(erfc_arg) + B_emg
+
+        return result
+
+    def poisson_nll(self, params, x, data, bin_width):
+        A = params['A_emg']
+        mu = params['mu_emg']
+        sigma = params['sigma_emg']
+        lam = params['lambda_emg']
+        B = params['B_emg']
+
+        # Model prediction per bin (expected counts)
+        model = self.emg_fitting(x, A, mu, sigma, lam, B) * bin_width
+        model[model <= 0] = 1e-10  # avoid log(0)
+        
+        # Poisson negative log-likelihood
+        nll = 2 * np.sum(model - data * np.log(model))
+        return nll
+        
+    @staticmethod
+    def gaussian(x, amplitude, mu, sigma):
+        return amplitude * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
+    
+    def plot_emg_fit(self, data_dict: Dict, source_key: Tuple, pdf):
+        Neutron_TOF = data_dict['Neutron_vertex_tof']
+        sx, sy, sz = (int(v) for v in source_key)
+        if len(Neutron_TOF) == 0:
+            print(f"No Neutron TOF data available for position {source_key}. Skipping EMG fit.")
+            return
+        
+        counts, bin_edges = np.histogram(Neutron_TOF, bins=300, range=(-20, 70))
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+        valid_indices = np.where(counts > 0)[0]
+
+        if len(valid_indices) == 0:
+            print(f"No valid histogram data for position {source_key}. Skipping EMG fit.")
+            return
+        start_index = valid_indices[0]
+        end_index = valid_indices[-1] + 1 
+        xdata = bin_centers[start_index:end_index]
+        ydata = counts[start_index:end_index]
+
+        ydata_errors = np.sqrt(ydata)
+        ydata_errors[ydata_errors == 0] = 1e-10
+
+        amplitude_guess = np.max(ydata)
+        mu_guess_dynamic = xdata[np.argmax(ydata)]
+        baseline_guess = np.min(ydata[ydata > 0]) if np.any(ydata > 0) else 0.0
+
+        p0 = [amplitude_guess, 3, 10.0, 0.2, baseline_guess]
+
+
+        try:
+            popt, pcov = curve_fit(
+                self.emg_fitting, 
+                xdata, 
+                ydata, 
+                p0=p0, 
+                sigma=ydata_errors, 
+                absolute_sigma=True,
+                bounds=(
+                    [0, -10, 1, 0.01, 0],  # Lower bounds
+                    [np.inf, 50, 30, 10, np.max(ydata)]  # Upper bounds
+                )
+            )
+            perr = np.sqrt(np.diag(pcov))
+            y_fit = self.emg_fitting(xdata, *popt)
+            
+            # Unpack results
+            overall_amp_fit, mu_g_fit, sigma_g_fit, lambda_e_fit, baseline_fit = popt
+            overall_amp_err, mu_g_err, sigma_g_err, lambda_e_err, baseline_err = perr
+            
+            # Calculate chi-square statistics
+            chi2_value = np.sum(((ydata - y_fit) ** 2) / (ydata_errors ** 2))
+            ndof = len(ydata) - len(popt)
+            chi2_ndof = chi2_value / ndof
+
+            print(f"\nEMG Fit successful for position {source_key}")
+            print(f"Chi-square: {chi2_value:.2f}, NDF: {ndof}, Chi2/NDF: {chi2_ndof:.2f}")
+            print(f"Fitted Parameters:")
+            print(f"  Overall Amplitude (A): {overall_amp_fit:.2f} \u00b1 {overall_amp_err:.2f}")
+            print(f"  Gaussian Mean (mu): {mu_g_fit:.2f} \u00b1 {mu_g_err:.2f} ns")
+            print(f"  Gaussian StDev (sigma): {sigma_g_fit:.2f} \u00b1 {sigma_g_err:.2f} ns")
+            print(f"  Exponential Rate (lambda): {lambda_e_fit:.4f} \u00b1 {lambda_e_err:.4f} 1/ns")
+            print(f"  Baseline (B): {baseline_fit:.2f} \u00b1 {baseline_err:.2f}")
+
+
+            ### lmfit modeling for cross-check ###
+            model = lmfit.Model(self.emg_fitting)
+            params = model.make_params(
+                A_emg=overall_amp_fit,
+                mu_emg=mu_g_fit,
+                sigma_emg=sigma_g_fit,
+                lambda_emg=lambda_e_fit,
+                B_emg=baseline_fit
+            )
+            params['A_emg'].set(min=0)
+            params['mu_emg'].set(min=-10, max=50)
+            params['sigma_emg'].set(min=1, max=30)
+            params['lambda_emg'].set(min=0.01, max=1.0)
+            params['B_emg'].set(min=0, max=np.max(ydata))  
+            lmfit_result = model.fit(ydata, params, x=xdata, weights=1/ydata_errors)
+            print("\nLMFIT Results:")
+            print(lmfit_result.fit_report())
+            
+            
+            # --- Plotting ---
+            plt.figure(figsize=(10, 6))
+            
+            # Plot raw histogram data
+            plt.hist(Neutron_TOF, bins=300, range=(-20, 70), 
+                     color='coral', edgecolor='black', label="Data (Histogram)")
+            
+            # Plot the fitted curve over the binned data
+            plt.plot(xdata, y_fit, 'b-', linewidth=2.5, label='Analytical EMG Fit')
+            g_recovered = self.gaussian(xdata, overall_amp_fit * 0.5, mu_g_fit, sigma_g_fit)
+            
+            label = (f"Fit EMG ($\chi^2$/ndof: {chi2_ndof:.2f})" + "\n"
+                fr"$\sigma_G = {sigma_g_fit:.2f} \pm {sigma_g_err:.2f}\ ns$" + "\n"
+                fr"$\lambda_E = {lambda_e_fit:.4f} \pm {lambda_e_err:.4f}\ 1/ns$"
+            )
+            
+            #plt.plot(xdata, baseline_fit + g_recovered, '--', color='red', alpha=0.7, 
+            #         label=label)
+
+            plt.title(f"EMG Fit (Neutron TOF) for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
+            plt.xlabel("Neutron Vertex Distance from Source (ns)")
+            plt.ylabel("Counts")
+            plt.legend()
+            plt.tight_layout()
+            pdf.savefig(bbox_inches='tight')
+            plt.close()
+
+        except Exception as e:
+            print(f"EMG curve fit failed for position {source_key}: {e}")
+
+    ############### Capture time fitting Methods #################
 
     def _prepare_fitting_data(self, CT):
         """
@@ -741,7 +889,7 @@ class AmBeNeutronAnalyzer:
 
         return Info
 
-    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_AmBeC1_*.csv',
+    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_AmBeC1ClusterAlgorithm_*.csv',
                     tasks: List[str] = None):
         """
         Run the complete analysis with specified tasks.
@@ -786,6 +934,9 @@ class AmBeNeutronAnalyzer:
                 if 'pymc_fit' in tasks:
                     self.pymc_analysis(data_dict, source_key, pdf)
 
+                if 'emg_fit' in tasks:
+                    self.plot_emg_fit(data_dict, source_key, pdf)
+
         # Generate summary plots if requested
         if 'summary' in tasks and self.time_fit_values:
             summary_info = self.generate_summary_plots()
@@ -802,7 +953,7 @@ def main():
     
     # Example 1: Run only 2D histograms for quick testing
     print("=== Running only 2D histograms ===")
-    analyzer.run_analysis(tasks=['1d_histograms', '2d_histograms'])
+    analyzer.run_analysis(tasks=[ 'emg_fit'])
 
     # Example 2: Run full analysis with all tasks
     # print("=== Running full analysis ===")

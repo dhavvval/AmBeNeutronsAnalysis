@@ -21,12 +21,12 @@ class WaveformConfig:
     pulse_end: int = 1200
     pulse_gamma: int = 400
     lower_pulse: int = 175
-    pulse_max: int = 1000
+    pulse_max: int = 675
     NS_PER_ADC_SAMPLE: int = 2
     ADC_IMPEDANCE: int = 50
     ADC_TO_VOLT: float = 2.415 / (2 ** 12)
     ref_integral: float = 2.6e-2
-    REF_ENERGY: float = 4.42  # MeV
+    REF_ENERGY: float = 4.42  # Me
 
 
 @dataclass
@@ -280,9 +280,10 @@ class AmBeNeutronProcessing:
                      (hist_edges[:-1] < self.config.pulse_end))
         IC = np.sum(hist_values[pulse_mask] - baseline)
         IC_adjusted = (self.config.NS_PER_ADC_SAMPLE / self.config.ADC_IMPEDANCE) * IC
+        IC_adjusted *= self.config.ADC_TO_VOLT
         
         # Check acceptance criteria
-        if not (self.config.pulse_gamma < IC_adjusted < 675):
+        if not (0.7 < IC_adjusted < 1.5):
             return IC_adjusted, baseline, False
             
         # Check for second pulse
@@ -300,14 +301,17 @@ class AmBeNeutronProcessing:
         
         plt.figure(figsize=(10, 4))
         hist_values_bs = hist_values - baseline
-        plt.plot(hist_edges[:-1], hist_values_bs, label='Waveform')
+        # Convert ADC counts to volts
+        hist_values_volts = hist_values_bs * self.config.ADC_TO_VOLT
+        plt.plot(hist_edges[:-1], hist_values_volts, label='Waveform')
         plt.axvspan(self.config.pulse_start, self.config.pulse_end, 
                    color='yellow', alpha=0.3, label='Integration Window')
         plt.title(f'{status} Waveform (timestamp: {timestamp}, Run: {run}), IC: {IC_adjusted:.2f}')
         plt.xlabel('Time (ns)')
-        plt.ylabel('ADC counts')
+        plt.ylabel('Voltage (V)')
         plt.legend()
         plt.tight_layout()
+        plt.show()
         plt.savefig(f'{save_dir}/{status}Waveform_{timestamp}_Run{run}.png', dpi=300)
         plt.close()
 
