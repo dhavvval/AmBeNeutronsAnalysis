@@ -33,13 +33,13 @@ class WaveformConfig:
 class CutCriteria:
     """Event selection criteria."""
     pe_min: float = 0
-    pe_max: float = 700
+    pe_max: float = 120
     ccb_min: float = 0
-    ccb_max: float = 1.0
+    ccb_max: float = 0.40
     ct_min: float = 2000
-    chits_min: int = 0
+    chits_min: int = 10
     cosmic_ct_threshold: float = 2000
-    cosmic_pe_threshold: float = 700
+    cosmic_pe_threshold: float = 120
 
 
 class AmBeNeutronProcessing:
@@ -250,6 +250,7 @@ class AmBeNeutronProcessing:
             return ""
         
         tdiffs = []
+        all_hits_delta_t_TofCorrected = []
         for i in range(n):
             x_i, y_i, z_i, pe_i, t_i = hits[i]
             dist_i = np.sqrt((x_i - sourceX)**2 + (y_i - sourceY)**2 + (z_i - sourceZ)**2)
@@ -259,11 +260,13 @@ class AmBeNeutronProcessing:
                 x_j, y_j, z_j, pe_j, t_j = hits[j]
                 dist_j = np.sqrt((x_j - sourceX)**2 + (y_j - sourceY)**2 + (z_j - sourceZ)**2)
                 tcorr_j = t_j - dist_j/SoL
+                delta_t_ToF = t_j - t_i
                 
                 tdiffs.append(tcorr_j - tcorr_i)
-        
+                all_hits_delta_t_TofCorrected.append(delta_t_ToF)
+
         # Return as space-separated string for easy parsing
-        return " ".join(f"{val:.6f}" for val in tdiffs)
+        return " ".join(f"{val:.6f}" for val in tdiffs), " ".join(f"{val:.6f}" for val in all_hits_delta_t_TofCorrected)
 
     def analyze_waveform(self, hist_values: np.ndarray, hist_edges: np.ndarray) -> Tuple[float, float, bool]:
         """
@@ -280,10 +283,10 @@ class AmBeNeutronProcessing:
                      (hist_edges[:-1] < self.config.pulse_end))
         IC = np.sum(hist_values[pulse_mask] - baseline)
         IC_adjusted = (self.config.NS_PER_ADC_SAMPLE / self.config.ADC_IMPEDANCE) * IC
-        IC_adjusted *= self.config.ADC_TO_VOLT
+        #IC_adjusted *= self.config.ADC_TO_VOLT
         
         # Check acceptance criteria
-        if not (0.7 < IC_adjusted < 1.5):
+        if not (self.config.pulse_gamma < IC_adjusted < self.config.pulse_max):
             return IC_adjusted, baseline, False
             
         # Check for second pulse
@@ -302,8 +305,8 @@ class AmBeNeutronProcessing:
         plt.figure(figsize=(10, 4))
         hist_values_bs = hist_values - baseline
         # Convert ADC counts to volts
-        hist_values_volts = hist_values_bs * self.config.ADC_TO_VOLT
-        plt.plot(hist_edges[:-1], hist_values_volts, label='Waveform')
+        #hist_values_volts = hist_values_bs * self.config.ADC_TO_VOLT
+        plt.plot(hist_edges[:-1], hist_values_bs, label='Waveform')
         plt.axvspan(self.config.pulse_start, self.config.pulse_end, 
                    color='yellow', alpha=0.3, label='Integration Window')
         plt.title(f'{status} Waveform (timestamp: {timestamp}, Run: {run}), IC: {IC_adjusted:.2f}')
@@ -311,7 +314,6 @@ class AmBeNeutronProcessing:
         plt.ylabel('Voltage (V)')
         plt.legend()
         plt.tight_layout()
-        plt.show()
         plt.savefig(f'{save_dir}/{status}Waveform_{timestamp}_Run{run}.png', dpi=300)
         plt.close()
 
@@ -643,7 +645,7 @@ class AmBeNeutronProcessing:
             'hit_times': [], 'hit_x': [], 'hit_y': [], 'hit_z': [], 'hit_charges': [], 'hit_ids': [],
             'source_position': [[], [], []], 'event_ids': [], 'event_tank_time': [],
             'prompt_cluster_time': [], 'prompt_cluster_charge': [], 'prompt_cluster_QB': [], 'hit_delta_t': [],
-            'cluster_direction': [], 'neutron_tof_correction': []
+            'cluster_direction': [], 'neutron_tof_correction': [], 'all_hits_delta_t_TofCorrected': []
         }
         
         # Initialize counters
@@ -714,9 +716,10 @@ class AmBeNeutronProcessing:
                 self._append_cluster_data(processed_data, i, k, EN, ETT, CT, CPE, CCB, CH, 
                                         hT, hX, hY, hZ, hPE, hID, x_pos, y_pos, z_pos, 
                                         event_clusters.get(ETT[i]))
-                stats['neutron_cand_count'] += 1
-                if efficiency_data is not None:
-                    efficiency_data[key][2] += 1
+                if np.max(hT[i][k] - np.min(hT[i][k])) < 21:
+                    stats['neutron_cand_count'] += 1
+                    if efficiency_data is not None:
+                        efficiency_data[key][2] += 1
             
             # Process multiple neutron candidates (count event only once)
             if event_multiple_candidates:
@@ -724,12 +727,12 @@ class AmBeNeutronProcessing:
                     self._append_cluster_data(processed_data, i, k, EN, ETT, CT, CPE, CCB, CH, 
                                             hT, hX, hY, hZ, hPE, hID, x_pos, y_pos, z_pos,
                                             event_clusters.get(ETT[i]))
-
-                if EN[i] not in repeated_event_id:
-                    stats['multiple_neutron_cand_count'] += 1
-                    repeated_event_id.add(EN[i])
-                    if efficiency_data is not None:
-                        efficiency_data[key][3] += 1
+                if np.max(hT[i][k] - np.min(hT[i][k])) < 21:
+                    if EN[i] not in repeated_event_id:
+                        stats['multiple_neutron_cand_count'] += 1
+                        repeated_event_id.add(EN[i])
+                        if efficiency_data is not None:
+                            efficiency_data[key][3] += 1
         
         # Print statistics
         self._print_processing_stats(stats)
@@ -763,11 +766,12 @@ class AmBeNeutronProcessing:
         processed_data['cluster_direction'].append(direction_vec)
         
         # Calculate ToF correction - multi-cluster if event_hit_data provided, otherwise single-cluster
-        neutron_tof_correction = self.time_of_flight_correction(
+        neutron_tof_correction, all_hits_delta_t_TofCorrected = self.time_of_flight_correction(
             hX[i][k], hY[i][k], hZ[i][k], hPE[i][k], hT[i][k], 
             x_pos, y_pos, z_pos, event_hit_data
         )
         processed_data['neutron_tof_correction'].append(neutron_tof_correction)
+        processed_data['all_hits_delta_t_TofCorrected'].append(all_hits_delta_t_TofCorrected)
 
 
     def _print_processing_stats(self, stats: Dict[str, int]):
@@ -900,7 +904,8 @@ class AmBeNeutronProcessing:
                 "eventID": processed_data['event_ids'],
                 "eventTankTime": processed_data['event_tank_time'],
                 "clusterDirection": processed_data['cluster_direction'],
-                'neutronTofCorrection': processed_data['neutron_tof_correction']
+                'neutronTofCorrection': processed_data['neutron_tof_correction'],
+                'allHitsDeltaT_TofCorrected': processed_data['all_hits_delta_t_TofCorrected']
 
             })
             
