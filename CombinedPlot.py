@@ -15,7 +15,7 @@ if __name__ == "__main__":
 
     path = './'  # Directory containing the CSV files
 
-    csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBeC1NewCuts-g-ROI_*.csv'))
+    csv_files = glob.glob(os.path.join(path, 'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_test_4499.csv'))
 
     all_df = []
     for file in csv_files:
@@ -52,7 +52,7 @@ if __name__ == "__main__":
     plt.hist(EventTime, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False)
     plt.xlabel('Neutron multiplicity')
     plt.ylabel('Counts')
-    plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 100, CCB < 0.40)')
+    plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 120, CCB < 0.40)')
     plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0v1gROI.png", dpi=300, bbox_inches='tight')
     plt.show()
 
@@ -60,7 +60,7 @@ if __name__ == "__main__":
     plt.hist(EventTime, bins=range(1, 10, 1), edgecolor='blue', color="lightblue", linewidth=0.5, align='left', density=False, log=True)
     plt.xlabel('Neutron multiplicity')
     plt.ylabel('Counts')
-    plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 100, CCB < 0.40)')
+    plt.title('AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 120, CCB < 0.40)')
     #plt.savefig("OutputPlots/NeutronMultiplicity_AmBe2.0PE100CB0.40.png", dpi=300, bbox_inches='tight')
     plt.show()
 
@@ -111,7 +111,7 @@ if __name__ == "__main__":
     plt.xlabel(fr"Cluster Time [$\mu s$]")
     plt.ylabel("Counts")
     plt.legend()
-    plt.title(f"Neutron Capture Time for AmBe 2.0v1 (PE < 100, CCB < 0.40)")
+    plt.title(f"Neutron Capture Time for AmBe 2.0v1 (PE < 120, CCB < 0.40)")
     plt.savefig("OutputPlots/NeutronCaptureTime_AmBe2.0v1.png", dpi=300, bbox_inches='tight')
     plt.show()
 

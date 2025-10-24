@@ -667,17 +667,29 @@ class AmBeNeutronProcessing:
         for i in trange(len(EN)):
             if ETT[i] not in good_events:
                 continue
-                
+
+            # Check if event has at least one cluster with delta_t < 21
+            event_passes_delta_t = False
+            for k in range(len(CT[i])):
+                delta_t = np.max(hT[i][k]) - np.min(hT[i][k]) if len(hT[i][k]) > 1 else 0
+                if delta_t < 21:
+                    event_passes_delta_t = True
+                    break
+            
+            if not event_passes_delta_t:
+                continue  # Skip this entire event if no cluster passes delta_t condition
+
             stats['total_events'] += 1
             if efficiency_data is not None:
                 efficiency_data[key][0] += 1
-            
+
             # Process clusters for this event
             event_has_cosmic = False
             event_neutron_candidates = []
             event_multiple_candidates = []
             
             for k in range(len(CT[i])):
+                
                 # Check cosmic cut first (highest priority)
                 if self.cosmic_cut(CT[i][k], CPE[i][k]):
                     processed_data['prompt_cluster_time'].append(CT[i][k])
@@ -716,10 +728,10 @@ class AmBeNeutronProcessing:
                 self._append_cluster_data(processed_data, i, k, EN, ETT, CT, CPE, CCB, CH, 
                                         hT, hX, hY, hZ, hPE, hID, x_pos, y_pos, z_pos, 
                                         event_clusters.get(ETT[i]))
-                if np.max(hT[i][k] - np.min(hT[i][k])) < 21:
-                    stats['neutron_cand_count'] += 1
-                    if efficiency_data is not None:
-                        efficiency_data[key][2] += 1
+
+                stats['neutron_cand_count'] += 1
+                if efficiency_data is not None:
+                    efficiency_data[key][2] += 1
             
             # Process multiple neutron candidates (count event only once)
             if event_multiple_candidates:
@@ -727,13 +739,12 @@ class AmBeNeutronProcessing:
                     self._append_cluster_data(processed_data, i, k, EN, ETT, CT, CPE, CCB, CH, 
                                             hT, hX, hY, hZ, hPE, hID, x_pos, y_pos, z_pos,
                                             event_clusters.get(ETT[i]))
-                if np.max(hT[i][k] - np.min(hT[i][k])) < 21:
-                    if EN[i] not in repeated_event_id:
-                        stats['multiple_neutron_cand_count'] += 1
-                        repeated_event_id.add(EN[i])
-                        if efficiency_data is not None:
-                            efficiency_data[key][3] += 1
-        
+                if EN[i] not in repeated_event_id:
+                    stats['multiple_neutron_cand_count'] += 1
+                    repeated_event_id.add(EN[i])
+                    if efficiency_data is not None:
+                        efficiency_data[key][3] += 1
+    
         # Print statistics
         self._print_processing_stats(stats)
         

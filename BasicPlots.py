@@ -27,7 +27,7 @@ class AmBeNeutronAnalyzer:
     """
     
     def __init__(self, data_directory: str = './EventAmBeNeutronCandidatesData/', 
-                 output_pdf: str = 'Chits21nscutCB0.4PE120.pdf'):
+                 output_pdf: str = 'CB0.4PE120.pdf'):
         self.data_directory = data_directory
         self.output_pdf = output_pdf
         self.source_groups = {}
@@ -81,7 +81,7 @@ class AmBeNeutronAnalyzer:
                 print(f"Warning: {key} is not a valid configuration parameter")
         print("Updated fitting configuration:", self.fitting_config)
 
-    def load_and_group_data(self, file_pattern: str = 'EventAmBeNeutronCandidates_AllaboveCB0.4PE120_*.csv'):
+    def load_and_group_data(self, file_pattern: str = 'EventAmBeNeutronCandidates_test_4499.csv'):
         """Load CSV files and group them by source position."""
         files = self.data_directory
         csvs = glob.glob(os.path.join(files, file_pattern))
@@ -110,6 +110,7 @@ class AmBeNeutronAnalyzer:
 
             # Load CSV
             df = pd.read_csv(file)
+            print(df.head())
             if df.empty:
                 print(f"No data in file: {filename}")
                 continue
@@ -140,8 +141,7 @@ class AmBeNeutronAnalyzer:
         combined_df['clusterTime'] = combined_df['clusterTime'] / 1000
 
         # Extract relevant columns
-        combined_df = combined_df[combined_df['hit_delta_t'] > 21]
-        #EventTime = combined_df['eventTankTime'].value_counts()
+        EventTime = combined_df['eventTankTime'].value_counts()
         event_counts = combined_df.groupby('eventTankTime')['clusterTime'].transform('count')
         PE = combined_df['clusterPE']
         CCB = combined_df['clusterChargeBalance']
@@ -200,10 +200,10 @@ class AmBeNeutronAnalyzer:
         multi_cluster_df['first_cluster_time'] = multi_cluster_df.groupby('eventTankTime')['clusterTime'].transform('min')
         multi_cluster_df['delta_t'] = multi_cluster_df['clusterTime'] - multi_cluster_df['first_cluster_time']
 
-        events_with_large_delta = multi_cluster_df[multi_cluster_df['delta_t'] > 10]['eventTankTime'].unique()
-        valid_events = np.concatenate((single_cluster_events, events_with_large_delta))
-        EventTime = combined_df['eventTankTime'].value_counts()
-        FilteredEventTime = EventTime[EventTime.index.isin(valid_events)]
+       # events_with_large_delta = multi_cluster_df[multi_cluster_df['delta_t'] > 10]['eventTankTime'].unique()
+      #  valid_events = np.concatenate((single_cluster_events, events_with_large_delta))
+       # EventTime = combined_df['eventTankTime'].value_counts()
+       # FilteredEventTime = EventTime[EventTime.index.isin(valid_events)]
     
 
         delta_t_values = multi_cluster_df[multi_cluster_df['delta_t'] > 0]['delta_t']
@@ -216,7 +216,7 @@ class AmBeNeutronAnalyzer:
 
         return {
             'EventTime': EventTime,
-            'FilteredEventTime': FilteredEventTime,
+           # 'FilteredEventTime': FilteredEventTime,
             'PE': PE,
             'CCB': CCB,
             'CT': CT,
@@ -275,9 +275,10 @@ class AmBeNeutronAnalyzer:
         axes[2].set_xlabel('Y'); axes[2].set_ylabel('Z'); axes[2].set_title('YZ')
         fig.colorbar(im2[3], ax=axes[2], label='Counts')
 
-        plt.suptitle(f'Cluster vector distributions for AmBe 2.0v1 (PE < 80, CCB < 0.40), run positions:({sx}, {sy}, {sz})')
+        plt.suptitle(f'Cluster vector distributions for AmBe 2.0v1 (PE < 120, CCB < 0.40), run positions:({sx}, {sy}, {sz})')
         plt.tight_layout(rect=[0, 0, 1, 0.95])
         pdf.savefig(fig, bbox_inches='tight')
+        plt.show()
         plt.close(fig)
 
         Hpeccb, _, _ = np.histogram2d(PE, CCB, bins=100, range=[[-10, 120], [0.1, 0.5]])
@@ -312,16 +313,17 @@ class AmBeNeutronAnalyzer:
         ax2[2].set_xlabel("Cluster Time (μs)")
         ax2[2].set_ylabel("Cluster Charge Balance")
 
-        plt.suptitle(f'Cluster PE, Charge Balance and Time distributions for AmBe 2.0v1 (PE < 80, CCB < 0.40), run positions:({sx}, {sy}, {sz})')
+        plt.suptitle(f'Cluster PE, Charge Balance and Time distributions for AmBe 2.0v1 (PE < 120, CCB < 0.40), run positions:({sx}, {sy}, {sz})')
         plt.tight_layout(rect=[0, 0, 1, 0.95])
         pdf.savefig(fig2, bbox_inches='tight')
+        plt.show()
         plt.close(fig2)
 
 
     def plot_1d_histograms(self, data_dict: Dict, source_key: Tuple, pdf):
         """Generate 1D histogram plots."""
         EventTime = data_dict['EventTime']
-        FilteredEventTime = data_dict['FilteredEventTime']
+        #FilteredEventTime = data_dict['FilteredEventTime']
         PE = data_dict['PE']
         delta_t_values = data_dict['delta_t_values']
         hit_delta_t = data_dict['hit_delta_t']
@@ -351,17 +353,9 @@ class AmBeNeutronAnalyzer:
         plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v1 for all CH < 21 ns, run positions:({sx}, {sy}, {sz})')
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
+        plt.show()
         plt.close()
 
-        plt.figure(figsize=(10, 6))
-        plt.hist(FilteredEventTime, bins=range(1, 10, 1), edgecolor='blue', 
-                color="lightblue", linewidth=0.5, align='left', density=False)
-        plt.xlabel('Neutron multiplicity for Events')
-        plt.ylabel('Counts')
-        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v1 CH < 21 ns & delta_t > 10 us , run positions:({sx}, {sy}, {sz})')
-        plt.tight_layout()
-        pdf.savefig(bbox_inches='tight')
-        plt.close()
 
 
         # PE spectrum
@@ -372,6 +366,7 @@ class AmBeNeutronAnalyzer:
         plt.title(f"PE Spectrum for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
+        plt.show()
         plt.close()
 
         plt.figure(figsize=(10, 6))
@@ -381,6 +376,7 @@ class AmBeNeutronAnalyzer:
         plt.title(f"Δt Distribution for cluster collection for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
+        plt.show()
         plt.close()
 
         plt.figure(figsize=(10, 6))
@@ -391,6 +387,7 @@ class AmBeNeutronAnalyzer:
         plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
+        plt.show()
         plt.close()
 
         plt.figure(figsize=(10, 6))
@@ -401,6 +398,7 @@ class AmBeNeutronAnalyzer:
         plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
+        plt.show()
         plt.close()
 
         plt.figure(figsize=(10, 6))
@@ -410,6 +408,7 @@ class AmBeNeutronAnalyzer:
         plt.title(f"Multi - Neutron Vertex TOF for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
+        plt.show()
         plt.close()
 
         # Plot all hits PE values
@@ -421,6 +420,7 @@ class AmBeNeutronAnalyzer:
             plt.title(f"All Cluster Hits PE Distribution for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
             plt.tight_layout()
             pdf.savefig(bbox_inches='tight')
+            plt.show()
             plt.close()
     
     def emg_lmfit(self, data_dict: Dict, source_key: Tuple, pdf):
@@ -881,7 +881,7 @@ class AmBeNeutronAnalyzer:
 
         return Info
 
-    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_AllaboveCB0.4PE120_*.csv',
+    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_test_4499.csv',
                     tasks: List[str] = None):
         """
         Run the complete analysis with specified tasks.
