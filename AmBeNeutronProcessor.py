@@ -33,13 +33,13 @@ class WaveformConfig:
 class CutCriteria:
     """Event selection criteria."""
     pe_min: float = 0
-    pe_max: float = 120
+    pe_max: float = 700
     ccb_min: float = 0
-    ccb_max: float = 0.40
+    ccb_max: float = 1
     ct_min: float = 2000
-    chits_min: int = 10
+    chits_min: int = 0
     cosmic_ct_threshold: float = 2000
-    cosmic_pe_threshold: float = 120
+    cosmic_pe_threshold: float = 700
 
 
 class AmBeNeutronProcessing:
@@ -1040,7 +1040,7 @@ def main():
     print(f"✓ Using tree type: {'ANNIEEventTreeMaker' if which_tree == 1 else 'PhaseIITreeMaker'}")
     
     # Directory configuration (matching AnalysisRun.py)
-    data_directory = '../AmBe_BeamCluster/'
+    data_directory = '../AmBe_BeamClusterv2/'
     waveform_dir = '../AmBe_waveforms/'
 
     #data_directory = '/Volumes/One Touch/AmBe/'

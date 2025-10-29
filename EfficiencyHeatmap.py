@@ -7,7 +7,7 @@ import glob
 
 
 path = './'  # Directory containing the CSV files
-efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummary_test.csv'))
+efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummary_AmBePE60CB0.5CH10.csv'))
 
 
 all_df = []
@@ -79,7 +79,7 @@ mask = (pivot_n == 0)
 
 plt.figure(figsize=(8, 6))
 sns.heatmap(pivot_counts, annot=True, fmt="", cmap="YlOrBr", cbar=True, annot_kws={"size": 12}, mask=mask, linecolor='black', linewidths=0.2, cbar_kws={"label": "Percentage (%)"})
-plt.title("Statistics of AmBe neutrons from AmBe 2.0v2 (PE < 100, CB < 0.45)")
+plt.title("Statistics of AmBe neutrons from AmBe 2.0v2 (PE < 60, CB < 0.5, CH >= 10)")
 plt.xlabel("Ports")
 plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)
@@ -100,7 +100,7 @@ labels_SE = vectorized_label(pivot_eff.values, pivot_err.values, pivot_n.values)
 
 plt.figure(figsize=(8, 6))
 sns.heatmap(pivot_eff, annot=labels_SE, fmt="", cmap="YlOrBr", cbar=True, annot_kws={"size": 12}, mask=mask, linecolor='black', linewidths=0.2, cbar_kws={"label": "Efficiency (%)"})
-plt.title("AmBe neutron efficiency from AmBe 2.0v2 (PE < 120, CB < 0.40)")
+plt.title("AmBe neutron efficiency from AmBe 2.0v2 (PE < 60, CB < 0.5, CH >= 10)")
 plt.xlabel("Ports")
 plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)
@@ -130,7 +130,7 @@ residuals = pivot_eff - ambe1_df
 plt.figure(figsize=(8, 6))
 sns.heatmap(residuals, annot=True, fmt=".1f", cmap="coolwarm", center=0, cbar_kws={'label': 'Residual (AmBe 2.0 - AmBe 1.0)'}, mask=residuals.isna(), linecolor='black', linewidths=0.2)
 
-plt.title("Residual Efficiency of AmBe 2.0v1 compare to AmBe 1.0 (PE < 120, CB < 0.40)")
+plt.title("Residual Efficiency of AmBe 2.0v1 compare to AmBe 1.0 (PE < 60, CB < 0.5, CH >= 10)")
 plt.xlabel("Ports")
 plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)

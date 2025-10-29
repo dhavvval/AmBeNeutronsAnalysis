@@ -27,7 +27,7 @@ class AmBeNeutronAnalyzer:
     """
     
     def __init__(self, data_directory: str = './EventAmBeNeutronCandidatesData/', 
-                 output_pdf: str = 'CB0.4PE120.pdf'):
+                 output_pdf: str = 'SingleNeutronClusters.pdf'):
         self.data_directory = data_directory
         self.output_pdf = output_pdf
         self.source_groups = {}
@@ -81,7 +81,7 @@ class AmBeNeutronAnalyzer:
                 print(f"Warning: {key} is not a valid configuration parameter")
         print("Updated fitting configuration:", self.fitting_config)
 
-    def load_and_group_data(self, file_pattern: str = 'EventAmBeNeutronCandidates_test_4499.csv'):
+    def load_and_group_data(self, file_pattern: str = 'EventAmBeNeutronCandidates_test_4589.csv'):
         """Load CSV files and group them by source position."""
         files = self.data_directory
         csvs = glob.glob(os.path.join(files, file_pattern))
@@ -110,7 +110,6 @@ class AmBeNeutronAnalyzer:
 
             # Load CSV
             df = pd.read_csv(file)
-            print(df.head())
             if df.empty:
                 print(f"No data in file: {filename}")
                 continue
@@ -141,15 +140,18 @@ class AmBeNeutronAnalyzer:
         combined_df['clusterTime'] = combined_df['clusterTime'] / 1000
 
         # Extract relevant columns
+        combined_df = combined_df[(combined_df['clusterHits'] >= 10)] 
+        # & (combined_df['clusterPE'] < 60) & (combined_df['clusterChargeBalance'] < 0.5)]
+        
         EventTime = combined_df['eventTankTime'].value_counts()
         event_counts = combined_df.groupby('eventTankTime')['clusterTime'].transform('count')
-        PE = combined_df['clusterPE']
+        '''PE = combined_df['clusterPE']
         CCB = combined_df['clusterChargeBalance']
         CT = combined_df['clusterTime']
         hit_delta_t = combined_df['hit_delta_t']
         CvX = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[0]))
         CvY = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[1]))
-        CvZ = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))
+        CvZ = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))'''
         
         # Keep one entry per eventTankTime (single or multi-cluster)
         unique_events_df = combined_df.drop_duplicates(subset='eventTankTime').copy()
@@ -170,7 +172,7 @@ class AmBeNeutronAnalyzer:
         valid_delta_t_arrays = [arr for arr in unique_events_df['allHitsDeltaT_TofCorrected'].values if len(arr) > 0]
         all_delta_t_tof_corrected = np.concatenate(valid_delta_t_arrays) if valid_delta_t_arrays else np.array([])
 
-        # Parse hitPE values (simple one-liner like neutronTofCorrection)
+        # Parse hitPE values (simple one-liner like neutronTofCorrection
         all_hits_pe = np.concatenate([np.array([float(v) for v in str(x).strip('[]').replace(',', ' ').split() if v.strip() and v != '...']) for x in combined_df['hitPE'] if not (pd.isna(x) or str(x).strip() in ('', '[]'))]) if any(not (pd.isna(x) or str(x).strip() in ('', '[]')) for x in combined_df['hitPE']) else np.array([])
 
 
@@ -181,8 +183,8 @@ class AmBeNeutronAnalyzer:
         while delta_t_values represents the time difference between the first cluster and subsequent clusters in multi-cluster events.
         '''
         single_cluster_events = combined_df[event_counts == 1]['eventTankTime'].unique()
-        multi_cluster_df = combined_df[event_counts > 1].copy()
-        '''PE = multi_cluster_df['clusterPE']
+        multi_cluster_df = combined_df[event_counts == 1].copy()
+        PE = multi_cluster_df['clusterPE']
         CCB = multi_cluster_df['clusterChargeBalance']
         CT = multi_cluster_df['clusterTime']
         hit_delta_t = multi_cluster_df['hit_delta_t']
@@ -194,7 +196,7 @@ class AmBeNeutronAnalyzer:
             lambda x: np.array([float(val) for val in str(x).split()]) if pd.notna(x) and str(x).strip() else np.array([])
         )
         valid_arrays = [arr for arr in multi_cluster_df["neutronTofCorrection"].values if len(arr) > 0]
-        all_neutron_tof = np.concatenate(valid_arrays) if valid_arrays else np.array([])'''
+        all_neutron_tof = np.concatenate(valid_arrays) if valid_arrays else np.array([])
         
 
         multi_cluster_df['first_cluster_time'] = multi_cluster_df.groupby('eventTankTime')['clusterTime'].transform('min')
@@ -275,10 +277,10 @@ class AmBeNeutronAnalyzer:
         axes[2].set_xlabel('Y'); axes[2].set_ylabel('Z'); axes[2].set_title('YZ')
         fig.colorbar(im2[3], ax=axes[2], label='Counts')
 
-        plt.suptitle(f'Cluster vector distributions for AmBe 2.0v1 (PE < 120, CCB < 0.40), run positions:({sx}, {sy}, {sz})')
+        plt.suptitle(f'Cluster vector distributions for AmBe 2.0v1 , run positions:({sx}, {sy}, {sz})')
         plt.tight_layout(rect=[0, 0, 1, 0.95])
         pdf.savefig(fig, bbox_inches='tight')
-        plt.show()
+        #plt.show()
         plt.close(fig)
 
         Hpeccb, _, _ = np.histogram2d(PE, CCB, bins=100, range=[[-10, 120], [0.1, 0.5]])
@@ -291,7 +293,7 @@ class AmBeNeutronAnalyzer:
         # PE vs Charge Balance
         fig2, ax2 = plt.subplots(1,3, figsize=(18, 6))
         im3= ax2[0].hist2d(PE, CCB, bins=100, cmap='viridis', 
-                range=[[-10, 120], [0.1, 0.5]], cmin=1, norm=norm2)
+                range=[[-10, 150], [0.1, 1]], cmin=1, norm=norm2)
         fig2.colorbar(im3[3], ax=ax2[0], label='Counts')
         ax2[0].set_title(f"Cluster PE vs Charge Balance")
         ax2[0].set_xlabel("Cluster PE")
@@ -299,7 +301,7 @@ class AmBeNeutronAnalyzer:
 
 
         # PE vs Cluster Time
-        im4 = ax2[1].hist2d(CT, PE, bins=100, cmap='viridis', range=[[0.1, 70], [-10, 100]], cmin=1, norm=norm2)
+        im4 = ax2[1].hist2d(CT, PE, bins=100, cmap='viridis', range=[[0.1, 70], [-10, 150]], cmin=1, norm=norm2)
         fig2.colorbar(im4[3], ax=ax2[1], label='Counts')
         ax2[1].set_title(f"Cluster Time vs PE")
         ax2[1].set_xlabel("Cluster Time (μs)")
@@ -307,13 +309,13 @@ class AmBeNeutronAnalyzer:
 
         # Cluster Time vs Charge Balance
         im5 = ax2[2].hist2d(CT, CCB, bins=100, cmap='viridis', 
-                      range=[[0, 70], [0.1, 0.5]], cmin=1, norm=norm2)
+                      range=[[0, 70], [0.1, 1]], cmin=1, norm=norm2)
         fig2.colorbar(im5[3], ax=ax2[2], label='Counts')
         ax2[2].set_title(f"Cluster Time vs Charge Balance")
         ax2[2].set_xlabel("Cluster Time (μs)")
         ax2[2].set_ylabel("Cluster Charge Balance")
 
-        plt.suptitle(f'Cluster PE, Charge Balance and Time distributions for AmBe 2.0v1 (PE < 120, CCB < 0.40), run positions:({sx}, {sy}, {sz})')
+        plt.suptitle(f'SINGLE - Cluster PE, Charge Balance and Time distributions for AmBe 2.0v1 (CH >= 10), run positions:({sx}, {sy}, {sz})')
         plt.tight_layout(rect=[0, 0, 1, 0.95])
         pdf.savefig(fig2, bbox_inches='tight')
         plt.show()
@@ -347,13 +349,13 @@ class AmBeNeutronAnalyzer:
         # Neutron multiplicity
         plt.figure(figsize=(10, 6))
         plt.hist(EventTime, bins=range(1, 10, 1), edgecolor='blue', 
-                color="lightblue", linewidth=0.5, align='left', density=False)
+                color="lightblue", linewidth=0.5, align='left', density=False, log=True)
         plt.xlabel('Neutron multiplicity for Events')
         plt.ylabel('Counts')
-        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v1 for all CH < 21 ns, run positions:({sx}, {sy}, {sz})')
+        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v1 (CH >= 10 & PE < 60 & CCB < 0.5), run positions:({sx}, {sy}, {sz})')
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
-        plt.show()
+        #plt.show()
         plt.close()
 
 
@@ -366,7 +368,7 @@ class AmBeNeutronAnalyzer:
         plt.title(f"PE Spectrum for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
-        plt.show()
+        #plt.show()
         plt.close()
 
         plt.figure(figsize=(10, 6))
@@ -376,7 +378,7 @@ class AmBeNeutronAnalyzer:
         plt.title(f"Δt Distribution for cluster collection for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
-        plt.show()
+        #plt.show()
         plt.close()
 
         plt.figure(figsize=(10, 6))
@@ -387,7 +389,7 @@ class AmBeNeutronAnalyzer:
         plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
-        plt.show()
+        #plt.show()
         plt.close()
 
         plt.figure(figsize=(10, 6))
@@ -398,7 +400,7 @@ class AmBeNeutronAnalyzer:
         plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
-        plt.show()
+        #plt.show()
         plt.close()
 
         plt.figure(figsize=(10, 6))
@@ -408,7 +410,7 @@ class AmBeNeutronAnalyzer:
         plt.title(f"Multi - Neutron Vertex TOF for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
-        plt.show()
+        #plt.show()
         plt.close()
 
         # Plot all hits PE values
@@ -420,7 +422,7 @@ class AmBeNeutronAnalyzer:
             plt.title(f"All Cluster Hits PE Distribution for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
             plt.tight_layout()
             pdf.savefig(bbox_inches='tight')
-            plt.show()
+            #plt.show()
             plt.close()
     
     def emg_lmfit(self, data_dict: Dict, source_key: Tuple, pdf):
@@ -440,7 +442,7 @@ class AmBeNeutronAnalyzer:
         plt.ylabel("Counts")
         plt.title(f"All Hits Δt ToF Corrected for AmBe 2.0v1 for all ToF, run positions:({sx}, {sy}, {sz})")
         plt.tight_layout()
-        plt.show()
+        #plt.show()
         #pdf.savefig(bbox_inches='tight')
         plt.close()
         
@@ -520,7 +522,7 @@ class AmBeNeutronAnalyzer:
         ax.set_xlabel('Time of Flight (ns)', fontsize=12)
         ax.set_ylabel('Counts', fontsize=12)
         ax.legend(fontsize=10)
-        plt.show()
+        #plt.show()
         plt.tight_layout()
         #pdf.savefig(fig, bbox_inches='tight')
         plt.close(fig)
@@ -689,8 +691,14 @@ class AmBeNeutronAnalyzer:
                     range=self.fitting_config['time_range'], 
                     histtype='step', color='blue', label="Data")
             plt.errorbar(xdata, ydata, yerr=ydata_errors, color='blue', linestyle='None', alpha=0.7)
+            label = (
+                fr"$\mathrm{{therm}} = {result.params['therm'].value:.2f} \pm {result.params['therm'].stderr:.2f}\ \mu s$" + "\n"
+                fr"$\tau = {result.params['tau'].value:.2f} \pm {result.params['tau'].stderr:.2f}\ \mu s$" + "\n"
+                fr"$\chi^2 = {result.chisqr:.2f},\ \mathrm{{ndof}} = {result.nfree}$, " + "\n"
+                fr"$\frac{{\chi^2}}{{\mathrm{{ndof}}}} = {result.redchi:.2f}$"
+            )
             plt.plot(xdata, best_fit_curve, 'g-', linewidth=2, 
-                    label=f'LMFIT: τ={result.params["tau"].value:.2f}±{result.params["tau"].stderr:.2f}μs')
+                    label=label)
             plt.xlabel("Cluster Time [μs]")
             plt.ylabel("Counts")
             plt.legend()
@@ -766,19 +774,56 @@ class AmBeNeutronAnalyzer:
             print(f"PyMC analysis failed for position {source_key}: {e}")
 
     def generate_summary_plots(self):
-        """Generate summary heatmaps and statistics."""
-        if not self.time_fit_values:
-            print("No fit results to summarize")
+        """
+        Generate summary heatmaps and statistics using lmfit results.
+        
+        This method creates heatmaps for capture time and thermal time based on 
+        lmfit fitting results rather than scipy curve_fit results. The plots show
+        thermal time and capture time with their uncertainties across different
+        source positions and ports.
+        
+        Requires that lmfit_analysis() has been run first to populate self.lmfit_summary.
+        """
+        if not self.lmfit_summary:
+            print("No lmfit results to summarize")
             return
 
-        # Create summary DataFrame
-        Info = pd.DataFrame(self.time_fit_values, columns=['ThermalTime','ThermalTimeErr', 'CaptureTime',
-                                                          'CaptureTimeErr', 'SourcePosition', 'LenEvents', 
-                                                          "Chi2Ndof", "p-value", "B"])
+        # Create summary DataFrame from lmfit results instead of scipy
+        lmfit_data = []
+        for result in self.lmfit_summary:
+            lmfit_data.append([
+                round(result['Thermal'], 2),
+                round(result['Thermal_err'] if result['Thermal_err'] is not None else 0.0, 2),
+                round(result['Tau'], 2),
+                round(result['Tau_err'] if result['Tau_err'] is not None else 0.0, 2),
+                result['Coordination'],
+                0,  # LenEvents - we'll need to get this separately
+                round(result['reduced_chi2'], 2),
+                round(result['p_value'], 3),
+                0.0  # Background - not used in lmfit version
+            ])
+        
+        Info = pd.DataFrame(lmfit_data, columns=['ThermalTime','ThermalTimeErr', 'CaptureTime',
+                                               'CaptureTimeErr', 'SourcePosition', 'LenEvents', 
+                                               "Chi2Ndof", "p-value", "B"])
         Info['ThermalTime'] = Info['ThermalTime'].astype(float)
         Info['ThermalTimeErr'] = Info['ThermalTimeErr'].astype(float)
         Info['CaptureTime'] = Info['CaptureTime'].astype(float)
         Info['CaptureTimeErr'] = Info['CaptureTimeErr'].astype(float)
+        
+        # Get event counts from source_groups
+        for i, (source_key, df_list) in enumerate(self.source_groups.items()):
+            if i < len(Info):
+                try:
+                    combined_df = pd.concat(df_list, ignore_index=True)
+                    data_dict = self.prepare_data(combined_df)
+                    Info.loc[i, 'LenEvents'] = len(data_dict['EventTime'])
+                except:
+                    # Fallback: just count total events directly
+                    combined_df = pd.concat(df_list, ignore_index=True)
+                    Info.loc[i, 'LenEvents'] = len(combined_df['eventTankTime'].unique()) if 'eventTankTime' in combined_df.columns else len(combined_df)
+        
+        print("LMFIT Summary")
         print(Info)
 
         # Add port information
@@ -798,7 +843,7 @@ class AmBeNeutronAnalyzer:
 
         # Create labels with errors
         def make_label_se(eff, err):
-            return f"{eff}${{\\pm{err}}}$"
+            return f"{eff:.2f}$\\pm{err:.2f}$"
 
         vectorized_label = np.vectorize(make_label_se)
         labels_SE_capture = vectorized_label(pivot_capturetime.values, pivot_capturetimeerr.values)
@@ -818,12 +863,12 @@ class AmBeNeutronAnalyzer:
         sns.heatmap(pivot_capturetime, annot=labels_SE_capture, fmt="", cmap="YlOrBr", 
                    cbar=True, annot_kws={"size": 12}, linecolor='black', linewidths=0.2, 
                    cbar_kws={"label": "Capture Time (μs)"})
-        plt.title("Capture Time of AmBe 2.0v1")
+        plt.title("Capture Time of AmBe 2.0v1 (LMFIT)")
         plt.xlabel("Port")
         plt.ylabel("Y Position")
         plt.gca().invert_yaxis()
         plt.tight_layout()
-        plt.savefig("OutputPlots/CaptureTime_AmBeNeutrons_AmBe2.0v1.png", dpi=300, bbox_inches='tight')
+        plt.savefig("OutputPlots/CaptureTime_AmBeNeutrons_AmBe2.0v1_LMFIT.png", dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
 
@@ -832,12 +877,12 @@ class AmBeNeutronAnalyzer:
         sns.heatmap(pivot_thermal_time, annot=labels_SE_thermal, fmt="", cmap="YlOrBr", 
                    cbar=True, annot_kws={"size": 12}, linecolor='black', linewidths=0.2, 
                    cbar_kws={"label": "Thermal Time (μs)"})
-        plt.title("Thermal Time of AmBe 2.0v1")
+        plt.title("Thermal Time of AmBe 2.0v1 (LMFIT)")
         plt.xlabel("Port")
         plt.ylabel("Y Position")
         plt.gca().invert_yaxis()
         plt.tight_layout()
-        plt.savefig("OutputPlots/ThermalTime_AmBeNeutrons_AmBe2.0v1.png", dpi=300, bbox_inches='tight')
+        plt.savefig("OutputPlots/ThermalTime_AmBeNeutrons_AmBe2.0v1_LMFIT.png", dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
 
@@ -857,31 +902,40 @@ class AmBeNeutronAnalyzer:
 
         # Calculate weighted averages
         def weighted_average(df, value, error):
-            weights = 1.0 / (df[error] ** 2)
-            weighted_avg = ((df[value] * weights).sum()) / (weights.sum())
+            # Handle potential zero or NaN errors
+            valid_mask = (df[error] > 0) & (~df[error].isna())
+            valid_df = df[valid_mask]
+            if len(valid_df) == 0:
+                return df[value].mean(), df[value].std()
+            
+            weights = 1.0 / (valid_df[error] ** 2)
+            weighted_avg = ((valid_df[value] * weights).sum()) / (weights.sum())
             weighted_err = np.sqrt(1 / weights.sum())
             return weighted_avg, weighted_err
 
         NeutCaptureTime, NeutCaptureTimeErr = weighted_average(Info, 'CaptureTime', 'CaptureTimeErr')
-        print(f"Weighted Average Capture Time: {NeutCaptureTime:.2f} ± {NeutCaptureTimeErr:.2f} μs")
+        print(f"Weighted Average Capture Time (LMFIT): {NeutCaptureTime:.2f} ± {NeutCaptureTimeErr:.2f} μs")
 
         NeutThermalTime, NeutThermalTimeErr = weighted_average(Info, 'ThermalTime', 'ThermalTimeErr')
-        print(f"Weighted Average Thermal Time: {NeutThermalTime:.2f} ± {NeutThermalTimeErr:.2f} μs")
+        print(f"Weighted Average Thermal Time (LMFIT): {NeutThermalTime:.2f} ± {NeutThermalTimeErr:.2f} μs")
 
         # Print PyMC and LMFIT summaries if available
         if self.pyMC_summary:
             pyMC_df = pd.DataFrame(self.pyMC_summary)
             print("PyMC Summary:")
             print(pyMC_df)
+        
+        if self.scipy_curve_fit:
+            scipy_df = pd.DataFrame(self.time_fit_values, columns=[
+                'ThermalTime', 'ThermalTimeErr', 'CaptureTime', 'CaptureTimeErr', 
+                'SourcePosition', 'LenEvents', 'Chi2Ndof', 'p-value', 'B'])
+            print("Scipy Curve Fit Summary:")
+            print(scipy_df)
 
-        if self.lmfit_summary:
-            lmfit_df = pd.DataFrame(self.lmfit_summary)
-            print("LMFIT Summary:")
-            print(lmfit_df)
 
         return Info
 
-    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_test_4499.csv',
+    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_test_4589.csv',
                     tasks: List[str] = None):
         """
         Run the complete analysis with specified tasks.
@@ -932,9 +986,16 @@ class AmBeNeutronAnalyzer:
 
 
         # Generate summary plots if requested
-        if 'summary' in tasks and self.time_fit_values:
-            summary_info = self.generate_summary_plots()
-            return summary_info
+        if 'summary' in tasks:
+            if self.lmfit_summary:
+                print("Generating summary plots using LMFIT results...")
+                summary_info = self.generate_summary_plots()
+                return summary_info
+            elif self.time_fit_values:
+                print("Warning: No LMFIT results available, but scipy results found.")
+                print("To use LMFIT results in summary plots, include 'lmfit_fit' in tasks.")
+            else:
+                print("No fit results available for summary plots.")
 
         return None
 
@@ -945,17 +1006,17 @@ def main():
     # Initialize analyzer
     analyzer = AmBeNeutronAnalyzer()
     
-    # Example 1: Run only 2D histograms for quick testing
-    print("=== Running only 2D histograms ===")
-    analyzer.run_analysis(tasks=['2d_histograms', '1d_histograms', 'scipy_fit', 'lmfit_fit', 'pymc_fit', 'summary'])
+    # Example 1: Run analysis with LMFIT-based summary plots
+    print("=== Running analysis with LMFIT-based summary plots ===")
+    analyzer.run_analysis(tasks=['2d_histograms', '1d_histograms'])
 
-    # Example 2: Run full analysis with all tasks
+    # Example 2: Run full analysis with all tasks (both scipy and lmfit, summary uses lmfit)
     # print("=== Running full analysis ===")
     # analyzer.run_analysis(tasks=['2d_histograms', '1d_histograms', 'scipy_fit', 'lmfit_fit', 'pymc_fit', 'summary'])
     
-    # Example 3: Run only curve fitting tasks
-    # print("=== Running only curve fitting ===")
-    # analyzer.run_analysis(tasks=['scipy_fit', 'lmfit_fit', 'summary'])
+    # Example 3: Run only lmfit fitting and summary
+    # print("=== Running only LMFIT fitting and summary ===")
+    # analyzer.run_analysis(tasks=['lmfit_fit', 'summary'])
 
 
 if __name__ == "__main__":
