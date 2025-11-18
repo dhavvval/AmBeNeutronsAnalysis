@@ -26,7 +26,7 @@ class WaveformConfig:
     ADC_IMPEDANCE: int = 50
     ADC_TO_VOLT: float = 2.415 / (2 ** 12)
     ref_integral: float = 2.6e-2
-    REF_ENERGY: float = 4.42  # Me
+    REF_ENERGY: float = 4.42  # MeV
 
 
 @dataclass
@@ -158,6 +158,9 @@ class AmBeNeutronProcessing:
 
         # combine and sort by time
         hits = list(zip(hitX, hitY, hitZ, hitPE, hitT))
+        if len(hits) < 1:
+            return np.array([0.0, 0.0, 0.0]), 0.0
+
         hits.sort(key=lambda h: h[4])
         
         mini = min(hitT)
@@ -246,7 +249,7 @@ class AmBeNeutronProcessing:
         # Sort by time and calculate differences (same logic for both cases)
         hits.sort(key=lambda h: h[4])
         n = len(hits)
-        if n < 2:
+        if n < 1:
             return ""
         
         tdiffs = []
@@ -424,84 +427,6 @@ class AmBeNeutronProcessing:
             'ic_accepted': ic_accepted_batch
         }
 
-    def analyze_multiple_runs(self, data_directory: str, waveform_dir: str, 
-                            file_pattern: re.Pattern, campaign: int = 1,
-                            runinfo: str = 'default',
-                            save_waveform_samples: bool = False,
-                            plot_ic_distributions: bool = True) -> Dict[str, Any]:
-        """
-        Analyze multiple runs with efficient memory management.
-        
-        Args:
-            data_directory: Directory containing data files
-            waveform_dir: Directory containing waveform files
-            file_pattern: Regex pattern to match filenames
-            campaign: Campaign number (1 or 2)
-            runinfo: Run information string for output filenames
-            save_waveform_samples: Whether to save sample waveforms
-            plot_ic_distributions: Whether to plot IC distributions
-            
-        Returns:
-            Dictionary with all run results
-        """
-        # Get run numbers from file names
-        run_numbers = []
-        file_names = []
-        
-        for file_name in os.listdir(data_directory):
-            match = file_pattern.match(file_name)
-            if match:
-                run_number = int(match.group(1))
-                run_numbers.append(str(run_number))
-                file_names.append(os.path.join(data_directory, file_name))
-        
-        if not run_numbers:
-            raise ValueError(f"No files found matching pattern in {data_directory}")
-        
-        print(f"Found {len(run_numbers)} runs to process")
-        
-        results = {}
-        all_ic_values = []
-        all_ic_accepted = []
-        
-        # Create PDF for plots
-        os.makedirs('verbose', exist_ok=True)
-        with PdfPages(f'verbose/AllRuns_IC_adjusted_{runinfo}.pdf') as pdf:
-            
-            for run in run_numbers:
-                try:
-                    run_result = self.process_run_waveforms(
-                        run, waveform_dir, campaign, 
-                        save_waveform_samples=save_waveform_samples
-                    )
-                    results[run] = run_result
-                    
-                    # Extend combined lists efficiently
-                    all_ic_values.extend(run_result['ic_values'])
-                    all_ic_accepted.extend(run_result['ic_accepted'])
-                    
-                    # Plot per-run distributions
-                    if plot_ic_distributions:
-                        self._plot_run_ic_distribution(run_result['ic_values'], run, pdf)
-                    
-                    # Clear run-specific data to free memory
-                    run_result['ic_values'] = []  # Keep structure but clear data
-                    run_result['ic_accepted'] = []
-                    
-                except Exception as e:
-                    print(f"Failed to process run {run}: {e}")
-                    continue
-                
-                # Periodic garbage collection
-                gc.collect()
-        
-        # Generate summary plots
-        if plot_ic_distributions and all_ic_values:
-            self._plot_combined_ic_distributions(all_ic_values, all_ic_accepted, runinfo)
-        
-        print(f"Analysis complete. Processed {len(results)} runs successfully.")
-        return results, run_numbers, file_names
-
     def _plot_run_ic_distribution(self, ic_values: List[float], run: str, pdf):
         """Plot IC distribution for a single run."""
         if not ic_values:
@@ -560,6 +485,45 @@ class AmBeNeutronProcessing:
             plt.tight_layout()
             plt.savefig(f'verbose/IC_adjusted_AcceptedEvents_{runinfo}.png', dpi=300)
             plt.close()
+
+    def _plot_combined_ic_from_histograms(self, histogram_counts: np.ndarray,
+                                          accepted_counts: np.ndarray,
+                                          bin_edges: np.ndarray, runinfo: str):
+        """Plot combined IC distributions from pre-computed histogram counts."""
+        os.makedirs('verbose', exist_ok=True)
+        
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        bin_width = bin_edges[1] - bin_edges[0]
+        
+        # All IC values
+        plt.figure(figsize=(10, 6))
+        plt.bar(bin_centers, histogram_counts, width=bin_width, alpha=0.7, color='blue')
+        plt.xlabel('IC_adjusted')
+        plt.ylabel('Number of Events')
+        plt.title('All IC adjusted Values for all runs')
+        plt.tight_layout()
+        plt.savefig(f'verbose/IC_adjusted_AllEvents_{runinfo}.png', dpi=300)
+        plt.close()
+        
+        # All IC values (log scale)
+        plt.figure(figsize=(10, 6))
+        plt.bar(bin_centers, histogram_counts, width=bin_width, alpha=0.7, color='blue', log=True)
+        plt.xlabel('IC_adjusted')
+        plt.ylabel('Number of Events (log scale)')
+        plt.title('All IC adjusted Values for all runs (log scale)')
+        plt.tight_layout()
+        plt.savefig(f'verbose/Log_IC_adjusted_AllEvents_{runinfo}.png', dpi=300)
+        plt.close()
+        
+        # Accepted IC values
+        plt.figure(figsize=(10, 6))
+        plt.bar(bin_centers, accepted_counts, width=bin_width, alpha=0.7, color='orange')
+        plt.xlabel('IC_adjusted accepted')
+        plt.ylabel('Number of Events')
+        plt.title('Accepted IC_adjusted Values for all runs')
+        plt.tight_layout()
+        plt.savefig(f'verbose/IC_adjusted_AcceptedEvents_{runinfo}.png', dpi=300)
+        plt.close()
 
     def load_event_data(self, file_path: str, which_tree: int = 0) -> Dict[str, np.ndarray]:
         """
@@ -668,17 +632,6 @@ class AmBeNeutronProcessing:
             if ETT[i] not in good_events:
                 continue
 
-            # Check if event has at least one cluster with delta_t < 21
-            event_passes_delta_t = False
-            for k in range(len(CT[i])):
-                delta_t = np.max(hT[i][k]) - np.min(hT[i][k]) if len(hT[i][k]) > 1 else 0
-                if delta_t < 21:
-                    event_passes_delta_t = True
-                    break
-            
-            if not event_passes_delta_t:
-                continue  # Skip this entire event if no cluster passes delta_t condition
-
             stats['total_events'] += 1
             if efficiency_data is not None:
                 efficiency_data[key][0] += 1
@@ -739,9 +692,9 @@ class AmBeNeutronProcessing:
                     self._append_cluster_data(processed_data, i, k, EN, ETT, CT, CPE, CCB, CH, 
                                             hT, hX, hY, hZ, hPE, hID, x_pos, y_pos, z_pos,
                                             event_clusters.get(ETT[i]))
-                if EN[i] not in repeated_event_id:
+                if ETT[i] not in repeated_event_id:
                     stats['multiple_neutron_cand_count'] += 1
-                    repeated_event_id.add(EN[i])
+                    repeated_event_id.add(ETT[i])
                     if efficiency_data is not None:
                         efficiency_data[key][3] += 1
     
@@ -760,9 +713,12 @@ class AmBeNeutronProcessing:
         processed_data['cluster_QB'].append(CCB[i][k])
         processed_data['cluster_hits'].append(CH[i][k])
         processed_data['hit_times'].append(hT[i][k])
-        processed_data['hit_x'].append(hX[i][k])
-        processed_data['hit_y'].append(hY[i][k])
-        processed_data['hit_z'].append(hZ[i][k])
+        hit_x_str = '[' + ', '.join([str(x) for x in hX[i][k]]) + ']'
+        hit_y_str = '[' + ', '.join([str(y) for y in hY[i][k]]) + ']'
+        hit_z_str = '[' + ', '.join([str(z) for z in hZ[i][k]]) + ']'
+        processed_data['hit_x'].append(hit_x_str)
+        processed_data['hit_y'].append(hit_y_str)
+        processed_data['hit_z'].append(hit_z_str)
         processed_data['hit_charges'].append(hPE[i][k])
         processed_data['hit_ids'].append(hID[i][k])
         processed_data['source_position'][0].append(x_pos)
@@ -805,6 +761,7 @@ class AmBeNeutronProcessing:
         print(f'Single neutron candidates: {neutron_cand_count}')
         print(f'Multiple neutron candidates: {multiple_neutron_cand_count}')
 
+
     def run_complete_analysis_pipeline(self, data_directory: str, waveform_dir: str, 
                                       file_pattern: re.Pattern, campaign: int = 1,
                                       runinfo: str = 'default', which_tree: int = 1,
@@ -830,52 +787,75 @@ class AmBeNeutronProcessing:
         print("="*80)
         print("STARTING COMPLETE AmBe NEUTRON ANALYSIS PIPELINE")
         print("="*80)
+
+        run_numbers = []
+        file_names = []
         
+        for file_name in os.listdir(data_directory):
+            match = file_pattern.match(file_name)
+            if match:
+                run_number = int(match.group(1))
+                run_numbers.append(str(run_number))
+                file_names.append(os.path.join(data_directory, file_name))
+        
+        if not run_numbers:
+            raise ValueError(f"No files found matching pattern in {data_directory}")
+        
+        print(f"Found {len(run_numbers)} runs to process")
+
+        # Initialize tracking structures
+        waveform_summary_list = []
+        efficiency_data = defaultdict(lambda: [0, 0, 0, 0])  # [total, cosmic, single, multiple]
+
+        # For IC distributions (if plotting) - use histograms for memory efficiency
+        if plot_ic_distributions:
+            ic_hist_bins = np.linspace(0, 1400, 201)
+            all_ic_histogram = np.zeros(200)  # Accumulate histogram counts
+            all_ic_accepted_histogram = np.zeros(200)
+            pdf_file = PdfPages(f'verbose/AllRuns_IC_adjusted_{runinfo}.pdf')
+
         # Create output directories
         os.makedirs('TriggerSummary', exist_ok=True)
         os.makedirs('EventAmBeNeutronCandidatesData', exist_ok=True)
         os.makedirs('verbose', exist_ok=True)
-        
-        # Initialize efficiency tracking
-        efficiency_data = defaultdict(lambda: [0, 0, 0, 0])  # [total, cosmic, single, multiple]
-        
-        # Step 1: Analyze waveforms
+        # Step 1: Waveform Analysis for All Runs and Process Tank data
         print("\n" + "="*60)
-        print("STEP 1: Waveform Analysis")
-        print("="*60)
-        
-        waveform_results, run_numbers, file_names = self.analyze_multiple_runs(
-            data_directory, waveform_dir, file_pattern, campaign,
-            runinfo, save_waveform_samples, plot_ic_distributions
-        )
-        
-        # Create waveform summary DataFrame and save
-        waveform_df = pd.DataFrame.from_dict(waveform_results, orient='index')
-        
-        if 'good_events' in waveform_df.columns:
-            waveform_df = waveform_df.drop(columns=['good_events'])
-        
-        waveform_df[['x_pos', 'y_pos', 'z_pos']] = pd.DataFrame(
-            waveform_df['source_position'].tolist(), index=waveform_df.index)
-        waveform_df = waveform_df.drop(columns=['source_position'])
-        
-        waveform_df = waveform_df.groupby(['x_pos', 'y_pos', 'z_pos'], as_index=False).sum()
-        waveform_df.to_csv(f'TriggerSummary/AmBeWaveformResults_{runinfo}.csv', index=False)
-        print(f"✓ Saved waveform summary to TriggerSummary/AmBeWaveformResults_{runinfo}.csv")
-        
-        # Step 2: Process each run for event analysis
-        print("\n" + "="*60)
-        print("STEP 2: Event Analysis for Each Run")
+        print("STEP 1: Waveform Analysis for All Runs")
         print("="*60)
         
         for c1, run in enumerate(run_numbers):
-            print(f"\nProcessing run {run} ({c1+1}/{len(run_numbers)})")
-            print('-' * 50)
-            
+
+            run_result = self.process_run_waveforms(
+                run, waveform_dir, campaign, 
+                save_waveform_samples=save_waveform_samples
+            )
+         
             # Get waveform results for this run
-            good_events = waveform_results[run]["good_events"]
-            x_pos, y_pos, z_pos = waveform_results[run]["source_position"]
+            good_events = run_result["good_events"]
+            x_pos, y_pos, z_pos = run_result["source_position"]
             file_path = file_names[c1]
+
+            waveform_summary_list.append({
+                "run": int(run),
+                "sourceX": x_pos,
+                "sourceY": y_pos,
+                "sourceZ": z_pos,
+                "accepted_waveforms": run_result["accepted_events"],
+                "rejected_waveforms": run_result["rejected_events"],
+                "total_waveforms": run_result["total_waveforms"]
+            })
+
+            if plot_ic_distributions:
+                if run_result["ic_values"]:
+                    self._plot_run_ic_distribution(run_result["ic_values"], run, pdf_file)
+                
+                # Accumulate histogram counts (memory-efficient)
+                ic_hist, _ = np.histogram(run_result['ic_values'], bins=ic_hist_bins)
+                all_ic_histogram += ic_hist
+                
+                ic_accepted_hist, _ = np.histogram(run_result['ic_accepted'], bins=ic_hist_bins)
+                all_ic_accepted_histogram += ic_accepted_hist
+
             
             print(f"Source position: ({x_pos}, {y_pos}, {z_pos})")
             print(f"Good events from waveform analysis: {len(good_events)}")
@@ -941,13 +921,19 @@ class AmBeNeutronProcessing:
             print(f"✓ Saved prompt neutron candidates to {prompt_file}")
             
             # Clear data to free memory
-            del processed_data, df, prompt_df
+            del processed_data, df, prompt_df, run_result, event_data, good_events
             gc.collect()
+        if plot_ic_distributions:
+            pdf_file.close()
         
-        # Step 3: Create efficiency summary
-        print("\n" + "="*60)
-        print("STEP 3: Efficiency Summary")
-        print("="*60)
+        waveform_df = pd.DataFrame(waveform_summary_list)
+        waveform_df = waveform_df.groupby(['sourceX', 'sourceY', 'sourceZ'], as_index=False).sum()
+        waveform_df.to_csv(f'TriggerSummary/AmBeWaveformResults_{runinfo}.csv', index=False)
+
+        if plot_ic_distributions:
+            self._plot_combined_ic_from_histograms(
+                all_ic_histogram, all_ic_accepted_histogram, ic_hist_bins, runinfo
+            )
         
         df_eff = pd.DataFrame([
             {
@@ -978,15 +964,9 @@ class AmBeNeutronProcessing:
         print(f"  - TriggerSummary/AmBeTriggerSummary_{runinfo}.csv")
         print(f"  - EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_{runinfo}_<run>.csv (for each run)")
         print(f"  - EventAmBeNeutronCandidatesData/PromptAmBeNeutronCandidates_{runinfo}_<run>.csv (for each run)")
-        
-        if plot_ic_distributions:
-            print(f"  - verbose/AllRuns_IC_adjusted_{runinfo}.pdf")
-            print(f"  - verbose/IC_adjusted_AllEvents_{runinfo}.png")
-            print(f"  - verbose/Log_IC_adjusted_AllEvents_{runinfo}.png")
-            print(f"  - verbose/IC_adjusted_AcceptedEvents_{runinfo}.png")
+
         
         return {
-            'waveform_results': waveform_results,
             'run_numbers': run_numbers,
             'file_names': file_names,
             'efficiency_data': dict(efficiency_data),
@@ -1003,6 +983,8 @@ def main():
     """
     Main function that replicates AnalysisRun.py functionality with interactive prompts.
     """
+    np.set_printoptions(threshold=np.inf)
+
     print("="*80)
     print("AmBe NEUTRON ANALYSIS - Integrated Pipeline")
     print("="*80)

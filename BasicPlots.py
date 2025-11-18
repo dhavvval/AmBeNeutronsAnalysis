@@ -19,6 +19,8 @@ from typing import Dict, List, Tuple, Optional
 import matplotlib.colors as mcolors
 from scipy.special import erfc
 from scipy.optimize import minimize
+from mpl_toolkits.mplot3d import Axes3D
+
 
 
 class AmBeNeutronAnalyzer:
@@ -27,7 +29,7 @@ class AmBeNeutronAnalyzer:
     """
     
     def __init__(self, data_directory: str = './EventAmBeNeutronCandidatesData/', 
-                 output_pdf: str = 'SingleNeutronClusters.pdf'):
+                 output_pdf: str = 'OpticsTest.pdf'):
         self.data_directory = data_directory
         self.output_pdf = output_pdf
         self.source_groups = {}
@@ -81,7 +83,7 @@ class AmBeNeutronAnalyzer:
                 print(f"Warning: {key} is not a valid configuration parameter")
         print("Updated fitting configuration:", self.fitting_config)
 
-    def load_and_group_data(self, file_pattern: str = 'EventAmBeNeutronCandidates_test_4589.csv'):
+    def load_and_group_data(self, file_pattern: str = 'EventAmBeNeutronCandidates_test_*_OPTICS.csv'):
         """Load CSV files and group them by source position."""
         files = self.data_directory
         csvs = glob.glob(os.path.join(files, file_pattern))
@@ -101,7 +103,7 @@ class AmBeNeutronAnalyzer:
                 continue
 
             # Extract run number using regex
-            match = re.search(r'_(\d+)\.csv', filename)
+            match = re.search(r'_(\d+)\_OPTICS\.csv', filename)
             if match:
                 run_number = int(match.group(1))
             else:
@@ -140,18 +142,19 @@ class AmBeNeutronAnalyzer:
         combined_df['clusterTime'] = combined_df['clusterTime'] / 1000
 
         # Extract relevant columns
-        combined_df = combined_df[(combined_df['clusterHits'] >= 10)] 
+        combined_df = combined_df[(combined_df['clusterHits'] >= 10) & (combined_df['clusterPE'] < 60) & (combined_df['clusterChargeBalance'] < 0.5)]
         # & (combined_df['clusterPE'] < 60) & (combined_df['clusterChargeBalance'] < 0.5)]
         
+        EventID = combined_df['eventID'].value_counts()
         EventTime = combined_df['eventTankTime'].value_counts()
         event_counts = combined_df.groupby('eventTankTime')['clusterTime'].transform('count')
-        '''PE = combined_df['clusterPE']
+        PE = combined_df['clusterPE']
         CCB = combined_df['clusterChargeBalance']
         CT = combined_df['clusterTime']
         hit_delta_t = combined_df['hit_delta_t']
         CvX = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[0]))
         CvY = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[1]))
-        CvZ = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))'''
+        CvZ = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))
         
         # Keep one entry per eventTankTime (single or multi-cluster)
         unique_events_df = combined_df.drop_duplicates(subset='eventTankTime').copy()
@@ -183,30 +186,34 @@ class AmBeNeutronAnalyzer:
         while delta_t_values represents the time difference between the first cluster and subsequent clusters in multi-cluster events.
         '''
         single_cluster_events = combined_df[event_counts == 1]['eventTankTime'].unique()
-        multi_cluster_df = combined_df[event_counts == 1].copy()
-        PE = multi_cluster_df['clusterPE']
+        multi_cluster_df = combined_df[event_counts > 1].copy()
+        '''PE = multi_cluster_df['clusterPE']
         CCB = multi_cluster_df['clusterChargeBalance']
         CT = multi_cluster_df['clusterTime']
         hit_delta_t = multi_cluster_df['hit_delta_t']
         CvX = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[0]))
         CvY = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[1]))
-        CvZ = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))
+        CvZ = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))'''
+
+        multi_cluster_df['CvX'] = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[0]))
+        multi_cluster_df['CvY'] = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[1]))
+        multi_cluster_df['CvZ'] = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))
         
         multi_cluster_df["neutronTofCorrection"] = multi_cluster_df["neutronTofCorrection"].apply(
             lambda x: np.array([float(val) for val in str(x).split()]) if pd.notna(x) and str(x).strip() else np.array([])
         )
         valid_arrays = [arr for arr in multi_cluster_df["neutronTofCorrection"].values if len(arr) > 0]
         all_neutron_tof = np.concatenate(valid_arrays) if valid_arrays else np.array([])
-        
 
         multi_cluster_df['first_cluster_time'] = multi_cluster_df.groupby('eventTankTime')['clusterTime'].transform('min')
         multi_cluster_df['delta_t'] = multi_cluster_df['clusterTime'] - multi_cluster_df['first_cluster_time']
+        multi_cluster_df['is_first_cluster'] = multi_cluster_df['clusterTime'] == multi_cluster_df['first_cluster_time']
+        multi_cluster_df['cluster_type'] = np.where(multi_cluster_df['is_first_cluster'], 'first', 'subsequent')
+        #subsequent_clusters = multi_cluster_df[(multi_cluster_df['delta_t'] < 1) & (multi_cluster_df['cluster_type'] == 'subsequent')]
+        first_clusters = multi_cluster_df[(multi_cluster_df['delta_t'] < 1) &(multi_cluster_df['cluster_type'] == 'first')]
+        valid_event_ids = first_clusters['eventTankTime'].unique()
+        subsequent_clusters = multi_cluster_df[(multi_cluster_df['cluster_type'] == 'subsequent') & (multi_cluster_df['eventTankTime'].isin(valid_event_ids))]
 
-       # events_with_large_delta = multi_cluster_df[multi_cluster_df['delta_t'] > 10]['eventTankTime'].unique()
-      #  valid_events = np.concatenate((single_cluster_events, events_with_large_delta))
-       # EventTime = combined_df['eventTankTime'].value_counts()
-       # FilteredEventTime = EventTime[EventTime.index.isin(valid_events)]
-    
 
         delta_t_values = multi_cluster_df[multi_cluster_df['delta_t'] > 0]['delta_t']
   
@@ -232,7 +239,11 @@ class AmBeNeutronAnalyzer:
             'multi_hit_delta_t': multi_hit_delta_t,
             'Neutron_vertex_tof': all_neutron_tof,
             'all_delta_t_tof_corrected': all_delta_t_tof_corrected,
-            'all_hits_pe': all_hits_pe
+            'all_hits_pe': all_hits_pe,
+            'first_clusters': first_clusters,
+            'subsequent_clusters': subsequent_clusters,
+            'EventID': EventID
+
         }
 
     def plot_2d_histograms(self, data_dict: Dict, source_key: Tuple, pdf):
@@ -243,8 +254,50 @@ class AmBeNeutronAnalyzer:
         CvX = data_dict['CvX']
         CvY = data_dict['CvY']
         CvZ = data_dict['CvZ']
+        first_clusters = data_dict['first_clusters']
+        subsequent_clusters = data_dict['subsequent_clusters']
+
 
         sx, sy, sz = (int(v) for v in source_key)
+
+ 
+
+        # Plot first clusters in red
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))  # 1 row, 3 columns
+
+
+        axes[0].scatter(first_clusters['CvX'], first_clusters['CvY'],
+                        c='red', label='First cluster', alpha=0.7, s=50)
+        axes[0].scatter(subsequent_clusters['CvX'], subsequent_clusters['CvY'],
+                        c='blue', label='Subsequent clusters', alpha=0.5, s=30)
+        axes[0].set_xlabel('CvX')
+        axes[0].set_ylabel('CvY')
+        axes[0].set_title('Δt < 1 μs')
+        axes[0].legend()
+
+
+        axes[1].scatter(first_clusters['CvX'], first_clusters['CvZ'],
+                        c='red', label='First cluster', alpha=0.7, s=50)
+        axes[1].scatter(subsequent_clusters['CvX'], subsequent_clusters['CvZ'],
+                        c='blue', label='Subsequent clusters', alpha=0.5, s=30)
+        axes[1].set_xlabel('CvX')
+        axes[1].set_ylabel('CvZ')
+        axes[1].set_title('Δt < 1 μs')
+        axes[1].legend()
+
+
+        axes[2].scatter(first_clusters['CvY'], first_clusters['CvZ'],
+                        c='red', label='First cluster', alpha=0.7, s=50)
+        axes[2].scatter(subsequent_clusters['CvY'], subsequent_clusters['CvZ'],
+                        c='blue', label='Subsequent clusters', alpha=0.5, s=30)
+        axes[2].set_xlabel('CvY')
+        axes[2].set_ylabel('CvZ')
+        axes[2].set_title('Δt < 1 μs')
+        axes[2].legend()
+
+        plt.tight_layout()  # adjust spacing
+        pdf.savefig(fig, bbox_inches='tight')
+        #plt.show()
 
 
         # Compute 2D histograms first to find global max for normalization
@@ -318,7 +371,7 @@ class AmBeNeutronAnalyzer:
         plt.suptitle(f'SINGLE - Cluster PE, Charge Balance and Time distributions for AmBe 2.0v1 (CH >= 10), run positions:({sx}, {sy}, {sz})')
         plt.tight_layout(rect=[0, 0, 1, 0.95])
         pdf.savefig(fig2, bbox_inches='tight')
-        plt.show()
+        #plt.show()
         plt.close(fig2)
 
 
@@ -333,22 +386,35 @@ class AmBeNeutronAnalyzer:
         multi_hit_delta_t = data_dict['multi_hit_delta_t']
         Neutron_vertex_tof = data_dict['Neutron_vertex_tof']
         all_hits_pe = data_dict['all_hits_pe']
+        EventID = data_dict['EventID']
 
         sx, sy, sz = (int(v) for v in source_key)
 
         plt.figure(figsize=(10, 6))
-        plt.hist(delta_t_values, bins=50, color='coral', edgecolor='black')
+        plt.hist(delta_t_values, bins=70, color='coral', edgecolor='black')
         plt.title(f'Time Difference (Δt) Between First and Subsequent Clusters for ({sx}, {sy}, {sz})', fontsize=16)
         plt.xlabel('Δt (μs)', fontsize=12)
         plt.ylabel('Number of Subsequent Clusters', fontsize=12)
         plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
+        #plt.show()
         plt.close()
 
         # Neutron multiplicity
         plt.figure(figsize=(10, 6))
         plt.hist(EventTime, bins=range(1, 10, 1), edgecolor='blue', 
+                color="lightblue", linewidth=0.5, align='left', density=False)
+        plt.xlabel('Neutron multiplicity for Events')
+        plt.ylabel('Counts')
+        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v1 (CH >= 10 & PE < 60 & CCB < 0.5), run positions:({sx}, {sy}, {sz})')
+        plt.tight_layout()
+        pdf.savefig(bbox_inches='tight')
+        #plt.show()
+        plt.close()
+
+        plt.figure(figsize=(10, 6))
+        plt.hist(EventID, bins=range(1, 10, 1), edgecolor='blue', 
                 color="lightblue", linewidth=0.5, align='left', density=False, log=True)
         plt.xlabel('Neutron multiplicity for Events')
         plt.ylabel('Counts')
@@ -383,7 +449,7 @@ class AmBeNeutronAnalyzer:
 
         plt.figure(figsize=(10, 6))
         plt.hist(single_hit_delta_t, bins=50, color='coral', edgecolor='black')
-        plt.title(f'SINGLE CLUSTER - Time Difference (Δt) Between First and Subsequent Clusters for ({sx}, {sy}, {sz})', fontsize=16)
+        plt.title(f'SINGLE CLUSTER - hit collection window for ({sx}, {sy}, {sz})', fontsize=16)
         plt.xlabel('Δt (ns)', fontsize=12)
         plt.ylabel('Number of Subsequent Clusters', fontsize=12)
         plt.grid(axis='y', linestyle='--', alpha=0.7)
@@ -394,7 +460,7 @@ class AmBeNeutronAnalyzer:
 
         plt.figure(figsize=(10, 6))
         plt.hist(multi_hit_delta_t, bins=50, color='coral', edgecolor='black')
-        plt.title(f'MULTI CLUSTER - Time Difference (Δt) Between First and Subsequent Clusters for ({sx}, {sy}, {sz})', fontsize=16)
+        plt.title(f'MULTI CLUSTER - hit collection window for ({sx}, {sy}, {sz})', fontsize=16)
         plt.xlabel('Δt (ns)', fontsize=12)
         plt.ylabel('Number of Subsequent Clusters', fontsize=12)
         plt.grid(axis='y', linestyle='--', alpha=0.7)
@@ -935,7 +1001,7 @@ class AmBeNeutronAnalyzer:
 
         return Info
 
-    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_test_4589.csv',
+    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_test_*_OPTICS.csv',
                     tasks: List[str] = None):
         """
         Run the complete analysis with specified tasks.
@@ -949,7 +1015,7 @@ class AmBeNeutronAnalyzer:
         - 'summary': Generate summary plots and statistics
         """
         if tasks is None:
-            tasks = ['2d_histograms', '1d_histograms', 'scipy_fit', 'summary']
+            tasks = ['2d_histograms', '1d_histograms', 'lmfit_fit', 'summary']
 
         # Load and group data
         self.load_and_group_data(file_pattern)
