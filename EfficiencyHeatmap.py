@@ -7,7 +7,7 @@ import glob
 
 
 path = './'  # Directory containing the CSV files
-efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummary_AmBeC1PE60CB0.5CH10.csv'))
+efficiency_data = glob.glob(os.path.join(path, 'TriggerSummary/AmBeTriggerSummary_v4ch5test.csv'))
 
 
 all_df = []
@@ -79,14 +79,14 @@ mask = (pivot_n == 0)
 
 plt.figure(figsize=(8, 6))
 sns.heatmap(pivot_counts, annot=True, fmt="", cmap="YlOrBr", cbar=True, annot_kws={"size": 12}, mask=mask, linecolor='black', linewidths=0.2, cbar_kws={"label": "Percentage (%)"})
-plt.title("Statistics of AmBe neutrons from AmBe 2.0v2 (PE < 60, CB < 0.5, CH >= 10)")
+plt.title("Statistics of AmBe neutrons from AmBe 2.0v4 (PE < 100, CB < 0.45)")
 plt.xlabel("Ports")
 plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)
 plt.yticks(rotation=0)
 plt.gca().invert_yaxis()
 plt.tight_layout()
-plt.savefig("OutputPlots/Statistics_AmBeNeutronEfficiency_AmBe2.0v2.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/Statistics_AmBeNeutronEfficiency_AmBe2.0v4.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 # Label function for SE
@@ -100,14 +100,14 @@ labels_SE = vectorized_label(pivot_eff.values, pivot_err.values, pivot_n.values)
 
 plt.figure(figsize=(8, 6))
 sns.heatmap(pivot_eff, annot=labels_SE, fmt="", cmap="YlOrBr", cbar=True, annot_kws={"size": 12}, mask=mask, linecolor='black', linewidths=0.2, cbar_kws={"label": "Efficiency (%)"})
-plt.title("AmBe neutron efficiency from AmBe 2.0v2 (PE < 60, CB < 0.5, CH >= 10)")
+plt.title("AmBe neutron efficiency from AmBe 2.0v4 (PE < 100, CB < 0.45)")
 plt.xlabel("Ports")
 plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)
 plt.yticks(rotation=0)
 plt.gca().invert_yaxis()
 plt.tight_layout()
-plt.savefig("OutputPlots/AmBeNeutronEfficiency_AmBe2.0v2.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/AmBeNeutronEfficiency_AmBe2.0v4.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 ##Residuals plot using AmBe 1.0 and AmBe 2.0 data
@@ -122,21 +122,29 @@ ambe1_data = {
     "Port 4": [68, 67, None, 69, 67]  # One missing (center right white box)
 }
 
+'''ambe1_data = { ##This values are for the AmBe 2.0v2
+    "Port 1": [61.86, 64.44, 65.20, 59.64, 54.01],
+    "Port 5": [70.34, 71.96, 70.02, 63.06, 47.16],
+    "Port 2": [62.37, None, 65.02, 62.29, None],
+    "Port 3": [None, 54.73, 53.18, 50.13, 38.32],
+    "Port 4": [60.79, 60.30, 64.43, 60.32, 40.16]
+}'''
+
 ambe1_df = pd.DataFrame(ambe1_data, index=Ambe1_ypos)
 ambe1_df.index.name = "Ambe 1.0 Y Position (cm)"
 pivot_eff.index.name = "Ambe 2.0 Y Position (cm)"
 #pivot_eff = pivot_eff.fillna(np.nan).astype(int)
 residuals = pivot_eff - ambe1_df
 plt.figure(figsize=(8, 6))
-sns.heatmap(residuals, annot=True, fmt=".1f", cmap="coolwarm", center=0, cbar_kws={'label': 'Residual (AmBe 2.0 - AmBe 1.0)'}, mask=residuals.isna(), linecolor='black', linewidths=0.2)
+sns.heatmap(residuals, annot=True, fmt=".1f", cmap="coolwarm", center=0, cbar_kws={'label': 'Residual (AmBe 2.0v4 - AmBe 1.0)'}, mask=residuals.isna(), linecolor='black', linewidths=0.2)
 
-plt.title("Residual Efficiency of AmBe 2.0v1 compare to AmBe 1.0 (PE < 60, CB < 0.5, CH >= 10)")
+plt.title("Residual Efficiency of AmBe 2.0v4 compare to AmBe 1.0 (PE < 100, CB < 0.45)")
 plt.xlabel("Ports")
 plt.ylabel("Y Position (cm)")
 plt.xticks(rotation=45)
 plt.gca().invert_yaxis()
 plt.tight_layout()
-plt.savefig("OutputPlots/ResidualEfficiency_AmBe2.0v2_updated.png", dpi=300, bbox_inches='tight')
+plt.savefig("OutputPlots/ResidualEfficiency_AmBe2.0v4_updated.png", dpi=300, bbox_inches='tight')
 plt.show()
 
 

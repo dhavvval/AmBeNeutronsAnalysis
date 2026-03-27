@@ -19,13 +19,16 @@ class WaveformConfig:
     """Configuration parameters for waveform analysis."""
     pulse_start: int = 300
     pulse_end: int = 1200
-    pulse_gamma: int = 400
+    pulse_gamma: int = 700
+    #pulse_gamma: int = 500
+    #pulse_gamma: int = 400
     lower_pulse: int = 175
-    pulse_max: int = 675
+    pulse_max: int = 1200
+    #pulse_max: int = 1400
+    #pulse_max: int = 575
     NS_PER_ADC_SAMPLE: int = 2
     ADC_IMPEDANCE: int = 50
     ADC_TO_VOLT: float = 2.415 / (2 ** 12)
-    ref_integral: float = 2.6e-2
     REF_ENERGY: float = 4.42  # MeV
 
 
@@ -33,13 +36,13 @@ class WaveformConfig:
 class CutCriteria:
     """Event selection criteria."""
     pe_min: float = 0
-    pe_max: float = 700
+    pe_max: float = 120
     ccb_min: float = 0
-    ccb_max: float = 1
+    ccb_max: float = 0.7
     ct_min: float = 2000
-    chits_min: int = 0
+    chits_min: int = 5
     cosmic_ct_threshold: float = 2000
-    cosmic_pe_threshold: float = 700
+    cosmic_pe_threshold: float = 100
 
 
 class AmBeNeutronProcessing:
@@ -105,7 +108,11 @@ class AmBeNeutronProcessing:
             5824:(0, 100, -75), 5825:(0, 0, -75),  5826:(0, -100, -75), 5828:(0, -100, -75),
 
             # Outside the tank without source
-            5743: (0, 328, 0), 5778: (0, 328, 0), 5779: (0, 328, 0)
+            5743: (0, 328, 0), 5778: (0, 328, 0), 5779: (0, 328, 0),
+
+            ##AmBe v3 Campaign 3 - March 2026
+            6046: (0, 0, 0), 6062: (0, -100, 0),                       ## Port 5 data
+            6056: (75, 0 , 0), 6060: (75, -100, 0), 6061: (75, 100, 0) ## Port 4 data
         }
 
     def get_source_location(self, run: int) -> Tuple[float, float, float]:
@@ -347,7 +354,7 @@ class AmBeNeutronProcessing:
         if campaign == 1:
             folder_pattern = re.compile(r'^RWM_\d+')
         elif campaign == 2:
-            folder_pattern = re.compile(r'^BRF_\d+')
+            folder_pattern = re.compile(r'^RWM_\d+')
         else:
             raise ValueError("Campaign must be 1 or 2")
 
@@ -435,13 +442,13 @@ class AmBeNeutronProcessing:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
         
         # Linear scale
-        ax1.hist(ic_values, bins=200, alpha=0.7, color='blue', range=(0, 1400))
+        ax1.hist(ic_values, bins=200, alpha=0.7, color='blue', range=(0, 2000))
         ax1.set_xlabel('IC_adjusted')
         ax1.set_ylabel('Number of Events')
         ax1.set_title(f'IC adjusted values for run: {run}')
         
         # Log scale
-        ax2.hist(ic_values, bins=200, alpha=0.7, color='blue', range=(0, 1400), log=True)
+        ax2.hist(ic_values, bins=200, alpha=0.7, color='blue', range=(0, 2000), log=True)
         ax2.set_xlabel('IC_adjusted')
         ax2.set_ylabel('Number of Events (log scale)')
         ax2.set_title(f'IC adjusted values (log) for run: {run}')
@@ -457,7 +464,7 @@ class AmBeNeutronProcessing:
         
         # All IC values
         plt.figure(figsize=(10, 6))
-        plt.hist(all_ic_values, bins=200, alpha=0.7, color='blue', range=(0, 1400))
+        plt.hist(all_ic_values, bins=200, alpha=0.7, color='blue', range=(0, 2000))
         plt.xlabel('IC_adjusted')
         plt.ylabel('Number of Events')
         plt.title('All IC adjusted Values for all runs')
@@ -467,7 +474,7 @@ class AmBeNeutronProcessing:
         
         # All IC values (log scale)
         plt.figure(figsize=(10, 6))
-        plt.hist(all_ic_values, bins=200, alpha=0.7, color='blue', range=(0, 1400), log=True)
+        plt.hist(all_ic_values, bins=200, alpha=0.7, color='blue', range=(0, 2000), log=True)
         plt.xlabel('IC_adjusted')
         plt.ylabel('Number of Events (log scale)')
         plt.title('All IC adjusted Values for all runs (log scale)')
@@ -478,7 +485,7 @@ class AmBeNeutronProcessing:
         # Accepted IC values
         if all_ic_accepted:
             plt.figure(figsize=(10, 6))
-            plt.hist(all_ic_accepted, bins=200, alpha=0.7, color='orange', range=(0, 1400))
+            plt.hist(all_ic_accepted, bins=200, alpha=0.7, color='orange', range=(0, 2000))
             plt.xlabel('IC_adjusted accepted')
             plt.ylabel('Number of Events')
             plt.title('Accepted IC_adjusted Values for all runs')
@@ -712,14 +719,16 @@ class AmBeNeutronProcessing:
         processed_data['cluster_charge'].append(CPE[i][k])
         processed_data['cluster_QB'].append(CCB[i][k])
         processed_data['cluster_hits'].append(CH[i][k])
-        processed_data['hit_times'].append(hT[i][k])
+        hit_T_str = '[' + ', '.join([str(t) for t in hT[i][k]]) + ']'
+        processed_data['hit_times'].append(hit_T_str)
         hit_x_str = '[' + ', '.join([str(x) for x in hX[i][k]]) + ']'
         hit_y_str = '[' + ', '.join([str(y) for y in hY[i][k]]) + ']'
         hit_z_str = '[' + ', '.join([str(z) for z in hZ[i][k]]) + ']'
         processed_data['hit_x'].append(hit_x_str)
         processed_data['hit_y'].append(hit_y_str)
         processed_data['hit_z'].append(hit_z_str)
-        processed_data['hit_charges'].append(hPE[i][k])
+        hit_PE_str = '[' + ', '.join([str(pe) for pe in hPE[i][k]]) + ']'
+        processed_data['hit_charges'].append(hit_PE_str)
         processed_data['hit_ids'].append(hID[i][k])
         processed_data['source_position'][0].append(x_pos)
         processed_data['source_position'][1].append(y_pos)
@@ -733,12 +742,12 @@ class AmBeNeutronProcessing:
         processed_data['cluster_direction'].append(direction_vec)
         
         # Calculate ToF correction - multi-cluster if event_hit_data provided, otherwise single-cluster
-        neutron_tof_correction, all_hits_delta_t_TofCorrected = self.time_of_flight_correction(
-            hX[i][k], hY[i][k], hZ[i][k], hPE[i][k], hT[i][k], 
-            x_pos, y_pos, z_pos, event_hit_data
-        )
-        processed_data['neutron_tof_correction'].append(neutron_tof_correction)
-        processed_data['all_hits_delta_t_TofCorrected'].append(all_hits_delta_t_TofCorrected)
+        #neutron_tof_correction, all_hits_delta_t_TofCorrected = self.time_of_flight_correction(
+        #    hX[i][k], hY[i][k], hZ[i][k], hPE[i][k], hT[i][k], 
+        #    x_pos, y_pos, z_pos, event_hit_data
+        #)
+        #processed_data['neutron_tof_correction'].append(neutron_tof_correction)
+        #processed_data['all_hits_delta_t_TofCorrected'].append(all_hits_delta_t_TofCorrected)
 
 
     def _print_processing_stats(self, stats: Dict[str, int]):
@@ -805,7 +814,7 @@ class AmBeNeutronProcessing:
 
         # Initialize tracking structures
         waveform_summary_list = []
-        efficiency_data = defaultdict(lambda: [0, 0, 0, 0])  # [total, cosmic, single, multiple]
+        efficiency_data = defaultdict(lambda: [0, 0, 0, 0]) 
 
         # For IC distributions (if plotting) - use histograms for memory efficiency
         if plot_ic_distributions:
@@ -885,7 +894,7 @@ class AmBeNeutronProcessing:
                 "hitX": processed_data['hit_x'],
                 "hitY": processed_data['hit_y'],
                 "hitZ": processed_data['hit_z'],
-                "hitQ": processed_data['hit_charges'],
+                #"hitQ": processed_data['hit_charges'],
                 "hitPE": processed_data['hit_charges'],
                 "hitID": processed_data['hit_ids'],
                 "hit_delta_t": processed_data['hit_delta_t'],
@@ -895,8 +904,8 @@ class AmBeNeutronProcessing:
                 "eventID": processed_data['event_ids'],
                 "eventTankTime": processed_data['event_tank_time'],
                 "clusterDirection": processed_data['cluster_direction'],
-                'neutronTofCorrection': processed_data['neutron_tof_correction'],
-                'allHitsDeltaT_TofCorrected': processed_data['all_hits_delta_t_TofCorrected']
+                #'neutronTofCorrection': processed_data['neutron_tof_correction'],
+                #'allHitsDeltaT_TofCorrected': processed_data['all_hits_delta_t_TofCorrected']
 
             })
             
@@ -996,7 +1005,7 @@ def main():
     # Get campaign information
     while True:
         try:
-            campaign = int(input('What campaign is this? (1/2): '))
+            campaign = int(input('Are the AmBe waveform stored as RWM_ (1) or BRF_(2) (1/2): '))
             if campaign in [1, 2]:
                 break
             else:
@@ -1022,11 +1031,11 @@ def main():
     print(f"✓ Using tree type: {'ANNIEEventTreeMaker' if which_tree == 1 else 'PhaseIITreeMaker'}")
     
     # Directory configuration (matching AnalysisRun.py)
-    data_directory = '../AmBe_BeamClusterv2/'
+    #data_directory = '../AmBev2.0v4/'
+    #waveform_dir = '../AmBev2.0v4/'
+    data_directory = '../BC_MainTAAmBe2.0v1/'
     waveform_dir = '../AmBe_waveforms/'
 
-    #data_directory = '/Volumes/One Touch/AmBe/'
-    #waveform_dir = '/Volumes/One Touch/AmBe/'
     
     print(f"\nDirectory Configuration:")
     print(f"  Data directory: {data_directory}")
