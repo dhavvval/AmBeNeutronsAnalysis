@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ambe"
+version = "0.1.0"
+description = "ANNIE AmBe neutron analysis tools: data and MC pipelines, clustering, plotting, statistics"
+authors = [{ name = "Dajana" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.9"
+
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyyaml",
+    "uproot",
+    "awkward",
+    "matplotlib",
+    "seaborn",
+    "scipy",
+    "scikit-learn",
+    "pyarrow",         # parquet backend
+    "lmfit",           # used by BasicPlots
+]
+
+[project.optional-dependencies]
+bayes  = ["pymc", "arviz"]   # only needed for the Bayesian fits in BasicPlots
+dev    = ["pytest", "ruff", "mypy"]
+
+[project.scripts]
+ambe = "ambe.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ambe = ["py.typed"]

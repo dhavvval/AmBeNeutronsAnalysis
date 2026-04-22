@@ -1,7 +1,7 @@
 import os          
 import numpy as np
 import uproot
-from tqdm import trange
+#from tqdm import trange
 from scipy.stats import norm
 import re
 from collections import defaultdict
@@ -19,13 +19,13 @@ class WaveformConfig:
     """Configuration parameters for waveform analysis."""
     pulse_start: int = 300
     pulse_end: int = 1200
-    pulse_gamma: int = 700
-    #pulse_gamma: int = 500
-    #pulse_gamma: int = 400
+    #pulse_gamma: int = 700 #v4
+    #pulse_gamma: int = 590 #v3
+    pulse_gamma: int = 400 #v1
     lower_pulse: int = 175
-    pulse_max: int = 1200
-    #pulse_max: int = 1400
-    #pulse_max: int = 575
+    #pulse_max: int = 1200 #v4
+    #pulse_max: int = 1340 #v3
+    pulse_max: int = 575 #v1
     NS_PER_ADC_SAMPLE: int = 2
     ADC_IMPEDANCE: int = 50
     ADC_TO_VOLT: float = 2.415 / (2 ** 12)
@@ -36,9 +36,9 @@ class WaveformConfig:
 class CutCriteria:
     """Event selection criteria."""
     pe_min: float = 0
-    pe_max: float = 120
+    pe_max: float = 100
     ccb_min: float = 0
-    ccb_max: float = 0.7
+    ccb_max: float = 0.45
     ct_min: float = 2000
     chits_min: int = 5
     cosmic_ct_threshold: float = 2000
@@ -354,7 +354,7 @@ class AmBeNeutronProcessing:
         if campaign == 1:
             folder_pattern = re.compile(r'^RWM_\d+')
         elif campaign == 2:
-            folder_pattern = re.compile(r'^RWM_\d+')
+            folder_pattern = re.compile(r'^BRF_\d+')
         else:
             raise ValueError("Campaign must be 1 or 2")
 
@@ -371,7 +371,7 @@ class AmBeNeutronProcessing:
         waveform_files = os.listdir(os.path.join(waveform_dir, run))
         
         print('Loading and processing waveforms...')
-        for file_idx in trange(len(waveform_files)):
+        for file_idx in range(len(waveform_files)):
             waveform_filepath = os.path.join(waveform_dir, run, waveform_files[file_idx])
             
             with uproot.open(waveform_filepath) as root:
@@ -550,31 +550,31 @@ class AmBeNeutronProcessing:
             
             # Load common branches
             data = {
-                "eventNumber": Event["eventNumber"].array(),
-                "eventTimeTank": Event["eventTimeTank"].array(),
-                "clusterTime": Event["clusterTime"].array(),
-                "clusterPE": Event["clusterPE"].array(),
-                "clusterChargeBalance": Event["clusterChargeBalance"].array(),
-                "clusterHits": Event["clusterHits"].array(),
-                "hitX": Event["Cluster_HitX"].array(),
-                "hitY": Event["Cluster_HitY"].array(),
-                "hitZ": Event["Cluster_HitZ"].array()
+                "eventNumber": Event["eventNumber"].array(library="np"),
+                "eventTimeTank": Event["eventTimeTank"].array(library="np"),
+                "clusterTime": Event["clusterTime"].array(library="np"),
+                "clusterPE": Event["clusterPE"].array(library="np"),
+                "clusterChargeBalance": Event["clusterChargeBalance"].array(library="np"),
+                "clusterHits": Event["clusterHits"].array(library="np"),
+                "hitX": Event["Cluster_HitX"].array(library="np"),
+                "hitY": Event["Cluster_HitY"].array(library="np"),
+                "hitZ": Event["Cluster_HitZ"].array(library="np")
             }
             
             # Tree-dependent branches
             if which_tree == 0:
                 data.update({
-                    "clusterNumber": Event["clusterNumber"].array(),
-                    "hitT": Event["hitT"].array(),
-                    "hitPE": Event["hitPE"].array(),
-                    "hitDetID": Event["hitDetID"].array(),
+                    "clusterNumber": Event["clusterNumber"].array(library="np"),
+                    "hitT": Event["hitT"].array(library="np"),
+                    "hitPE": Event["hitPE"].array(library="np"),
+                    "hitDetID": Event["hitDetID"].array(library="np"),
                 })
             else:
                 data.update({
-                    "clusterNumber": Event["numberOfClusters"].array(),
-                    "hitT": Event["Cluster_HitT"].array(),
-                    "hitPE": Event["Cluster_HitPE"].array(),
-                    "hitDetID": Event["Cluster_HitDetID"].array(),
+                    "clusterNumber": Event["numberOfClusters"].array(library="np"),
+                    "hitT": Event["Cluster_HitT"].array(library="np"),
+                    "hitPE": Event["Cluster_HitPE"].array(library="np"),
+                    "hitDetID": Event["Cluster_HitDetID"].array(library="np"),
                 })
         
         return data
@@ -635,7 +635,7 @@ class AmBeNeutronProcessing:
         
         print(f"Processing {len(EN)} events...")
         
-        for i in trange(len(EN)):
+        for i in range(len(EN)):
             if ETT[i] not in good_events:
                 continue
 
@@ -1015,7 +1015,7 @@ def main():
     
     # Set file pattern based on campaign
     if campaign == 1:
-        file_pattern = re.compile(r'AmBe_(\d+)_v\d+\.ntuple\.root')
+        file_pattern = re.compile(r'BeamCluster_(\d+)\.root')
         print("✓ Using Campaign 1 file pattern: AmBe_<run>_v<version>.ntuple.root")
     elif campaign == 2:
         file_pattern = re.compile(r'BeamCluster_(\d+)\.root')
@@ -1033,8 +1033,9 @@ def main():
     # Directory configuration (matching AnalysisRun.py)
     #data_directory = '../AmBev2.0v4/'
     #waveform_dir = '../AmBev2.0v4/'
-    data_directory = '../BC_MainTAAmBe2.0v1/'
-    waveform_dir = '../AmBe_waveforms/'
+    #data_directory = '/pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v1/'
+    data_directory = '/pnfs/annie/persistent/users/dajana/AmBe/v1Outlier/'
+    waveform_dir = '/pnfs/annie/persistent/users/dajana/AmBe/v1Outlier/'
 
     
     print(f"\nDirectory Configuration:")
@@ -1105,3 +1106,24 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ---------------------------------------------------------------------------
+# ambe CLI integration
+# ---------------------------------------------------------------------------
+def run(ctx, argv=None):
+    """Run data processor with cuts from RunContext.
+
+    The legacy processor uses interactive prompts; this wrapper pre-sets cuts
+    from the config and calls run_analysis() directly on the processing object.
+    """
+    cuts = CutCriteria(
+        pe_max=float(ctx.cuts.get("pe_max", 100)),
+        ccb_max=float(ctx.cuts.get("charge_balance_max", 0.45)),
+    )
+    processor = AmBeNeutronProcessing(cuts=cuts)
+    processor.run_analysis()
+
+
+def cli(ctx, argv=None):
+    run(ctx, argv)

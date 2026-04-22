@@ -487,3 +487,17 @@ def process_events(event_data, good_events, x_pos, y_pos, z_pos,
     print(f'\nAfter selection cuts: {multiple_neutron_cand_count} AmBe multiple neutron candidates\n')
 
     return total_events, cosmic_events, neutron_cand_count, multiple_neutron_cand_count, event_ids
+
+# ---------------------------------------------------------------------------
+# ambe CLI integration
+# ---------------------------------------------------------------------------
+def run(ctx, argv=None):
+    """Not yet ported to RunContext API. Run this script directly."""
+    raise NotImplementedError(
+        f"This module ({__name__}) has not been ported to the ambe CLI yet. "
+        "Run it directly as a Python script."
+    )
+
+
+def cli(ctx, argv=None):
+    run(ctx, argv)

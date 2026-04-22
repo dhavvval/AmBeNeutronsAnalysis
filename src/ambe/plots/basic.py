@@ -1097,3 +1097,24 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ---------------------------------------------------------------------------
+# ambe CLI integration
+# ---------------------------------------------------------------------------
+def run(ctx, argv=None):
+    """Run basic plots using paths and cuts from RunContext."""
+    from ..io import inputs_from_ctx
+    csv_paths = inputs_from_ctx(ctx, "candidate_csvs")
+    data_dir = str(ctx.run_dir / "candidate_csvs") if not csv_paths else str(csv_paths[0].parent)
+    out_pdf = str(ctx.plot_path(ctx.filename("basic_plots", "pdf")))
+    analyzer = AmBeNeutronAnalyzer(data_directory=data_dir, output_pdf=out_pdf)
+    fc = ctx.fit_params
+    if fc:
+        analyzer.update_fitting_config(**{k: v for k, v in fc.items()
+                                          if k in analyzer.fitting_config})
+    analyzer.run_analysis(tasks=["2d_histograms", "1d_histograms"])
+
+
+def cli(ctx, argv=None):
+    run(ctx, argv)

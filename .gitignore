@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# Build / install
+build/
+dist/
+
+# Output artefacts (everything here should live under $AMBE_OUT, not the repo)
+# Kept for historical reasons; new runs must write to $AMBE_OUT.
+EventAmBeNeutronCandidatesData/
+TriggerSummary/
+verbose/
+OutputPlots/
+mc_results/
+mc_parquet/
+*.pdf
+*.png
+*.parquet
+*.npz
+
+# CSVs that are outputs (keep CSVs under configs/ or tests/ if they're inputs)
+*.csv
+!configs/**/*.csv
+!tests/**/*.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
