@@ -1,0 +1,14 @@
+run_name: mc_wcsim_lucho
+campaign: "MC WCSim Lucho"
+description: "Hit-time spread analysis on ANNIEEvent_MC_wcsimlucho_0.root"
+
+output_root: /Users/dajana/Documents/ambe_output
+
+inputs:
+  root_files:
+    - /Users/dajana/Documents/ANNIEEvent_MC_wcsimlucho_0.root
+
+cuts:
+  min_pulses_per_event: 1
+
+fit_params: {}

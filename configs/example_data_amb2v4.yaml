@@ -1,0 +1,34 @@
+# ------------------------------------------------------------------
+# Example real-data AmBe campaign configuration.
+# Reproduces the settings previously hardcoded in BasicPlots.py and
+# EfficiencyHeatmap.py for the AmBe 2.0v4 campaign.
+# ------------------------------------------------------------------
+
+run_name: amb2v4_beam_pe100_cb045
+campaign: "AmBe 2.0v4"
+description: "AmBe 2.0v4 analysis with PE < 100 and charge-balance < 0.45."
+
+inputs:
+  candidate_csvs:
+    - EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_fullwindowtest_*.csv
+  trigger_summary:
+    - TriggerSummary/AmBeTriggerSummary_v4ch5test.csv
+
+cuts:
+  pe_max: 100.0
+  charge_balance_max: 0.45
+
+fit_params:
+  time_bins: 70
+  time_range: [0, 70]
+  fit_min_time: 2.0
+  fit_max_time: 67.0
+  initial_amplitude: 200.0
+  initial_thermal_time: 5.0
+  initial_capture_time: 25.0
+  initial_background: 0.0
+
+reference:
+  # For the residual-efficiency heatmap. The AmBe 1.0 table used to be
+  # hardcoded in EfficiencyHeatmap.py.
+  comparison_campaign: "AmBe 1.0"

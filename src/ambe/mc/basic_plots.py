@@ -160,3 +160,18 @@ print(f"Weighted Average LMFIT Thermal Time: {lmfitThermalTime:.2f} ± {lmfitThe
 
 lmfitCaptureTime, lmfitCaptureTimeErr = weighted_average(lmfit_df, 'Tau', 'Tau_err')
 print(f"Weighted Average LMFIT Capture Time: {lmfitCaptureTime:.2f} ± {lmfitCaptureTimeErr:.2f} μs")    
+
+
+# ---------------------------------------------------------------------------
+# ambe CLI integration
+# ---------------------------------------------------------------------------
+def run(ctx, argv=None):
+    """Not yet ported to RunContext API. Run this script directly."""
+    raise NotImplementedError(
+        f"This module ({__name__}) has not been ported to the ambe CLI yet. "
+        "Run it directly as a Python script."
+    )
+
+
+def cli(ctx, argv=None):
+    run(ctx, argv)

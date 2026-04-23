@@ -29,7 +29,7 @@ class AmBeNeutronAnalyzer:
     """
     
     def __init__(self, data_directory: str = './EventAmBeNeutronCandidatesData/', 
-                 output_pdf: str = 'OpticsTest.pdf'):
+                 output_pdf: str = 'AmBevtestv4ch10.pdf'):
         self.data_directory = data_directory
         self.output_pdf = output_pdf
         self.source_groups = {}
@@ -83,7 +83,7 @@ class AmBeNeutronAnalyzer:
                 print(f"Warning: {key} is not a valid configuration parameter")
         print("Updated fitting configuration:", self.fitting_config)
 
-    def load_and_group_data(self, file_pattern: str = 'EventAmBeNeutronCandidates_test_*_OPTICS.csv'):
+    def load_and_group_data(self, file_pattern: str = 'EventAmBeNeutronCandidates_fullwindowtest_*.csv'):
         """Load CSV files and group them by source position."""
         files = self.data_directory
         csvs = glob.glob(os.path.join(files, file_pattern))
@@ -103,7 +103,7 @@ class AmBeNeutronAnalyzer:
                 continue
 
             # Extract run number using regex
-            match = re.search(r'_(\d+)\_OPTICS\.csv', filename)
+            match = re.search(r'_(\d+)\.csv', filename)
             if match:
                 run_number = int(match.group(1))
             else:
@@ -142,8 +142,9 @@ class AmBeNeutronAnalyzer:
         combined_df['clusterTime'] = combined_df['clusterTime'] / 1000
 
         # Extract relevant columns
-        combined_df = combined_df[(combined_df['clusterHits'] >= 10) & (combined_df['clusterPE'] < 60) & (combined_df['clusterChargeBalance'] < 0.5)]
+        #combined_df = combined_df[(combined_df['clusterHits'] >= 10) & (combined_df['clusterPE'] < ) & (combined_df['clusterChargeBalance'] < 0.5)]
         # & (combined_df['clusterPE'] < 60) & (combined_df['clusterChargeBalance'] < 0.5)]
+        combined_df = combined_df[(combined_df['clusterHits'] >= 10) ]
         
         EventID = combined_df['eventID'].value_counts()
         EventTime = combined_df['eventTankTime'].value_counts()
@@ -160,20 +161,26 @@ class AmBeNeutronAnalyzer:
         unique_events_df = combined_df.drop_duplicates(subset='eventTankTime').copy()
 
         # Parse neutronTofCorrection into arrays
-        unique_events_df['neutronTofCorrection'] = unique_events_df['neutronTofCorrection'].apply(
-            lambda x: np.array([float(val) for val in str(x).split()])
-            if pd.notna(x) and str(x).strip() else np.array([])
-        )
-        valid_arrays = [arr for arr in unique_events_df['neutronTofCorrection'].values if len(arr) > 0]
-        all_neutron_tof = np.concatenate(valid_arrays) if valid_arrays else np.array([])
+        if 'neutronTofCorrection' not in unique_events_df.columns:
+            unique_events_df['neutronTofCorrection'] = np.nan
+        else:
+            unique_events_df['neutronTofCorrection'] = unique_events_df['neutronTofCorrection'].apply(
+                lambda x: np.array([float(val) for val in str(x).split()])
+                if pd.notna(x) and str(x).strip() else np.array([])
+            )
+            valid_arrays = [arr for arr in unique_events_df['neutronTofCorrection'].values if len(arr) > 0]
+            all_neutron_tof = np.concatenate(valid_arrays) if valid_arrays else np.array([])
 
         # ToF corrected delta_t for all hits in all events
-        unique_events_df['allHitsDeltaT_TofCorrected'] = unique_events_df['allHitsDeltaT_TofCorrected'].apply(
-            lambda x: np.array([float(val) for val in str(x).split()])
-            if pd.notna(x) and str(x).strip() else np.array([])
-        )
-        valid_delta_t_arrays = [arr for arr in unique_events_df['allHitsDeltaT_TofCorrected'].values if len(arr) > 0]
-        all_delta_t_tof_corrected = np.concatenate(valid_delta_t_arrays) if valid_delta_t_arrays else np.array([])
+        if 'allHitsDeltaT_TofCorrected' not in unique_events_df.columns:
+            unique_events_df['allHitsDeltaT_TofCorrected'] = np.nan
+        else:
+            unique_events_df['allHitsDeltaT_TofCorrected'] = unique_events_df['allHitsDeltaT_TofCorrected'].apply(
+                lambda x: np.array([float(val) for val in str(x).split()])
+                if pd.notna(x) and str(x).strip() else np.array([])
+            )
+            valid_delta_t_arrays = [arr for arr in unique_events_df['allHitsDeltaT_TofCorrected'].values if len(arr) > 0]
+            all_delta_t_tof_corrected = np.concatenate(valid_delta_t_arrays) if valid_delta_t_arrays else np.array([])
 
         # Parse hitPE values (simple one-liner like neutronTofCorrection
         all_hits_pe = np.concatenate([np.array([float(v) for v in str(x).strip('[]').replace(',', ' ').split() if v.strip() and v != '...']) for x in combined_df['hitPE'] if not (pd.isna(x) or str(x).strip() in ('', '[]'))]) if any(not (pd.isna(x) or str(x).strip() in ('', '[]')) for x in combined_df['hitPE']) else np.array([])
@@ -199,11 +206,14 @@ class AmBeNeutronAnalyzer:
         multi_cluster_df['CvY'] = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[1]))
         multi_cluster_df['CvZ'] = multi_cluster_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))
         
-        multi_cluster_df["neutronTofCorrection"] = multi_cluster_df["neutronTofCorrection"].apply(
-            lambda x: np.array([float(val) for val in str(x).split()]) if pd.notna(x) and str(x).strip() else np.array([])
-        )
-        valid_arrays = [arr for arr in multi_cluster_df["neutronTofCorrection"].values if len(arr) > 0]
-        all_neutron_tof = np.concatenate(valid_arrays) if valid_arrays else np.array([])
+        if 'neutronTofCorrection' not in multi_cluster_df.columns:
+            multi_cluster_df['neutronTofCorrection'] = np.nan
+        else:
+            multi_cluster_df["neutronTofCorrection"] = multi_cluster_df["neutronTofCorrection"].apply(
+                lambda x: np.array([float(val) for val in str(x).split()]) if pd.notna(x) and str(x).strip() else np.array([])
+            )
+            valid_arrays = [arr for arr in multi_cluster_df["neutronTofCorrection"].values if len(arr) > 0]
+            all_neutron_tof = np.concatenate(valid_arrays) if valid_arrays else np.array([])
 
         multi_cluster_df['first_cluster_time'] = multi_cluster_df.groupby('eventTankTime')['clusterTime'].transform('min')
         multi_cluster_df['delta_t'] = multi_cluster_df['clusterTime'] - multi_cluster_df['first_cluster_time']
@@ -237,8 +247,8 @@ class AmBeNeutronAnalyzer:
             'hit_delta_t': hit_delta_t,
             'single_hit_delta_t': single_hit_delta_t,
             'multi_hit_delta_t': multi_hit_delta_t,
-            'Neutron_vertex_tof': all_neutron_tof,
-            'all_delta_t_tof_corrected': all_delta_t_tof_corrected,
+            #'Neutron_vertex_tof': all_neutron_tof,
+            #'all_delta_t_tof_corrected': all_delta_t_tof_corrected,
             'all_hits_pe': all_hits_pe,
             'first_clusters': first_clusters,
             'subsequent_clusters': subsequent_clusters,
@@ -384,7 +394,7 @@ class AmBeNeutronAnalyzer:
         hit_delta_t = data_dict['hit_delta_t']
         single_hit_delta_t = data_dict['single_hit_delta_t']
         multi_hit_delta_t = data_dict['multi_hit_delta_t']
-        Neutron_vertex_tof = data_dict['Neutron_vertex_tof']
+       # Neutron_vertex_tof = data_dict['Neutron_vertex_tof']
         all_hits_pe = data_dict['all_hits_pe']
         EventID = data_dict['EventID']
 
@@ -407,7 +417,7 @@ class AmBeNeutronAnalyzer:
                 color="lightblue", linewidth=0.5, align='left', density=False)
         plt.xlabel('Neutron multiplicity for Events')
         plt.ylabel('Counts')
-        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v1 (CH >= 10 & PE < 60 & CCB < 0.5), run positions:({sx}, {sy}, {sz})')
+        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 100 & CCB < 0.45), run positions:({sx}, {sy}, {sz})')
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         #plt.show()
@@ -418,7 +428,7 @@ class AmBeNeutronAnalyzer:
                 color="lightblue", linewidth=0.5, align='left', density=False, log=True)
         plt.xlabel('Neutron multiplicity for Events')
         plt.ylabel('Counts')
-        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v1 (CH >= 10 & PE < 60 & CCB < 0.5), run positions:({sx}, {sy}, {sz})')
+        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v4 (PE < 100 & CCB < 0.45), run positions:({sx}, {sy}, {sz})')
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         #plt.show()
@@ -431,7 +441,7 @@ class AmBeNeutronAnalyzer:
         plt.hist(PE, bins=70, range=(0, 70), histtype='step', color='blue', label="Data")
         plt.xlabel("Cluster PE")
         plt.ylabel("Counts")
-        plt.title(f"PE Spectrum for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
+        plt.title(f"PE Spectrum for AmBe 2.0v4, run positions:({sx}, {sy}, {sz})")
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         #plt.show()
@@ -441,7 +451,7 @@ class AmBeNeutronAnalyzer:
         plt.hist(hit_delta_t, bins=200, color='coral', edgecolor='black')
         plt.xlabel("hit Δt (ns)")
         plt.ylabel("Counts")
-        plt.title(f"Δt Distribution for cluster collection for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
+        plt.title(f"Δt Distribution for cluster collection for AmBe 2.0v4, run positions:({sx}, {sy}, {sz})")
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         #plt.show()
@@ -469,7 +479,7 @@ class AmBeNeutronAnalyzer:
         #plt.show()
         plt.close()
 
-        plt.figure(figsize=(10, 6))
+        '''plt.figure(figsize=(10, 6))
         plt.hist(Neutron_vertex_tof, bins=300, range=(-20, 50), color='coral', edgecolor='black')
         plt.xlabel("Neutron Vertex Distance from Source (ns)")
         plt.ylabel("Counts")
@@ -477,7 +487,7 @@ class AmBeNeutronAnalyzer:
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         #plt.show()
-        plt.close()
+        plt.close()'''
 
         # Plot all hits PE values
         if len(all_hits_pe) > 0:
@@ -485,7 +495,7 @@ class AmBeNeutronAnalyzer:
             plt.hist(all_hits_pe, bins=50, range=(0, 20), log=True, color='skyblue', edgecolor='black')
             plt.xlabel("Hit PE Values")
             plt.ylabel("Counts")
-            plt.title(f"All Cluster Hits PE Distribution for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
+            plt.title(f"All Cluster Hits PE Distribution for AmBe 2.0v4, run positions:({sx}, {sy}, {sz})")
             plt.tight_layout()
             pdf.savefig(bbox_inches='tight')
             #plt.show()
@@ -506,7 +516,7 @@ class AmBeNeutronAnalyzer:
         plt.hist(all_delta_t_tof_corrected, bins=300, range=(-20, 70), color='coral', edgecolor='black')
         plt.xlabel("All Hits Δt ToF Corrected (ns)")
         plt.ylabel("Counts")
-        plt.title(f"All Hits Δt ToF Corrected for AmBe 2.0v1 for all ToF, run positions:({sx}, {sy}, {sz})")
+        plt.title(f"All Hits Δt ToF Corrected for AmBe 2.0v4 for all ToF, run positions:({sx}, {sy}, {sz})")
         plt.tight_layout()
         #plt.show()
         #pdf.savefig(bbox_inches='tight')
@@ -688,7 +698,7 @@ class AmBeNeutronAnalyzer:
             plt.xlabel(fr"Cluster Time [$\mu s$]")
             plt.ylabel("Counts")
             plt.legend()
-            plt.title(f"Neutron Capture Time (scipy) for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
+            plt.title(f"Neutron Capture Time (scipy) for AmBe 2.0v4, run positions:({sx}, {sy}, {sz})")
             plt.tight_layout()
             pdf.savefig(bbox_inches='tight')
             plt.close()
@@ -700,7 +710,7 @@ class AmBeNeutronAnalyzer:
             plt.axhline(0, color='gray', linestyle='--')
             plt.xlabel("Time [μs]")
             plt.ylabel("Normalized Residual")
-            plt.title(f"Fit Residuals (scipy) for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
+            plt.title(f"Fit Residuals (scipy) for AmBe 2.0v4, run positions:({sx}, {sy}, {sz})")
             plt.tight_layout()
             pdf.savefig(bbox_inches='tight')
             plt.close()
@@ -929,12 +939,12 @@ class AmBeNeutronAnalyzer:
         sns.heatmap(pivot_capturetime, annot=labels_SE_capture, fmt="", cmap="YlOrBr", 
                    cbar=True, annot_kws={"size": 12}, linecolor='black', linewidths=0.2, 
                    cbar_kws={"label": "Capture Time (μs)"})
-        plt.title("Capture Time of AmBe 2.0v1 (LMFIT)")
+        plt.title("Capture Time of AmBe 2.0v4 (LMFIT)")
         plt.xlabel("Port")
         plt.ylabel("Y Position")
         plt.gca().invert_yaxis()
         plt.tight_layout()
-        plt.savefig("OutputPlots/CaptureTime_AmBeNeutrons_AmBe2.0v1_LMFIT.png", dpi=300, bbox_inches='tight')
+        plt.savefig("OutputPlots/CaptureTime_AmBeNeutrons_AmBe2.0v4_LMFIT.png", dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
 
@@ -943,12 +953,12 @@ class AmBeNeutronAnalyzer:
         sns.heatmap(pivot_thermal_time, annot=labels_SE_thermal, fmt="", cmap="YlOrBr", 
                    cbar=True, annot_kws={"size": 12}, linecolor='black', linewidths=0.2, 
                    cbar_kws={"label": "Thermal Time (μs)"})
-        plt.title("Thermal Time of AmBe 2.0v1 (LMFIT)")
+        plt.title("Thermal Time of AmBe 2.0v4 (LMFIT)")
         plt.xlabel("Port")
         plt.ylabel("Y Position")
         plt.gca().invert_yaxis()
         plt.tight_layout()
-        plt.savefig("OutputPlots/ThermalTime_AmBeNeutrons_AmBe2.0v1_LMFIT.png", dpi=300, bbox_inches='tight')
+        plt.savefig("OutputPlots/ThermalTime_AmBeNeutrons_AmBe2.0v4_LMFIT.png", dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
 
@@ -957,12 +967,12 @@ class AmBeNeutronAnalyzer:
         sns.heatmap(pivot_lenEvents, annot=True, fmt="", cmap="YlOrBr", cbar=True, 
                    annot_kws={"size": 12}, linecolor='black', linewidths=0.2, 
                    cbar_kws={"label": "%"})
-        plt.title("Normalized Statistics of all AmBe Neutron-like Events for AmBe 2.0v1")
+        plt.title("Normalized Statistics of all AmBe Neutron-like Events for AmBe 2.0v4")
         plt.xlabel("Port")
         plt.ylabel("Y Position")
         plt.gca().invert_yaxis()
         plt.tight_layout()
-        plt.savefig("OutputPlots/Statistics_AmBeNeutronEvents_AmBe2.0v1.png", dpi=300, bbox_inches='tight')
+        plt.savefig("OutputPlots/Statistics_AmBeNeutronEvents_AmBe2.0v4.png", dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
 
@@ -1001,7 +1011,7 @@ class AmBeNeutronAnalyzer:
 
         return Info
 
-    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_test_*_OPTICS.csv',
+    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_fullwindowtest_*.csv',
                     tasks: List[str] = None):
         """
         Run the complete analysis with specified tasks.
@@ -1087,3 +1097,24 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ---------------------------------------------------------------------------
+# ambe CLI integration
+# ---------------------------------------------------------------------------
+def run(ctx, argv=None):
+    """Run basic plots using paths and cuts from RunContext."""
+    from ..io import inputs_from_ctx
+    csv_paths = inputs_from_ctx(ctx, "candidate_csvs")
+    data_dir = str(ctx.run_dir / "candidate_csvs") if not csv_paths else str(csv_paths[0].parent)
+    out_pdf = str(ctx.plot_path(ctx.filename("basic_plots", "pdf")))
+    analyzer = AmBeNeutronAnalyzer(data_directory=data_dir, output_pdf=out_pdf)
+    fc = ctx.fit_params
+    if fc:
+        analyzer.update_fitting_config(**{k: v for k, v in fc.items()
+                                          if k in analyzer.fitting_config})
+    analyzer.run_analysis(tasks=["2d_histograms", "1d_histograms"])
+
+
+def cli(ctx, argv=None):
+    run(ctx, argv)

@@ -1,0 +1,37 @@
+# ------------------------------------------------------------------
+# Example MC OPTICS run.
+# Copy this file to configs/<something>.yaml, edit, and run:
+#   ambe mc process --config configs/<something>.yaml
+#   ambe mc optics  --config configs/<something>.yaml
+#   ambe pipeline mc --config configs/<something>.yaml   # all of the above
+#
+# Everything that varies between runs lives here. Nothing else in the
+# code should be hardcoded per-campaign.
+# ------------------------------------------------------------------
+
+run_name: mc_optics_trial01            # appears in every output filename
+campaign: "MC AmBe Darknoise"          # appears in every plot title
+description: "OPTICS training on MC AmBe with per-pulse darknoise truth labels."
+
+# Override $AMBE_OUT from the environment if you want a per-run location:
+# output_root: /pnfs/annie/persistent/users/dajana/ambe_output/
+
+inputs:
+  root_files:
+    - /exp/annie/app/users/dajana/EB_BC_TA/ANNIETree_MC.root
+  # Example glob form:
+  # root_files:
+  #   - /pnfs/annie/persistent/users/dajana/mc/BeamCluster_*.root
+
+cuts:
+  # nothing MC-specific yet; placeholder for reproducibility
+  min_pulses_per_event: 3
+
+fit_params: {}
+
+# Free-form block; anything here is accessible as ctx.extra[...]
+optics:
+  min_samples: [5, 10, 20]
+  xi: [0.01, 0.05, 0.10]
+  # null = use StandardScaler alone; a float pre-multiplies t before scaling.
+  t_scale: [null, 1.0, 5.0]

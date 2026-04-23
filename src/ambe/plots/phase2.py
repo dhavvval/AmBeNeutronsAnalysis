@@ -292,3 +292,18 @@ plt.title("Best fit multiplicity distributions to central source data")
 plt.xlabel("Neutron candidate multiplicity")
 plt.show()
 
+
+
+# ---------------------------------------------------------------------------
+# ambe CLI integration
+# ---------------------------------------------------------------------------
+def run(ctx, argv=None):
+    """Not yet ported to RunContext API. Run this script directly."""
+    raise NotImplementedError(
+        f"This module ({__name__}) has not been ported to the ambe CLI yet. "
+        "Run it directly as a Python script."
+    )
+
+
+def cli(ctx, argv=None):
+    run(ctx, argv)
