@@ -1,0 +1,19 @@
+run_name: mc_local_trial
+campaign: "MC AmBe Local"
+description: "OPTICS training on local ANNIETree_MC.root file."
+
+output_root: /Users/dajana/Documents/ambe_output
+
+inputs:
+  root_files:
+    - /Users/dajana/Documents/ANNIETree_MC.root
+
+cuts:
+  min_pulses_per_event: 3
+
+fit_params: {}
+
+optics:
+  min_samples: [5, 10, 20]
+  xi: [0.01, 0.05, 0.10]
+  t_scale: [null, 1.0, 5.0]

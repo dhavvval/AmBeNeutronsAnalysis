@@ -31,6 +31,7 @@ PULSE_BRANCHES = [
     "hitChankey", "hitX", "hitY", "hitZ",
     "DirectParent_PMTID", "DirectParent_HitTime",
     "DirectParent_NeutronAncestorClass", "DirectParent_IsDarknoise",
+    "DirectParent_NeutronAncestorTrackID", "DirectParent_NeutronAncestorPDG",
 ]
 
 CLUSTER_BRANCHES = [
@@ -83,12 +84,17 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool):
             pulse_arr["hitY"][i],
             pulse_arr["hitZ"][i],
         )
-        for pmt, tp, cls, dn in zip(
+        has_tid = "DirectParent_NeutronAncestorTrackID" in wanted_pulse
+        has_pdg = "DirectParent_NeutronAncestorPDG" in wanted_pulse
+        tids = pulse_arr["DirectParent_NeutronAncestorTrackID"][i] if has_tid else None
+        pdgs = pulse_arr["DirectParent_NeutronAncestorPDG"][i] if has_pdg else None
+
+        for j, (pmt, tp, cls, dn) in enumerate(zip(
             pulse_arr["DirectParent_PMTID"][i],
             pulse_arr["DirectParent_HitTime"][i],
             pulse_arr["DirectParent_NeutronAncestorClass"][i],
             pulse_arr["DirectParent_IsDarknoise"][i],
-        ):
+        )):
             pmt_i = int(pmt)
             if pmt_i not in lookup:
                 unmatched += 1
@@ -96,13 +102,15 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool):
             x, y, z = lookup[pmt_i]
             cls_i = int(cls)
             pulse_rows.append({
-                "eventID": event_id,
-                "pmtID": pmt_i,
-                "t": float(tp),
+                "eventID":    event_id,
+                "pmtID":      pmt_i,
+                "t":          float(tp),
                 "x": x, "y": y, "z": z,
-                "truth_class": cls_i,
+                "truth_class":  cls_i,
                 "is_darknoise": int(dn),
-                "is_neutron": int(cls_i in NEUTRON_CLASSES),
+                "is_neutron":   int(cls_i in NEUTRON_CLASSES),
+                "ancestor_trackID": int(tids[j]) if tids is not None else -1,
+                "ancestor_pdg":     int(pdgs[j]) if pdgs is not None else -1,
             })
 
         if cluster_arr is not None:
