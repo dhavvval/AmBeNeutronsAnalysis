@@ -261,8 +261,11 @@ def extract(root_path: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
             np.array(ak.to_list(arr["hitPMTType"][i]), dtype=int)
             if "hitPMTType" in available else np.full(len(hit_ck), -1, dtype=int)
         )
+        # DirectParent_PDGs is a vector-of-vectors (one inner list per hit);
+        # take the first element of each inner list as the primary PDG.
         dp_pdg = (
-            np.array(ak.to_list(arr["DirectParent_PDGs"][i]), dtype=int)
+            np.array([inner[0] if (inner and len(inner) > 0) else -999
+                      for inner in ak.to_list(arr["DirectParent_PDGs"][i])], dtype=int)
             if "DirectParent_PDGs" in available else np.full(len(dp_ck), -999, dtype=int)
         )
 
