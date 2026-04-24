@@ -9,7 +9,7 @@ inputs:
     - /Users/dajana/Documents/ANNIETree_MC.root
 
 cuts:
-  min_pulses_per_event: 3
+  min_pulses_per_event: 5
 
 fit_params: {}
 

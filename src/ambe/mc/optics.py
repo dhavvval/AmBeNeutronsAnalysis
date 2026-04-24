@@ -30,6 +30,8 @@ from ..context import RunContext
 
 
 NEUTRON_CLASSES = {1, 2, 3, 4}
+NEUTRON_PDG     = 2112
+MIN_MATCH_FRAC  = 0.5   # fraction of cluster hits that must come from dominant trackID
 
 
 # --------------------------------------------------------------------------- #
@@ -84,6 +86,70 @@ def classify_clusters_by_majority(labels, truth_class):
     return predicted_is_neutron
 
 
+def _optics_cluster_outcomes(df_event, labels) -> dict:
+    """
+    Match predicted clusters (OPTICS or CF labels) to truth neutron clusters
+    defined by unique ancestor_trackID where ancestor_pdg == 2112.
+
+    A predicted cluster is *matched* if its dominant neutron trackID accounts
+    for >= MIN_MATCH_FRAC of all its member hits.
+
+    Returns keys: n_truth, n_predicted, n_matched, n_spurious, n_missed,
+                  n_split, agreement (bool: n_matched==n_truth, no spurious, no split).
+    """
+    labels      = np.asarray(labels, dtype=int)
+    track_ids   = df_event["ancestor_trackID"].to_numpy(int)
+    pdgs        = df_event["ancestor_pdg"].to_numpy(int)
+
+    truth_trackIDs = set(
+        int(tid) for tid, pdg in zip(track_ids, pdgs)
+        if pdg == NEUTRON_PDG and tid >= 0
+    )
+    n_truth = len(truth_trackIDs)
+
+    unique_labels  = [c for c in np.unique(labels) if c >= 0]
+    n_predicted    = len(unique_labels)
+
+    matched_tids  = set()
+    split_tids    = set()
+    n_spurious    = 0
+
+    for c in unique_labels:
+        mask    = labels == c
+        n_total = int(mask.sum())
+
+        # dominant neutron trackID among member hits
+        neutron_mask = mask & (pdgs == NEUTRON_PDG) & (track_ids >= 0)
+        if not neutron_mask.any():
+            n_spurious += 1
+            continue
+
+        tids_in_cluster, counts = np.unique(track_ids[neutron_mask], return_counts=True)
+        dom_tid  = int(tids_in_cluster[np.argmax(counts)])
+        dom_frac = float(counts.max()) / n_total
+
+        if dom_tid in truth_trackIDs and dom_frac >= MIN_MATCH_FRAC:
+            if dom_tid in matched_tids:
+                split_tids.add(dom_tid)
+            matched_tids.add(dom_tid)
+        else:
+            n_spurious += 1
+
+    n_matched = len(matched_tids)
+    n_missed  = len(truth_trackIDs - matched_tids)
+    n_split   = len(split_tids)
+
+    return {
+        "n_truth":     n_truth,
+        "n_predicted": n_predicted,
+        "n_matched":   n_matched,
+        "n_spurious":  n_spurious,
+        "n_missed":    n_missed,
+        "n_split":     n_split,
+        "agreement":   int(n_matched == n_truth and n_spurious == 0 and n_split == 0),
+    }
+
+
 def event_metrics(df_event, labels, method_name):
     truth_class = df_event["truth_class"].to_numpy(int)
     truth_is_neutron = df_event["is_neutron"].to_numpy(int).astype(bool)
@@ -98,7 +164,7 @@ def event_metrics(df_event, labels, method_name):
     f1 = f1_score(truth_is_neutron, predicted_is_neutron, zero_division=0)
     ari = adjusted_rand_score(truth_class, labels) if len(np.unique(labels)) > 1 else np.nan
 
-    return {
+    row = {
         "eventID": int(df_event["eventID"].iloc[0]),
         "method": method_name,
         "n_pulses": int(len(df_event)),
@@ -110,6 +176,8 @@ def event_metrics(df_event, labels, method_name):
         "ari": ari,
         "n_clusters": int((np.unique(labels) >= 0).sum()),
     }
+    row.update(_optics_cluster_outcomes(df_event, labels))
+    return row
 
 
 # --------------------------------------------------------------------------- #
@@ -165,6 +233,13 @@ def summarise(metrics: pd.DataFrame) -> pd.DataFrame:
         mean_f1=("f1", "mean"),
         mean_ari=("ari", "mean"),
         mean_n_clusters=("n_clusters", "mean"),
+        mean_n_truth=("n_truth", "mean"),
+        mean_n_predicted=("n_predicted", "mean"),
+        mean_matched=("n_matched", "mean"),
+        mean_spurious=("n_spurious", "mean"),
+        mean_missed=("n_missed", "mean"),
+        mean_split=("n_split", "mean"),
+        agreement_rate=("agreement", "mean"),
     ).reset_index()
 
 
