@@ -14,6 +14,7 @@ cuts:
 fit_params: {}
 
 optics:
-  min_samples: [5, 10, 20]
+  min_samples: [3, 5, 8]
   xi: [0.01, 0.05, 0.10]
-  t_scale: [null, 1.0, 5.0]
+  t_unit_ns: [25, 40, 50, 75]
+  truth_window_ns: 75.0

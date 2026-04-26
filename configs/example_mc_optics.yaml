@@ -31,7 +31,21 @@ fit_params: {}
 
 # Free-form block; anything here is accessible as ctx.extra[...]
 optics:
-  min_samples: [5, 10, 20]
-  xi: [0.01, 0.05, 0.10]
-  # null = use StandardScaler alone; a float pre-multiplies t before scaling.
-  t_scale: [null, 1.0, 5.0]
+  min_samples: [3, 5, 8]       # smaller range: ANNIE clusters are ~16 hits on average
+
+  xi: [0.01, 0.05, 0.10]       # steep-upslope threshold for cluster boundary detection
+
+  # t_unit_ns: physically motivated time-axis scaling (replaces the old t_scale).
+  # 1 OPTICS distance unit in time = t_unit_ns nanoseconds.
+  # The spatial axes are StandardScaler'd to unit std (~0.75 m for ANNIE).
+  # Choosing t_unit_ns = 40 makes 40 ns in time look like 1 spatial std deviation —
+  # roughly equal weight, since the capture gamma burst spans ~40 ns (median).
+  # Grid spans the range from "time dominates" (25 ns) to "space dominates" (75 ns).
+  t_unit_ns: [25, 40, 50, 75]
+
+  # truth_window_ns: single value (not swept) defining recoverable truth signal.
+  # Hits outside ±37.5 ns of their cluster's median time are thermalization
+  # outliers and are excluded from purity/recall evaluation.
+  # Derived from 10k-event sensitivity analysis: median frac_in jumps to 1.0
+  # at 75 ns and gains < 2 % beyond that (bimodal gap confirmed).
+  truth_window_ns: 75.0
