@@ -18,3 +18,7 @@ optics:
   xi: [0.01, 0.05, 0.10]
   t_unit_ns: [25, 40, 50, 75]
   truth_window_ns: 75.0
+  # hit_prefilter_ns: keep only hits within this window of any CF cluster time.
+  # Reduces hits/event from ~200-500 → ~30-50, giving ~25x OPTICS speedup.
+  # 2000 ns = ±1000 ns around CF cluster time. Set to 0 to disable.
+  hit_prefilter_ns: 2000.0

@@ -64,11 +64,59 @@ from sklearn.preprocessing import StandardScaler
 from ..context import RunContext
 
 
-NEUTRON_CLASSES = {1, 2, 3, 4}
-NEUTRON_PDG     = 2112
-MIN_MATCH_FRAC  = 0.5     # fraction of cluster hits from dominant trackID to call it matched
-DEFAULT_T_UNIT  = 50.0    # ns — default time-axis unit (see module docstring)
-DEFAULT_WINDOW  = 75.0    # ns — default truth window (see module docstring)
+NEUTRON_CLASSES   = {1, 2, 3, 4}
+NEUTRON_PDG       = 2112
+MIN_MATCH_FRAC    = 0.5     # fraction of cluster hits from dominant trackID to call it matched
+DEFAULT_T_UNIT    = 50.0    # ns — default time-axis unit (see module docstring)
+DEFAULT_WINDOW    = 75.0    # ns — default truth window (see module docstring)
+DEFAULT_PREFILTER = 2000.0  # ns — default hit pre-filter window (see _prefilter_hits)
+
+
+# --------------------------------------------------------------------------- #
+# Hit pre-filter  (performance-critical)
+# --------------------------------------------------------------------------- #
+
+def _prefilter_hits(df_event: pd.DataFrame,
+                    df_clusters,
+                    prefilter_ns: float = DEFAULT_PREFILTER) -> pd.DataFrame:
+    """
+    Reduce the number of hits fed to OPTICS to those within a time window
+    around any ClusterFinder cluster time.
+
+    Why this matters
+    ----------------
+    The processor writes *every* detector hit (dark noise + all physics),
+    so a typical WCSim event can contain 200-500+ hits spread across a long
+    event window.  OPTICS is O(n² log n), so going from 200 → 40 hits is a
+    25× speedup per fit — turning an overnight run into ~10 minutes.
+
+    The filter keeps hits within ±(prefilter_ns/2) of any CF cluster time.
+    This captures all neutron capture hits (within ~40 ns of the cluster)
+    plus a small fraction of dark noise from the same time region.  OPTICS
+    still needs to classify that dark noise — it just doesn't need to see the
+    dark noise from the other 49 µs of the event.
+
+    Fallback behaviour
+    ------------------
+    - If df_clusters is None or empty: no filter is applied (return all hits).
+    - If the filter removes so many hits that fewer than 2 remain: return
+      all hits (avoids pathological empty-event edge cases).
+    """
+    if df_clusters is None or len(df_clusters) == 0:
+        return df_event
+
+    ct      = df_clusters["clusterTime"].to_numpy(float)
+    hit_t   = df_event["t"].to_numpy(float)
+    half_w  = prefilter_ns / 2.0
+
+    mask = np.zeros(len(df_event), dtype=bool)
+    for c in ct:
+        mask |= (np.abs(hit_t - c) <= half_w)
+
+    # Keep original integer index — caller uses it to re-align labels back
+    # onto the full df_event via np indexing.  Do NOT reset_index here.
+    filtered = df_event[mask]
+    return filtered if len(filtered) >= 2 else df_event
 
 
 # --------------------------------------------------------------------------- #
@@ -270,16 +318,22 @@ def _optics_cluster_outcomes(df_event: pd.DataFrame,
 def event_metrics(df_event: pd.DataFrame,
                   labels: np.ndarray,
                   method_name: str,
-                  truth_window_ns: float = DEFAULT_WINDOW) -> dict:
+                  truth_window_ns: float = DEFAULT_WINDOW,
+                  truth_neutron_mask: np.ndarray = None) -> dict:
     """
     Compute per-event metrics for one set of OPTICS (or CF) labels.
 
     truth_window_ns controls which neutron hits count as "recoverable signal"
     for purity/recall/F1.  Thermalization-outlier hits outside the window are
     excluded from the truth signal definition (treated as acceptable noise).
+
+    truth_neutron_mask : optional pre-computed boolean array from
+        _apply_truth_window().  Pass this when calling inside the grid loop to
+        avoid recomputing the same mask for every hyperparameter combination.
     """
     truth_class        = df_event["truth_class"].to_numpy(int)
-    truth_neutron_mask = _apply_truth_window(df_event, truth_window_ns)
+    if truth_neutron_mask is None:
+        truth_neutron_mask = _apply_truth_window(df_event, truth_window_ns)
 
     predicted_is_neutron = classify_clusters_by_majority(labels, truth_class)
 
@@ -314,11 +368,12 @@ def event_metrics(df_event: pd.DataFrame,
 # --------------------------------------------------------------------------- #
 
 def train_and_evaluate(ctx: RunContext,
-                       min_samples_list:  Sequence[int]   = (5,),
-                       xi_list:           Sequence[float] = (0.05,),
-                       t_unit_ns_list:    Sequence[float] = (DEFAULT_T_UNIT,),
-                       truth_window_ns:   float           = DEFAULT_WINDOW,
-                       min_pulses_per_event: int          = 3) -> pd.DataFrame:
+                       min_samples_list:    Sequence[int]   = (5,),
+                       xi_list:             Sequence[float] = (0.05,),
+                       t_unit_ns_list:      Sequence[float] = (DEFAULT_T_UNIT,),
+                       truth_window_ns:     float           = DEFAULT_WINDOW,
+                       hit_prefilter_ns:    float           = DEFAULT_PREFILTER,
+                       min_pulses_per_event: int            = 3) -> pd.DataFrame:
     """
     Sweep the OPTICS hyperparameter grid and evaluate against truth.
 
@@ -331,8 +386,13 @@ def train_and_evaluate(ctx: RunContext,
         Single value (not swept) defining the truth signal window.
         Hits outside ±(truth_window_ns/2) of their cluster's median time
         are not counted as recoverable signal.  Default 75 ns.
+    hit_prefilter_ns : float
+        Time window (ns) around each CF cluster time to keep hits for OPTICS.
+        Reduces the per-event hit count from ~200-500 (all detector hits) to
+        ~30-50 (hits near the capture region), giving a ~25x OPTICS speedup.
+        Set to 0 or np.inf to disable.  Default 2000 ns.
     """
-    pulses_path  = ctx.parquet_path(f"{ctx.run_name}__pulses")
+    pulses_path   = ctx.parquet_path(f"{ctx.run_name}__pulses")
     clusters_path = ctx.parquet_path(f"{ctx.run_name}__clusterfinder")
     if not pulses_path.exists():
         raise FileNotFoundError(
@@ -344,8 +404,11 @@ def train_and_evaluate(ctx: RunContext,
 
     rows      = []
     event_ids = pulses["eventID"].unique()
-    print(f"[mc.optics] {len(event_ids)} events, {len(pulses)} pulses")
+    n_hits_after_filter = []
+
+    print(f"[mc.optics] {len(event_ids)} events, {len(pulses)} total hits")
     print(f"[mc.optics] truth_window_ns={truth_window_ns} ns  |  "
+          f"hit_prefilter_ns={hit_prefilter_ns} ns  |  "
           f"t_unit_ns grid={list(t_unit_ns_list)}")
 
     for evid in event_ids:
@@ -353,26 +416,65 @@ def train_and_evaluate(ctx: RunContext,
         if len(df_ev) < min_pulses_per_event:
             continue
 
+        df_cl = (clusters[clusters["eventID"] == evid].reset_index(drop=True)
+                 if clusters is not None else None)
+
+        # --- Performance: pre-filter hits to CF cluster time window ---
+        # Reduces n_hits from ~200-500 to ~30-50, giving ~25x OPTICS speedup.
+        # Truth mask and CF baseline still use the FULL df_ev so truth
+        # accounting is unaffected by the filter.
+        if hit_prefilter_ns > 0 and not np.isinf(hit_prefilter_ns):
+            df_optics = _prefilter_hits(df_ev, df_cl, hit_prefilter_ns)
+        else:
+            df_optics = df_ev
+        n_hits_after_filter.append(len(df_optics))
+
+        # --- Performance: compute truth mask ONCE per event (not per config) ---
+        truth_mask = _apply_truth_window(df_ev, truth_window_ns)
+
         # --- OPTICS grid sweep ---
         for ms, xi, t_unit in itertools.product(min_samples_list, xi_list,
                                                 t_unit_ns_list):
-            labels = run_optics_on_event(df_ev, min_samples=ms, xi=xi,
-                                         t_unit_ns=t_unit)
-            row = event_metrics(df_ev, labels, "optics",
-                                truth_window_ns=truth_window_ns)
+            labels_optics = run_optics_on_event(df_optics, min_samples=ms,
+                                                xi=xi, t_unit_ns=t_unit)
+
+            # Re-align OPTICS labels onto the full df_ev length.
+            # _prefilter_hits preserves the original df_ev integer index, so
+            # df_optics.index maps directly back into [0, len(df_ev)-1].
+            # Hits excluded by the filter are assigned noise label (-1).
+            if len(df_optics) < len(df_ev):
+                labels_full = np.full(len(df_ev), -1, dtype=int)
+                labels_full[df_optics.index] = labels_optics
+            else:
+                labels_full = labels_optics
+
+            row = event_metrics(df_ev, labels_full, "optics",
+                                truth_window_ns=truth_window_ns,
+                                truth_neutron_mask=truth_mask)
             row.update({"min_samples": ms, "xi": xi, "t_unit_ns": t_unit,
-                        "truth_window_ns": truth_window_ns})
+                        "truth_window_ns": truth_window_ns,
+                        "hit_prefilter_ns": hit_prefilter_ns,
+                        "n_hits_optics": len(df_optics)})
             rows.append(row)
 
-        # --- ClusterFinder baseline (same truth window for fair comparison) ---
-        if clusters is not None:
-            df_cl     = clusters[clusters["eventID"] == evid].reset_index(drop=True)
+        # --- ClusterFinder baseline (full event, same truth window) ---
+        if df_cl is not None:
             labels_cf = assign_clusterfinder_labels(df_ev, df_cl)
             row = event_metrics(df_ev, labels_cf, "clusterfinder",
-                                truth_window_ns=truth_window_ns)
+                                truth_window_ns=truth_window_ns,
+                                truth_neutron_mask=truth_mask)
             row.update({"min_samples": np.nan, "xi": np.nan,
-                        "t_unit_ns": np.nan, "truth_window_ns": truth_window_ns})
+                        "t_unit_ns": np.nan,
+                        "truth_window_ns": truth_window_ns,
+                        "hit_prefilter_ns": np.nan,
+                        "n_hits_optics": len(df_ev)})
             rows.append(row)
+
+    if n_hits_after_filter:
+        print(f"[mc.optics] hits fed to OPTICS: "
+              f"mean={np.mean(n_hits_after_filter):.0f}  "
+              f"median={np.median(n_hits_after_filter):.0f}  "
+              f"max={np.max(n_hits_after_filter)}")
 
     return pd.DataFrame(rows)
 
@@ -403,13 +505,14 @@ def summarise(metrics: pd.DataFrame) -> pd.DataFrame:
 
 def _grid_from_ctx(ctx: RunContext):
     optics_block     = ctx.extra.get("optics", {}) or {}
-    min_samples      = optics_block.get("min_samples",   [5])
-    xi               = optics_block.get("xi",            [0.05])
-    t_unit_ns        = optics_block.get("t_unit_ns",     [DEFAULT_T_UNIT])
-    truth_window_ns  = float(optics_block.get("truth_window_ns", DEFAULT_WINDOW))
+    min_samples      = optics_block.get("min_samples",      [5])
+    xi               = optics_block.get("xi",               [0.05])
+    t_unit_ns        = optics_block.get("t_unit_ns",        [DEFAULT_T_UNIT])
+    truth_window_ns  = float(optics_block.get("truth_window_ns",  DEFAULT_WINDOW))
+    hit_prefilter_ns = float(optics_block.get("hit_prefilter_ns", DEFAULT_PREFILTER))
 
     t_unit_ns = [float(v) for v in t_unit_ns]
-    return tuple(min_samples), tuple(xi), tuple(t_unit_ns), truth_window_ns
+    return tuple(min_samples), tuple(xi), tuple(t_unit_ns), truth_window_ns, hit_prefilter_ns
 
 
 def run(ctx: RunContext, argv: Optional[Iterable[str]] = None) -> Path:
@@ -418,13 +521,14 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None) -> Path:
                    default=int(ctx.cuts.get("min_pulses_per_event", 3)))
     args = p.parse_args(list(argv) if argv else [])
 
-    ms, xi, t_units, truth_win = _grid_from_ctx(ctx)
+    ms, xi, t_units, truth_win, prefilter = _grid_from_ctx(ctx)
     metrics = train_and_evaluate(
         ctx,
         min_samples_list=ms,
         xi_list=xi,
         t_unit_ns_list=t_units,
         truth_window_ns=truth_win,
+        hit_prefilter_ns=prefilter,
         min_pulses_per_event=args.min_pulses,
     )
 
