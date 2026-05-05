@@ -217,66 +217,84 @@ class AmBeNeutronProcessing:
     def time_of_flight_correction(self, hitX, hitY, hitZ, hitPE, hitT, sourceX, sourceY, sourceZ, event_hits_data=None) -> str:
         """
         Calculate time of flight correction from hit positions and timing.
-        
+
+        UNIT CONVENTION (important):
+            hitX, hitY, hitZ    — in METRES  (from PMT geometry CSV)
+            sourceX, sourceY, sourceZ — in CM  (from self.source_positions dict)
+
+        The method converts source coordinates to metres internally before
+        computing distances.  Do NOT pre-convert the source coordinates; pass
+        them directly from get_source_location() / the source_positions dict.
+
         Args:
-            hitX, hitY, hitZ: Hit position arrays
+            hitX, hitY, hitZ: Hit position arrays in metres
             hitPE: Hit photoelectron values
-            hitT: Hit timing values
-            sourceX, sourceY, sourceZ: Source position coordinates
-            event_hits_data: Optional list of tuples for multi-cluster calculation
+            hitT: Hit timing values in ns
+            sourceX, sourceY, sourceZ: Source position in CM
+                (e.g. Port 4 centre → sourceX=75 meaning 75 cm = 0.75 m)
+            event_hits_data: Optional list of (hitX, hitY, hitZ, hitPE, hitT)
+                tuples for multi-cluster calculation; same unit convention.
         Returns:
-            Time of flight corrected time differences as space-separated string
+            Tuple of two space-separated strings:
+                (ToF-corrected pairwise time differences,
+                 raw pairwise time differences)
         """
-        SoL = 0.299792458 * 3/4
-        
+        SoL = 0.299792458 * 3.0 / 4.0   # speed of light in water, m/ns
+
+        # Convert source position from cm → metres to match hit coordinates
+        src_x_m = float(sourceX) / 100.0
+        src_y_m = float(sourceY) / 100.0
+        src_z_m = float(sourceZ) / 100.0
+
         # If event_hits_data is provided, use multi-cluster approach
         if event_hits_data is not None:
             all_hits = []
             for cluster_hits in event_hits_data:
                 cluster_hitX, cluster_hitY, cluster_hitZ, cluster_hitPE, cluster_hitT = cluster_hits
-                cluster_hitX = np.asarray(cluster_hitX, dtype=np.float64)
-                cluster_hitY = np.asarray(cluster_hitY, dtype=np.float64)
-                cluster_hitZ = np.asarray(cluster_hitZ, dtype=np.float64)
+                cluster_hitX  = np.asarray(cluster_hitX,  dtype=np.float64)
+                cluster_hitY  = np.asarray(cluster_hitY,  dtype=np.float64)
+                cluster_hitZ  = np.asarray(cluster_hitZ,  dtype=np.float64)
                 cluster_hitPE = np.asarray(cluster_hitPE, dtype=np.float64)
-                cluster_hitT = np.asarray(cluster_hitT, dtype=np.float64)
-                
-                cluster_hit_list = list(zip(cluster_hitX, cluster_hitY, cluster_hitZ, cluster_hitPE, cluster_hitT))
+                cluster_hitT  = np.asarray(cluster_hitT,  dtype=np.float64)
+                cluster_hit_list = list(zip(cluster_hitX, cluster_hitY, cluster_hitZ,
+                                            cluster_hitPE, cluster_hitT))
                 all_hits.extend(cluster_hit_list)
-            
             hits = all_hits
         else:
-            # Single cluster approach (original logic)
-            hitX = np.asarray(hitX, dtype=np.float64)
-            hitY = np.asarray(hitY, dtype=np.float64)
-            hitZ = np.asarray(hitZ, dtype=np.float64)
+            # Single cluster approach
+            hitX  = np.asarray(hitX,  dtype=np.float64)
+            hitY  = np.asarray(hitY,  dtype=np.float64)
+            hitZ  = np.asarray(hitZ,  dtype=np.float64)
             hitPE = np.asarray(hitPE, dtype=np.float64)
-            hitT = np.asarray(hitT, dtype=np.float64)
-            hits = list(zip(hitX, hitY, hitZ, hitPE, hitT))
-        
-        # Sort by time and calculate differences (same logic for both cases)
+            hitT  = np.asarray(hitT,  dtype=np.float64)
+            hits  = list(zip(hitX, hitY, hitZ, hitPE, hitT))
+
+        # Sort by time and calculate pairwise differences
         hits.sort(key=lambda h: h[4])
         n = len(hits)
         if n < 1:
-            return ""
-        
+            return "", ""
+
         tdiffs = []
         all_hits_delta_t_TofCorrected = []
         for i in range(n):
             x_i, y_i, z_i, pe_i, t_i = hits[i]
-            dist_i = np.sqrt((x_i - sourceX)**2 + (y_i - sourceY)**2 + (z_i - sourceZ)**2)
-            tcorr_i = t_i - dist_i/SoL
-            
-            for j in range(i+1, n):
-                x_j, y_j, z_j, pe_j, t_j = hits[j]
-                dist_j = np.sqrt((x_j - sourceX)**2 + (y_j - sourceY)**2 + (z_j - sourceZ)**2)
-                tcorr_j = t_j - dist_j/SoL
-                delta_t_ToF = t_j - t_i
-                
-                tdiffs.append(tcorr_j - tcorr_i)
-                all_hits_delta_t_TofCorrected.append(delta_t_ToF)
+            # Distance from PMT (metres) to source (metres)
+            dist_i  = np.sqrt((x_i - src_x_m)**2 + (y_i - src_y_m)**2 + (z_i - src_z_m)**2)
+            tcorr_i = t_i - dist_i / SoL
 
-        # Return as space-separated string for easy parsing
-        return " ".join(f"{val:.6f}" for val in tdiffs), " ".join(f"{val:.6f}" for val in all_hits_delta_t_TofCorrected)
+            for j in range(i + 1, n):
+                x_j, y_j, z_j, pe_j, t_j = hits[j]
+                dist_j  = np.sqrt((x_j - src_x_m)**2 + (y_j - src_y_m)**2 + (z_j - src_z_m)**2)
+                tcorr_j = t_j - dist_j / SoL
+                delta_t_raw = t_j - t_i
+
+                tdiffs.append(tcorr_j - tcorr_i)
+                all_hits_delta_t_TofCorrected.append(delta_t_raw)
+
+        # Return as space-separated strings for easy parsing
+        return (" ".join(f"{val:.6f}" for val in tdiffs),
+                " ".join(f"{val:.6f}" for val in all_hits_delta_t_TofCorrected))
 
     def analyze_waveform(self, hist_values: np.ndarray, hist_edges: np.ndarray) -> Tuple[float, float, bool]:
         """

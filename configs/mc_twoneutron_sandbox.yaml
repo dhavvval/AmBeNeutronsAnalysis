@@ -1,0 +1,34 @@
+run_name: mc_twoneutron
+campaign: "MC AmBe Two-Neutron"
+description: "Two-neutron file — sandbox run with mounted Documents paths"
+
+output_root: /sessions/bold-festive-ramanujan/mnt/AmBeNeutronsAnalysis/ambe_output
+
+inputs:
+  root_files:
+    - /sessions/bold-festive-ramanujan/mnt/Documents/ANNIEEvent_MC_AmBe_twoneutrons.root
+
+cuts:
+  min_pulses_per_event: 5
+
+fit_params: {}
+
+optics:
+  min_samples: [3, 5, 8]
+  xi: [0.10]
+  t_unit_ns: [10, 25]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 2000.0
+  source_position_m: [0.0, 0.0, 0.0]
+
+features:
+  min_samples: 3
+  xi: 0.10
+  t_unit_ns: 10.0
+  hit_prefilter_ns: 0.0
+  truth_window_ns: 75.0
+  source_position_m: [0.0, 0.0, 0.0]
+
+geometry:
+  pmt_geometry:   /sessions/bold-festive-ramanujan/mnt/Documents/ToolAnalysis/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /sessions/bold-festive-ramanujan/mnt/Documents/ToolAnalysis/configfiles/LoadGeometry/TankPMTTimingOffsets.csv

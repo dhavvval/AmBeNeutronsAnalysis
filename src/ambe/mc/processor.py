@@ -39,6 +39,7 @@ from ..io import resolve_inputs
 HIT_BRANCHES = [
     "eventNumber",
     "hitChankey", "hitT", "hitX", "hitY", "hitZ",
+    "hitPE",   # charge per hit — needed for cluster feature extraction
 ]
 
 # Branches needed for truth lookup (all optional — graceful fallback if absent)
@@ -121,7 +122,8 @@ def _match_hit(ck: int, t: float, dp_lookup: dict, offset: float,
 # Per-file processing
 # --------------------------------------------------------------------------- #
 
-def _process_single_file(root_path: Path, tree_name: str, verbose: bool):
+def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
+                          max_events: Optional[int] = None):
     """Read one ROOT file; return (pulse_df, cluster_df)."""
     with uproot.open(str(root_path)) as f:
         if tree_name not in f:
@@ -147,6 +149,8 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool):
         cluster_arr = t.arrays(wanted_cluster, library="ak") if wanted_cluster else None
 
     n = len(hit_arr)
+    if max_events is not None:
+        n = min(n, max_events)
     pulse_rows, cluster_rows = [], []
 
     for i in range(n):
@@ -157,6 +161,8 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool):
         hit_x  = np.array(ak.to_list(hit_arr["hitX"][i]),       dtype=float)
         hit_y  = np.array(ak.to_list(hit_arr["hitY"][i]),       dtype=float)
         hit_z  = np.array(ak.to_list(hit_arr["hitZ"][i]),       dtype=float)
+        hit_pe = np.array(ak.to_list(hit_arr["hitPE"][i]),       dtype=float) \
+                 if "hitPE" in hit_arr.fields else np.ones(len(hit_ck), dtype=float)
 
         # Build truth lookup for this event
         if has_dp and "DirectParent_PMTID" in wanted_dp:
@@ -195,6 +201,7 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool):
                 "x":                float(hit_x[j]),
                 "y":                float(hit_y[j]),
                 "z":                float(hit_z[j]),
+                "pe":               float(hit_pe[j]),
                 "truth_class":      cls,
                 "is_darknoise":     dn,
                 "is_neutron":       int(cls in NEUTRON_CLASSES),
@@ -224,7 +231,8 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool):
 # Public API
 # --------------------------------------------------------------------------- #
 
-def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True) -> tuple[Path, Path]:
+def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
+        max_events: Optional[int] = None) -> tuple[Path, Path]:
     """
     Process all ROOT files in ctx.inputs['root_files'].
     Writes two Parquet files:
@@ -232,12 +240,15 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True) -> tupl
         <parquet_dir>/<run_name>__clusterfinder.parquet
     """
     root_files = resolve_inputs(ctx.inputs["root_files"])
+    if max_events is None:
+        max_events = ctx.cuts.get("max_events") if ctx.cuts else None
     if verbose:
-        print(f"[mc.processor] processing {len(root_files)} file(s)")
+        print(f"[mc.processor] processing {len(root_files)} file(s)"
+              + (f"  (max_events={max_events})" if max_events else ""))
 
     pulse_frames, cluster_frames = [], []
     for rp in root_files:
-        pf, cf = _process_single_file(rp, tree_name, verbose)
+        pf, cf = _process_single_file(rp, tree_name, verbose, max_events=max_events)
         pf["_source_file"] = rp.name
         cf["_source_file"] = rp.name
         pulse_frames.append(pf)
@@ -269,5 +280,6 @@ def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     p = argparse.ArgumentParser(prog="ambe mc process")
     p.add_argument("--tree", default="Event")
     p.add_argument("--quiet", action="store_true")
+    p.add_argument("--max-events", type=int, default=None)
     args = p.parse_args(list(argv) if argv else [])
-    run(ctx, tree_name=args.tree, verbose=not args.quiet)
+    run(ctx, tree_name=args.tree, verbose=not args.quiet, max_events=args.max_events)

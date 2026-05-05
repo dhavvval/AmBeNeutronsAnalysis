@@ -32,6 +32,7 @@ COMMANDS: dict[tuple[str, str], str] = {
     # group, cmd                 where to find it
     ("mc", "process"):          "ambe.mc.processor:cli",
     ("mc", "optics"):           "ambe.mc.optics:cli",
+    ("mc", "features"):         "ambe.mc.cluster_features:cli",
     ("mc", "discriminate"):     "ambe.mc.cluster_discrimination:cli",
     ("mc", "match"):            "ambe.mc.cluster_matching:cli",
     ("mc", "timespread"):       "ambe.mc.time_spread:cli",

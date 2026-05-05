@@ -71,6 +71,16 @@ DEFAULT_T_UNIT    = 50.0    # ns — default time-axis unit (see module docstrin
 DEFAULT_WINDOW    = 75.0    # ns — default truth window (see module docstring)
 DEFAULT_PREFILTER = 2000.0  # ns — default hit pre-filter window (see _prefilter_hits)
 
+# Clusters whose mean time is earlier than this offset from the neutron capture
+# reference are counted as gamma clusters, not spurious background.
+# The prompt AmBe 4.44 MeV gamma arrives ~18,000 ns BEFORE the neutron capture;
+# -500 ns sits cleanly in the gap between Population 1 (gamma) and Population 2
+# (near-capture contamination at ~-1.4 ns).
+GAMMA_CLUSTER_THRESHOLD_NS = -500.0
+
+# Speed of light in water (m/ns).  Used for source ToF correction.
+SOL_WATER = 0.299792458 * 0.75
+
 
 # --------------------------------------------------------------------------- #
 # Hit pre-filter  (performance-critical)
@@ -161,10 +171,11 @@ def _apply_truth_window(df_event: pd.DataFrame, truth_window_ns: float) -> np.nd
 # --------------------------------------------------------------------------- #
 
 def run_optics_on_event(df_event: pd.DataFrame,
-                        min_samples: int   = 5,
-                        xi:          float = 0.05,
-                        metric:      str   = "euclidean",
-                        t_unit_ns:   float = DEFAULT_T_UNIT) -> np.ndarray:
+                        min_samples:  int   = 5,
+                        xi:           float = 0.05,
+                        metric:       str   = "euclidean",
+                        t_unit_ns:    float = DEFAULT_T_UNIT,
+                        source_pos_m: "Optional[np.ndarray]" = None) -> np.ndarray:
     """
     Run OPTICS on one event's hits.
 
@@ -180,14 +191,45 @@ def run_optics_on_event(df_event: pd.DataFrame,
     t_unit_ns : float
         1 OPTICS distance unit in the time axis = t_unit_ns nanoseconds.
         Physically: choose ~detector-crossing time (~20-50 ns for ANNIE).
+        With source ToF correction, signal hits cluster within ~2-5 ns,
+        so a smaller value (5-10 ns) becomes appropriate.
+
+    source_pos_m : np.ndarray of shape (3,) or None
+        Known AmBe source position in **metres** (same coordinate system as
+        hit x,y,z in the parquet).  When provided, the time axis is replaced
+        by the ToF-corrected time:
+
+            t_corr_i = t_i  -  |r_pmt_i - r_source| / c_water
+
+        This collapses all Cherenkov hits from a genuine neutron capture
+        (emitted nearly simultaneously at a point near the source) to within
+        ~2-5 ns, regardless of which PMT they hit.  Dark noise and beam-
+        induced background hits at random times are not collapsed and remain
+        spread.  This makes OPTICS clusters much more compact in the time
+        dimension, allowing a smaller t_unit_ns and lower min_samples.
+
+        IMPORTANT: source_pos_m must be in metres.  The source_positions dict
+        in data/processor.py stores positions in cm — divide by 100 before
+        passing here.  Default (None) disables the correction.
     """
     X = df_event[["x", "y", "z", "t"]].to_numpy(dtype=float, copy=True)
 
     # Step 1: scale xyz spatially
     X_xyz = StandardScaler().fit_transform(X[:, :3])
 
-    # Step 2: scale time with a fixed physical unit (NOT standardised again)
-    X_t = X[:, 3:4] / t_unit_ns
+    # Step 2: build the time axis
+    t_raw = X[:, 3]
+    if source_pos_m is not None:
+        # Source ToF correction: subtract photon travel time from source to each PMT.
+        # For AmBe analysis the source position is known, so this gives a much
+        # tighter time representation for genuine Cherenkov clusters.
+        src = np.asarray(source_pos_m, dtype=float)
+        dists = np.linalg.norm(X[:, :3] - src[np.newaxis, :], axis=1)
+        t_axis = t_raw - dists / SOL_WATER
+    else:
+        t_axis = t_raw
+
+    X_t = t_axis[:, np.newaxis] / t_unit_ns
 
     X_scaled = np.hstack([X_xyz, X_t])
 
@@ -257,11 +299,24 @@ def _optics_cluster_outcomes(df_event: pd.DataFrame,
       - that trackID's hits account for >= MIN_MATCH_FRAC of all cluster hits.
 
     Returns keys: n_truth, n_predicted, n_matched, n_spurious, n_missed,
-                  n_split, agreement.
+                  n_split, agreement,
+                  n_gamma_clusters, n_real_spurious, corrected_agreement.
+
+    n_gamma_clusters    — subset of spurious clusters that are the prompt AmBe
+                          gamma (cluster mean time offset from neutron capture
+                          reference < GAMMA_CLUSTER_THRESHOLD_NS = -500 ns).
+                          These are real physical clusters, not false positives.
+    n_real_spurious     — n_spurious - n_gamma_clusters: true false-positive clusters.
+    corrected_agreement — agreement counting only n_real_spurious (not gamma clusters).
     """
     labels     = np.asarray(labels, dtype=int)
     track_ids  = df_event["ancestor_trackID"].to_numpy(int)
     pdgs       = df_event["ancestor_pdg"].to_numpy(int)
+    hit_times  = df_event["t"].to_numpy(float)
+
+    # Truth neutron capture reference time (median of in-window neutron hits)
+    neu_times = hit_times[truth_neutron_mask] if truth_neutron_mask.any() else np.array([])
+    neu_ref_t = float(np.median(neu_times)) if len(neu_times) > 0 else np.nan
 
     # Truth neutron trackIDs: only those with at least one in-window hit
     truth_trackIDs = set(
@@ -274,9 +329,10 @@ def _optics_cluster_outcomes(df_event: pd.DataFrame,
     unique_labels = [c for c in np.unique(labels) if c >= 0]
     n_predicted   = len(unique_labels)
 
-    matched_tids = set()
-    split_tids   = set()
-    n_spurious   = 0
+    matched_tids    = set()
+    split_tids      = set()
+    n_spurious      = 0
+    n_gamma_clusters = 0
 
     for c in unique_labels:
         mask    = labels == c
@@ -284,6 +340,11 @@ def _optics_cluster_outcomes(df_event: pd.DataFrame,
 
         neutron_mask_c = mask & (pdgs == NEUTRON_PDG) & (track_ids >= 0)
         if not neutron_mask_c.any():
+            # No neutron hits at all — check if this is a gamma cluster
+            if not np.isnan(neu_ref_t):
+                cluster_mean_t = float(hit_times[mask].mean())
+                if (cluster_mean_t - neu_ref_t) < GAMMA_CLUSTER_THRESHOLD_NS:
+                    n_gamma_clusters += 1
             n_spurious += 1
             continue
 
@@ -297,21 +358,31 @@ def _optics_cluster_outcomes(df_event: pd.DataFrame,
                 split_tids.add(dom_tid)
             matched_tids.add(dom_tid)
         else:
+            # Has neutron hits but doesn't match truth — also check gamma timing
+            if not np.isnan(neu_ref_t):
+                cluster_mean_t = float(hit_times[mask].mean())
+                if (cluster_mean_t - neu_ref_t) < GAMMA_CLUSTER_THRESHOLD_NS:
+                    n_gamma_clusters += 1
             n_spurious += 1
 
-    n_matched = len(matched_tids)
-    n_missed  = len(truth_trackIDs - matched_tids)
-    n_split   = len(split_tids)
+    n_matched      = len(matched_tids)
+    n_missed       = len(truth_trackIDs - matched_tids)
+    n_split        = len(split_tids)
+    n_real_spurious = n_spurious - n_gamma_clusters
 
     return {
-        "n_truth":     n_truth,
-        "n_predicted": n_predicted,
-        "n_matched":   n_matched,
-        "n_spurious":  n_spurious,
-        "n_missed":    n_missed,
-        "n_split":     n_split,
-        "agreement":   int(n_matched == n_truth and n_spurious == 0
-                           and n_split == 0),
+        "n_truth":              n_truth,
+        "n_predicted":          n_predicted,
+        "n_matched":            n_matched,
+        "n_spurious":           n_spurious,           # all non-matched (incl. gamma)
+        "n_gamma_clusters":     n_gamma_clusters,     # subset: prompt gamma clusters
+        "n_real_spurious":      n_real_spurious,      # true false positives only
+        "n_missed":             n_missed,
+        "n_split":              n_split,
+        "agreement":            int(n_matched == n_truth and n_spurious == 0
+                                    and n_split == 0),
+        "corrected_agreement":  int(n_matched == n_truth and n_real_spurious == 0
+                                    and n_split == 0),
     }
 
 
@@ -373,6 +444,7 @@ def train_and_evaluate(ctx: RunContext,
                        t_unit_ns_list:      Sequence[float] = (DEFAULT_T_UNIT,),
                        truth_window_ns:     float           = DEFAULT_WINDOW,
                        hit_prefilter_ns:    float           = DEFAULT_PREFILTER,
+                       source_pos_m:        "Optional[np.ndarray]" = None,
                        min_pulses_per_event: int            = 3) -> pd.DataFrame:
     """
     Sweep the OPTICS hyperparameter grid and evaluate against truth.
@@ -391,6 +463,9 @@ def train_and_evaluate(ctx: RunContext,
         Reduces the per-event hit count from ~200-500 (all detector hits) to
         ~30-50 (hits near the capture region), giving a ~25x OPTICS speedup.
         Set to 0 or np.inf to disable.  Default 2000 ns.
+    source_pos_m : np.ndarray of shape (3,) or None
+        Known AmBe source position in metres for ToF correction.
+        See run_optics_on_event docstring.  Default None (no correction).
     """
     pulses_path   = ctx.parquet_path(f"{ctx.run_name}__pulses")
     clusters_path = ctx.parquet_path(f"{ctx.run_name}__clusterfinder")
@@ -436,7 +511,8 @@ def train_and_evaluate(ctx: RunContext,
         for ms, xi, t_unit in itertools.product(min_samples_list, xi_list,
                                                 t_unit_ns_list):
             labels_optics = run_optics_on_event(df_optics, min_samples=ms,
-                                                xi=xi, t_unit_ns=t_unit)
+                                                xi=xi, t_unit_ns=t_unit,
+                                                source_pos_m=source_pos_m)
 
             # Re-align OPTICS labels onto the full df_ev length.
             # _prefilter_hits preserves the original df_ev integer index, so
@@ -451,9 +527,13 @@ def train_and_evaluate(ctx: RunContext,
             row = event_metrics(df_ev, labels_full, "optics",
                                 truth_window_ns=truth_window_ns,
                                 truth_neutron_mask=truth_mask)
+            src_str = (f"{source_pos_m[0]:.3f},{source_pos_m[1]:.3f},"
+                       f"{source_pos_m[2]:.3f}"
+                       if source_pos_m is not None else "none")
             row.update({"min_samples": ms, "xi": xi, "t_unit_ns": t_unit,
                         "truth_window_ns": truth_window_ns,
                         "hit_prefilter_ns": hit_prefilter_ns,
+                        "source_pos_m": src_str,
                         "n_hits_optics": len(df_optics)})
             rows.append(row)
 
@@ -491,11 +571,14 @@ def summarise(metrics: pd.DataFrame) -> pd.DataFrame:
         mean_n_clusters=("n_clusters",   "mean"),
         mean_n_truth=("n_truth",         "mean"),
         mean_n_predicted=("n_predicted", "mean"),
-        mean_matched=("n_matched",       "mean"),
-        mean_spurious=("n_spurious",     "mean"),
-        mean_missed=("n_missed",         "mean"),
-        mean_split=("n_split",           "mean"),
-        agreement_rate=("agreement",     "mean"),
+        mean_matched=("n_matched",                   "mean"),
+        mean_spurious=("n_spurious",               "mean"),  # all non-matched incl. gamma
+        mean_gamma_clusters=("n_gamma_clusters",   "mean"),  # prompt gamma clusters
+        mean_real_spurious=("n_real_spurious",     "mean"),  # true false positives only
+        mean_missed=("n_missed",                   "mean"),
+        mean_split=("n_split",                     "mean"),
+        agreement_rate=("agreement",               "mean"),
+        corrected_agreement_rate=("corrected_agreement", "mean"),  # excl. gamma clusters
     ).reset_index()
 
 
@@ -511,8 +594,24 @@ def _grid_from_ctx(ctx: RunContext):
     truth_window_ns  = float(optics_block.get("truth_window_ns",  DEFAULT_WINDOW))
     hit_prefilter_ns = float(optics_block.get("hit_prefilter_ns", DEFAULT_PREFILTER))
 
+    # Source ToF correction: read source_position_m from config (metres).
+    # Example YAML:
+    #   optics:
+    #     source_position_m: [0.0, 0.0, 0.0]   # Port 5 centre (AmBe default)
+    # Leave unset or null to disable.  Data pipeline stores positions in cm —
+    # convert before putting in config (divide by 100).
+    src_raw = optics_block.get("source_position_m", None)
+    if src_raw is not None:
+        source_pos_m = np.array([float(v) for v in src_raw], dtype=float)
+        print(f"[mc.optics] source ToF correction enabled: "
+              f"source at ({source_pos_m[0]:.3f}, {source_pos_m[1]:.3f}, "
+              f"{source_pos_m[2]:.3f}) m")
+    else:
+        source_pos_m = None
+
     t_unit_ns = [float(v) for v in t_unit_ns]
-    return tuple(min_samples), tuple(xi), tuple(t_unit_ns), truth_window_ns, hit_prefilter_ns
+    return (tuple(min_samples), tuple(xi), tuple(t_unit_ns),
+            truth_window_ns, hit_prefilter_ns, source_pos_m)
 
 
 def run(ctx: RunContext, argv: Optional[Iterable[str]] = None) -> Path:
@@ -521,7 +620,7 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None) -> Path:
                    default=int(ctx.cuts.get("min_pulses_per_event", 3)))
     args = p.parse_args(list(argv) if argv else [])
 
-    ms, xi, t_units, truth_win, prefilter = _grid_from_ctx(ctx)
+    ms, xi, t_units, truth_win, prefilter, src_pos = _grid_from_ctx(ctx)
     metrics = train_and_evaluate(
         ctx,
         min_samples_list=ms,
@@ -529,6 +628,7 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None) -> Path:
         t_unit_ns_list=t_units,
         truth_window_ns=truth_win,
         hit_prefilter_ns=prefilter,
+        source_pos_m=src_pos,
         min_pulses_per_event=args.min_pulses,
     )
 
