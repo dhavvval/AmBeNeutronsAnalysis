@@ -6,14 +6,21 @@ BackTracker could trace.  For each hit we attempt a truth match into the
 DirectParent arrays using:
   - chankey identity
   - time proximity: DirectParent_HitTime ≈ hitT + offset
-    where offset (~14-16 ns) is the per-event Cherenkov photon travel time,
-    computed from chankeys that appear in both arrays.
+    where offset (~14-16 ns) is the PMT SPE waveform peak delay
+    (p1*exp(-p2²) - T0Offset*2ns from PMTWaveformSim lognormal model),
+    computed per-event from chankeys that appear in both arrays.
 
-Unmatched hits are assigned truth_class=0 (dark noise) and flagged with
-is_untraced=True so they can be distinguished from BackTracker-labeled noise.
+Unmatched hits are assigned truth_class=0 and flagged with is_untraced=True.
+Two failure sub-modes are tracked in match_failure_reason:
+  "no_entry"      – chankey has no DirectParent record at all (sub-threshold
+                    or masked PMT — genuine dark noise invisible to BackTracker)
+  "time_mismatch" – a DirectParent entry exists for the chankey but the best
+                    time match exceeds MATCH_TOL (likely a merged-pulse physics
+                    hit whose MCHit arrival time doesn't align with the ADCPulse
+                    peak; is_darknoise is carried from the nearest DP entry)
 
-This matters for OPTICS training: the ~11% of hits that are genuine PMT dark
-noise but BackTracker-invisible were previously absent from the training set.
+This matters for OPTICS training: conflating the two failure modes would label
+merged-pulse physics hits as dark noise, corrupting the training set.
 
 Class code conventions (from BackTracker.cpp):
    0 dark noise  ·  1 primary neutron  ·  2 secondary n<-p  ·
@@ -67,17 +74,26 @@ MATCH_TOL        = 8.0     # ns half-window for truth matching
 def _compute_offset(hit_ck, hit_t, dp_ck, dp_t) -> float:
     """
     Estimate DirectParent_HitTime - hitT per event.
+
+    The offset is the PMT SPE waveform peak delay: p1*exp(-p2²) - T0Offset*2ns
+    from PMTWaveformSim (~15.9 ns for typical ANNIE PMTs).  It is NOT the
+    Cherenkov photon travel time, which is already embedded in hitT.
+
     Uses chankeys that appear exactly once in each array for an unambiguous match.
-    Falls back to DEFAULT_DP_OFFSET when insufficient overlap.
+    Falls back to DEFAULT_DP_OFFSET when fewer than 3 pairs exist or the computed
+    median is outside the physically plausible range [10, 25] ns.
     """
-    shared = set(np.unique(hit_ck)) & set(np.unique(dp_ck))
+    shared = set(hit_ck) & set(dp_ck)
     offsets = []
     for ck in shared:
         ht = hit_t[hit_ck == ck]
         dt = dp_t[dp_ck == ck]
         if len(ht) == 1 and len(dt) == 1:
             offsets.append(float(dt[0] - ht[0]))
-    return float(np.median(offsets)) if len(offsets) >= 3 else DEFAULT_DP_OFFSET
+    if len(offsets) < 3:
+        return DEFAULT_DP_OFFSET
+    med = float(np.median(offsets))
+    return med if 10.0 <= med <= 25.0 else DEFAULT_DP_OFFSET
 
 
 def _build_dp_lookup(dp_ck, dp_t, dp_class, dp_dn, dp_tid, dp_pdg) -> dict:
@@ -99,12 +115,20 @@ def _match_hit(ck: int, t: float, dp_lookup: dict, offset: float,
     """
     Match one hit (chankey, hitT) to its DirectParent truth entry.
 
-    Returns (truth_class, is_darknoise, ancestor_trackID, ancestor_pdg, is_untraced).
-    Untraced hits (no DP entry or time mismatch) get truth_class=0, is_untraced=True.
+    Returns (truth_class, is_darknoise, ancestor_trackID, ancestor_pdg,
+             is_untraced, match_failure_reason).
+
+    match_failure_reason values:
+      None            – successful match
+      "no_entry"      – chankey absent from DirectParent arrays entirely
+                        (sub-threshold / masked PMT; very likely dark noise)
+      "time_mismatch" – entry exists but best |dt| > tol; is_darknoise is
+                        carried from the nearest DP entry rather than assumed
+                        (merged-pulse physics hits fall here)
     """
     entries = dp_lookup.get(ck)
     if not entries:
-        return 0, 1, -1, -1, True
+        return 0, 1, -1, -1, True, "no_entry"
 
     t_shifted = t + offset
     best_dt, best = min(
@@ -112,10 +136,12 @@ def _match_hit(ck: int, t: float, dp_lookup: dict, offset: float,
         key=lambda x: x[0],
     )
     if best_dt > tol:
-        return 0, 1, -1, -1, True
+        # Carry is_darknoise from the nearest DP entry instead of assuming 1
+        _, _cls, nearest_dn, _tid, _pdg = best
+        return 0, nearest_dn, -1, -1, True, "time_mismatch"
 
     _, cls, dn, tid, pdg = best
-    return cls, dn, tid, pdg, False
+    return cls, dn, tid, pdg, False, None
 
 
 # --------------------------------------------------------------------------- #
@@ -192,22 +218,25 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
             ck = int(hit_ck[j])
             t_hit = float(hit_t[j])
 
-            cls, dn, tid, pdg, untraced = _match_hit(ck, t_hit, dp_lookup, offset)
+            cls, dn, tid, pdg, untraced, fail_reason = _match_hit(
+                ck, t_hit, dp_lookup, offset
+            )
 
             pulse_rows.append({
-                "eventID":          event_id,
-                "pmtID":            ck,
-                "t":                t_hit,
-                "x":                float(hit_x[j]),
-                "y":                float(hit_y[j]),
-                "z":                float(hit_z[j]),
-                "pe":               float(hit_pe[j]),
-                "truth_class":      cls,
-                "is_darknoise":     dn,
-                "is_neutron":       int(cls in NEUTRON_CLASSES),
-                "is_untraced":      int(untraced),
-                "ancestor_trackID": tid,
-                "ancestor_pdg":     pdg,
+                "eventID":              event_id,
+                "pmtID":                ck,
+                "t":                    t_hit,
+                "x":                    float(hit_x[j]),
+                "y":                    float(hit_y[j]),
+                "z":                    float(hit_z[j]),
+                "pe":                   float(hit_pe[j]),
+                "truth_class":          cls,
+                "is_darknoise":         dn,
+                "is_neutron":           int(cls in NEUTRON_CLASSES),
+                "is_untraced":          int(untraced),
+                "match_failure_reason": fail_reason,
+                "ancestor_trackID":     tid,
+                "ancestor_pdg":         pdg,
             })
 
         # ClusterFinder sidecar
@@ -268,10 +297,18 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
         if len(pulses):
             counts = pulses["truth_class"].value_counts().sort_index()
             untraced = int(pulses["is_untraced"].sum())
+            no_entry = int((pulses["match_failure_reason"] == "no_entry").sum())
+            time_mm  = int((pulses["match_failure_reason"] == "time_mismatch").sum())
             print("[mc.processor] truth_class histogram (all detector hits):")
             print(counts.to_string())
-            print(f"[mc.processor] of which untraced dark noise: "
+            print(f"[mc.processor] untraced total : "
                   f"{untraced} ({100*untraced/len(pulses):.1f}%)")
+            print(f"[mc.processor]   no_entry     : "
+                  f"{no_entry} ({100*no_entry/len(pulses):.1f}%)  "
+                  f"[sub-threshold / masked PMT]")
+            print(f"[mc.processor]   time_mismatch: "
+                  f"{time_mm} ({100*time_mm/len(pulses):.1f}%)  "
+                  f"[merged-pulse / offset error]")
 
     return pulses_path, clusters_path
 
