@@ -1,12 +1,12 @@
-run_name: mc_lucho_full
-campaign: "MC AmBe Lucho Full"
-description: "Full 10k-event Lucho file (beam background)"
+run_name: mc_oneneutrononemuon
+campaign: "MC AmBe One-Neutron-One-Muon"  
+description: "One neutron + one muon at the center of the tank"
 
 output_root: /Users/dajana/Documents/AmBe/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:
-    - /Users/dajana/Documents/ANNIEEvent_MC_wcsimlucho_0.root
+    - /Users/dajana/Documents/ANNIEEvent_MC_AmBe_oneneutrononemuon.root
 
 cuts:
   min_pulses_per_event: 0   # OPTICS min_samples handles thresholding — do not pre-filter events here

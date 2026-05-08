@@ -402,6 +402,7 @@ def build_background_records(arr, arr_raw=None):
 
         # Reference time = median of class-1 (primary neutron) hits
         neutron_mask = (pdgs == NEUTRON_PDG) & np.isin(cls, [1, 2, 3, 4])
+        #neutron_mask = (pdgs == NEUTRON_PDG) & (cls == 1)
         neutron_t    = times[neutron_mask]
         ref_t        = float(np.median(neutron_t)) if len(neutron_t) > 0 else np.nan
 
@@ -448,17 +449,20 @@ def build_background_records(arr, arr_raw=None):
     return df_dp, df_raw, df_ev
 
 
-def signal_to_background_table(df_dp, df_raw, windows_ns=(20, 50, 75, 100, 200, 500, 1000, 2000)):
+def signal_to_background_table(df_dp, df_raw, windows_ns=(20, 50, 75, 100, 200, 500, 1000, 2000),
+                                signal_classes=(1,)):
     """
     For each window size (±window/2 of neutron reference time), count:
-      - n_signal   : class 1 hits inside window
+      - n_signal   : hits from signal_classes inside window
       - n_bg_dp    : class 0 + class -5 DirectParent hits inside window
       - n_raw      : all raw hitT hits inside window (if available)
       - S/B_dp     : n_signal / n_bg_dp
       - S/B_raw    : n_signal / n_raw (if available)
+    signal_classes : tuple of truth class IDs counted as signal, e.g. (1,) or (1,2,3,4)
     """
+    sig_label = f"classes {list(signal_classes)}"
     print("\n" + "=" * 75)
-    print("SIGNAL vs BACKGROUND — Hit counts vs time window size")
+    print(f"SIGNAL vs BACKGROUND — Signal = {sig_label}, Background = class 0 + class -5")
     print(f"{'Window (ns)':>12} | {'n_sig':>8} | {'n_bg_dp':>9} | {'S/B_dp':>8} | "
           f"{'n_raw':>8} | {'S/B_raw':>8} | {'sig_efficiency':>16}")
     print("-" * 75)
@@ -466,7 +470,7 @@ def signal_to_background_table(df_dp, df_raw, windows_ns=(20, 50, 75, 100, 200, 
     # Per-event reference times
     ev_refs = df_dp.groupby("evid")["offset_ns"].apply(lambda x: 0.0)  # offset is already relative
 
-    sig_all  = df_dp[df_dp["cls"] == 1]["offset_ns"].dropna()
+    sig_all  = df_dp[df_dp["cls"].isin(signal_classes)]["offset_ns"].dropna()
     bg_all   = df_dp[(df_dp["cls"].isin([0, -5]))]["offset_ns"].dropna()
     sig_total = len(sig_all)
 
@@ -591,6 +595,36 @@ def background_plots(df_dp, df_raw, df_ev, out_dir: Path, pdf_name: str = "backg
         ax2.set_xlabel("Time window (ns)  [log scale]")
         ax2.set_ylabel("Signal efficiency (%)")
         ax2.set_title("Signal efficiency (fraction of class-1 hits captured)")
+        ax2.set_ylim(0, 105)
+
+        plt.tight_layout()
+        pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
+
+        # -- Fig 10b: S/B with all neutron classes (1-4) as signal --
+        sb_data_all = signal_to_background_table(df_dp, df_raw,
+                       windows_ns=(10, 20, 50, 75, 100, 200, 500, 1000, 2000, 5000),
+                       signal_classes=(1, 2, 3, 4))
+        sb_data_all_plot = sb_data_all[sb_data_all["sb_dp"].replace([np.inf], np.nan).notna()]
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
+        windows_arr_all = sb_data_all_plot["window_ns"].values
+
+        ax1.plot(windows_arr_all, sb_data_all_plot["sb_dp"], "o-", color="steelblue",
+                 label="S/B (DirectParent classes)")
+        if not sb_data_all_plot["sb_raw"].replace([np.inf], np.nan).isna().all():
+            ax1.plot(windows_arr_all, sb_data_all_plot["sb_raw"].replace([np.inf], np.nan),
+                     "s--", color="orange", label="S/B (all raw hitT)")
+        ax1.axhline(1.0, color="red", ls=":", lw=1, label="S/B = 1")
+        ax1.axvline(WINDOW_NS, color="black", ls="--", lw=1, label=f"{WINDOW_NS} ns")
+        ax1.set_ylabel("Signal / Background ratio")
+        ax1.set_title("Fig 10b — S/B ratio: Signal = all neutron classes (1–4), Background = class 0 + class -5")
+        ax1.legend(fontsize=9); ax1.set_xscale("log")
+
+        ax2.plot(windows_arr_all, sb_data_all_plot["sig_efficiency_pct"], "o-", color="tomato")
+        ax2.axvline(WINDOW_NS, color="black", ls="--", lw=1)
+        ax2.set_xlabel("Time window (ns)  [log scale]")
+        ax2.set_ylabel("Signal efficiency (%)")
+        ax2.set_title("Signal efficiency (fraction of class 1–4 hits captured)")
         ax2.set_ylim(0, 105)
 
         plt.tight_layout()
@@ -802,6 +836,7 @@ if __name__ == "__main__":
           f"{df_ev['ref_time'].notna().sum()} / {len(df_ev)}")
     print()
     signal_to_background_table(df_dp, df_raw)
+    signal_to_background_table(df_dp, df_raw, signal_classes=(1, 2, 3, 4))
     background_plots(df_dp, df_raw, df_ev, _out,
                      pdf_name=f"background_timing_analysis_{short_stem}.pdf")
 

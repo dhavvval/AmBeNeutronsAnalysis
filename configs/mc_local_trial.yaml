@@ -9,7 +9,7 @@ inputs:
     - /Users/dajana/Documents/ANNIEEvent_MC_wcsimlucho_0.root
 
 cuts:
-  min_pulses_per_event: 5
+  min_pulses_per_event: 0
   max_events: 300
 
 fit_params: {}
@@ -29,7 +29,7 @@ optics:
   # Units: METRES. data/processor.py source_positions dict is in cm → divide by 100.
   # Lucho WCSim: Port 5 centre at (0, 0, 0) m.  Verify against MC config if needed.
   # Set to null or omit to disable.
-  source_position_m: [0.0, 0.0, 0.0]
+  source_position_m: [0, -0.1446, 1.681]
 
 # --- Feature extraction (ambe mc features) ---
 # Uses the single best config from the grid sweep above.
@@ -39,7 +39,7 @@ features:
   t_unit_ns: 25.0
   hit_prefilter_ns: 0.0      # no prefilter for feature extraction
   truth_window_ns: 75.0
-  source_position_m: [0.0, 0.0, 0.0]   # source ToF for d_source feature
+  source_position_m: [0, -0.1446, 1.681]  # source ToF for d_source feature
 
 # --- Detector geometry (needed for cluster features) ---
 geometry:

@@ -1,10 +1,6 @@
 """
 Cluster-level feature extraction for OPTICS clusters.
 
-For each OPTICS cluster, computes a set of physically motivated discriminating
-variables analogous to those used in SK neutron signal selection (Section IV of
-arXiv:2505.04409):
-
     n_hits              Number of PMT hits in the cluster
     t_mean              Mean hit time (ns)
     sigma_t             RMS of raw hit times (ns)  [std-based, kept for comparison]
@@ -22,7 +18,7 @@ arXiv:2505.04409):
     d_wall              Distance from estimated vertex to nearest tank wall (m)
     beta1               Legendre P1 isotropy:  0 = isotropic, >0 = directional
     beta2               Legendre P2 isotropy
-
+    
 Note on MAD: sigma_t_mad = 1.4826 × median(|t − median(t)|).  For Gaussian
 data this equals sigma_t.  For data with 1–2 thermalization-scatter outlier
 hits at microsecond timescales, sigma_t can be inflated 100×; sigma_t_mad
@@ -60,18 +56,21 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
+import time
 from typing import Dict, Iterable, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.lines import Line2D
 from sklearn.preprocessing import StandardScaler
 
 from ..context import RunContext
 from ..plotting import save_plot, set_style
 from .optics import (
     NEUTRON_PDG, MIN_MATCH_FRAC, DEFAULT_T_UNIT, DEFAULT_WINDOW,
+    PROMPT_SIGNAL_THRESHOLD_NS, PROMPT_SIGNAL_MAX_NEUTRON_HITS,
     run_optics_on_event, _apply_truth_window, _prefilter_hits,
     assign_clusterfinder_labels,
 )
@@ -80,13 +79,12 @@ from .optics import (
 # Speed of light in water (m/ns) — matches processor.py / data/processor.py
 SOL_WATER = 0.299792458 * 0.75
 
-# Clusters whose mean time offset from the per-event neutron capture reference
-# is earlier than this threshold are tagged as prompt gamma clusters.
-# The AmBe 4.44 MeV gamma arrives ~18,000 ns before capture; -500 ns sits
-# cleanly in the gap between Population 1 (gamma, ~-18k ns) and Population 2
-# (near-capture, ~-1.4 ns).  Confirmed May 2026 from Lucho file analysis.
-NEUTRON_CLASSES            = {1, 2, 3, 4}
-GAMMA_CLUSTER_THRESHOLD_NS = -500.0
+NEUTRON_CLASSES = {1, 2, 3, 4}
+
+# Plot colour palette — change here to affect all cluster-feature plots
+C_SIG = "#0077BB"   # signal (truth neutron)
+C_GAM = "#EE7733"   # prompt gamma clusters
+C_SPU = "#BBBBBB"   # real spurious (true false positives)
 
 
 # --------------------------------------------------------------------------- #
@@ -194,16 +192,16 @@ def load_geometry(geo_path: str, offsets_path: str) -> ANNIEGeometry:
 
 def _beta_k(uvecs: np.ndarray, k: int) -> float:
     """
-    Compute Legendre polynomial isotropy parameter β_k.
+    Legendre isotropy parameter β_k (SK convention, arXiv:2505.04409 eq. 3.4).
 
     uvecs : (N, 3) unit vectors from estimated vertex to each hit PMT.
-    k     : order (1 or 2).
+    k     : Legendre degree (1–5).
 
-    β_k = (2k+1)/N² × Σᵢ,ⱼ P_k(cos θᵢⱼ)
+    β_k = 2/(N*(N-1)) × Σᵢ≠ⱼ P_k(cos θᵢⱼ)
 
-    Interpretation:
-      β₁ ≈ 0   → isotropic (random background / dark noise)
-      β₁ > 0   → hits concentrated on one hemisphere (directional Cherenkov)
+    β_k > 0  →  hits clustered on one side (directional Cherenkov cone)
+    β_k ≈ 0  →  isotropic (random background / dark noise)
+    β_k < 0  →  hits anticorrelated (two opposing clusters)
     """
     N = len(uvecs)
     if N < 2:
@@ -213,9 +211,253 @@ def _beta_k(uvecs: np.ndarray, k: int) -> float:
         Pk = cos_th
     elif k == 2:
         Pk = (3.0 * cos_th**2 - 1.0) / 2.0
+    elif k == 3:
+        Pk = (5.0 * cos_th**3 - 3.0 * cos_th) / 2.0
+    elif k == 4:
+        Pk = (35.0 * cos_th**4 - 30.0 * cos_th**2 + 3.0) / 8.0
+    elif k == 5:
+        Pk = (63.0 * cos_th**5 - 70.0 * cos_th**3 + 15.0 * cos_th) / 8.0
     else:
-        raise ValueError(f"k={k} not implemented (use 1 or 2)")
-    return float((2*k + 1) / (N * N) * Pk.sum())
+        raise ValueError(f"k={k} not implemented (use 1–5)")
+    # P_k(1) = 1 for all k, so the diagonal (i=j) contributes exactly N.
+    # Subtract to get the i≠j sum required by the SK convention.
+    off_diag = float(Pk.sum()) - N
+    return float(2.0 / (N * (N - 1)) * off_diag)
+
+
+# --------------------------------------------------------------------------- #
+# Gauss-Newton vertex fitter
+# Ported from VertexLeastSquares.cpp (Andrew Sutton, Sep 2024 collab meeting).
+# --------------------------------------------------------------------------- #
+
+_PHI_SQ = ((1.0 + np.sqrt(5.0)) / 2.0) ** 2   # golden-ratio squared for sunflower
+
+
+def _filter_hits_for_vertex(xyz: np.ndarray, t: np.ndarray) -> np.ndarray:
+    """
+    Select causally compatible hits for vertex fitting (port of FilterHitsMC).
+
+    For each hit i, finds all hits j where |t_i - t_j| <= |r_i - r_j| / c_w
+    (photons from a common point source cannot arrive in a time shorter than
+    the PMT-to-PMT ToF).  Keeps the largest mutually compatible set, then
+    restricts to hits within 10 ns of the earliest hit (removes reflections).
+
+    Returns boolean mask of length N.
+    """
+    n = len(t)
+    if n < 4:
+        return np.ones(n, dtype=bool)
+
+    diff    = xyz[:, np.newaxis, :] - xyz[np.newaxis, :, :]   # (N, N, 3)
+    pmt_tof = np.linalg.norm(diff, axis=2) / SOL_WATER         # (N, N)
+
+    dt      = np.abs(t[:, np.newaxis] - t[np.newaxis, :])      # (N, N)
+    compat  = dt <= pmt_tof
+
+    best    = int(np.argmax(compat.sum(axis=1)))
+    mask    = compat[best].copy()
+    t0      = float(t[mask].min())
+    mask   &= np.abs(t - t0) <= 10.0
+    return mask
+
+
+def _generate_seed_vertices(geo: ANNIEGeometry,
+                             y_spacing: float = 0.5,
+                             n_planar:  int   = 15,
+                             n_boundary: int  = 1,
+                             rng_seed:  int   = 0) -> np.ndarray:
+    """
+    Sunflower seed grid for Gauss-Newton initialisation (port of GenerateVetices).
+
+    Parameters
+    ----------
+    y_spacing  : vertical spacing between Y levels (metres)
+    n_planar   : number of XZ points per Y level
+    n_boundary : boundary ring count (passed through to sunflower formula)
+    rng_seed   : numpy random seed for per-level rotations (fixed → reproducible)
+
+    Returns (N_seeds, 3) array of positions in metres.
+    """
+    rng  = np.random.default_rng(rng_seed)
+    ys   = np.arange(geo.tank_bot, geo.tank_top + y_spacing / 2.0, y_spacing)
+
+    xs_raw, zs_raw = [], []
+    for n in range(1, n_planar + 1):
+        denom = max(n_planar - (n_boundary + 1.0) / 2.0, 1e-9)
+        rad   = 1.0 if n > n_planar + n_boundary else np.sqrt((n + 0.5) / denom)
+        rad   = min(rad, 1.0) * geo.tank_radius
+        angle = 2.0 * np.pi * n / _PHI_SQ
+        xs_raw.append(rad * np.cos(angle))
+        zs_raw.append(rad * np.sin(angle))
+    xs_raw = np.array(xs_raw)
+    zs_raw = np.array(zs_raw)
+
+    cx, cz = geo.tank_center[0], geo.tank_center[2]
+    seeds  = []
+    for y in ys:
+        rot     = rng.uniform(0.0, 2.0 * np.pi)
+        cr, sr  = np.cos(rot), np.sin(rot)
+        xr      = xs_raw * cr - zs_raw * sr + cx
+        zr      = zs_raw * cr + xs_raw * sr + cz
+        for xi, zi in zip(xr, zr):
+            seeds.append([xi, y, zi])
+    return np.array(seeds)
+
+
+def _in_tank(pos: np.ndarray, geo: ANNIEGeometry) -> bool:
+    """True if pos is within the cylindrical tank boundary."""
+    v_xz = pos[[0, 2]] - geo.tank_center[[0, 2]]
+    return (float(np.linalg.norm(v_xz)) < geo.tank_radius and
+            geo.tank_bot < float(pos[1]) < geo.tank_top)
+
+
+def _jac_residual(guess: np.ndarray, pmt_xyz: np.ndarray, t: np.ndarray,
+                  regularizer: float) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Augmented Jacobian A and residual b for one Gauss-Newton step.
+    Port of EvalAtGuessVertexMC.
+
+    f_i(vtx, T) = dist_i/c + T - t_i = 0
+
+    Jacobian row i:
+      [∂f/∂x, ∂f/∂y, ∂f/∂z, ∂f/∂T] = [(vtx-r_i)/(dist*c), 1]
+
+    Emission time T is analytically eliminated per iteration as mean(t_i - ToF_i).
+    Residual b[i] = (t_i - ToF_i) - mean_T  →  -f_i with T = mean_T.
+
+    Rows N..N+3 are Tikhonov regularization: λI to keep the step bounded.
+    Returns A (N+4, 4) and b (N+4,).
+    """
+    n    = len(t)
+    diff = pmt_xyz - guess[np.newaxis, :]               # r_det - r_vtx  (N, 3)
+    dist = np.linalg.norm(diff, axis=1)
+    dist = np.where(dist < 1e-6, 1e-6, dist)
+
+    A         = np.zeros((n + 4, 4))
+    A[:n, :3] = -diff / (dist[:, np.newaxis] * SOL_WATER)  # (vtx - r_det)/(dist*c)
+    A[:n,  3] = 1.0
+
+    tof    = dist / SOL_WATER
+    mean_T = float(np.mean(t - tof))
+    b      = np.zeros(n + 4)
+    b[:n]  = (t - tof) - mean_T
+
+    for k in range(4):
+        A[n + k, k] = regularizer
+
+    return A, b
+
+
+def fit_vertex_gauss_newton(
+        xyz:           np.ndarray,
+        t:             np.ndarray,
+        geo:           ANNIEGeometry,
+        regularizer:   float = 0.05,
+        break_dist_m:  float = 0.005,
+        max_iter:      int   = 100,
+        y_spacing:     float = 0.5,
+        n_planar:      int   = 15,
+) -> Tuple[np.ndarray, float, bool, int]:
+    """
+    Gauss-Newton vertex fitter for neutron capture clusters.
+
+    Port of VertexLeastSquares::RunLoopMC.  Generates a sunflower grid of seed
+    vertices, runs Gauss-Newton from each seed, and returns the fitted vertex
+    with the smallest RMS of timing residuals.
+
+    Parameters
+    ----------
+    xyz           : (N, 3) PMT positions for all cluster hits (metres)
+    t             : (N,)   offset-corrected hit times (ns)
+    geo           : ANNIEGeometry for containment checking
+    regularizer   : Tikhonov λ — penalises large Gauss-Newton steps
+    break_dist_m  : convergence threshold (metres; ~5 mm matches C++ default)
+    max_iter      : max iterations per seed
+
+    Returns
+    -------
+    vtx        : (3,) best-fit vertex in metres  (NaN vector if failed)
+    fit_rms_ns : RMS of timing residuals at best vertex (ns)
+    converged  : True if any seed produced an in-tank vertex
+    n_fit_hits : number of hits used after causal-compatibility filtering
+    """
+    _NAN_VTX = np.full(3, np.nan)
+
+    fit_mask = _filter_hits_for_vertex(xyz, t)
+    xyz_fit  = xyz[fit_mask]
+    t_fit    = t[fit_mask]
+    n_fit    = int(fit_mask.sum())
+
+    if n_fit < 4:
+        return _NAN_VTX, np.nan, False, n_fit
+
+    seeds = _generate_seed_vertices(geo, y_spacing=y_spacing, n_planar=n_planar)
+
+    best_vtx  = _NAN_VTX.copy()
+    best_rms  = np.inf
+    converged = False
+
+    for seed in seeds:
+        guess   = seed.copy()
+        in_tank = True
+
+        for _ in range(max_iter):
+            last_guess = guess.copy()
+            A, b       = _jac_residual(guess, xyz_fit, t_fit, regularizer)
+            sol, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+
+            if not np.all(np.isfinite(sol)):
+                in_tank = False
+                break
+
+            guess = last_guess + sol[:3]
+
+            if not _in_tank(guess, geo):
+                in_tank = False
+                break
+
+            if float(np.linalg.norm(sol[:3])) < break_dist_m:
+                break
+
+        if not in_tank:
+            continue
+
+        _, b_eval = _jac_residual(guess, xyz_fit, t_fit, regularizer)
+        rms = float(np.sqrt(np.mean(b_eval[:n_fit] ** 2)))
+
+        if rms < best_rms:
+            best_rms  = rms
+            best_vtx  = guess.copy()
+            converged = True
+
+    return best_vtx, (best_rms if converged else np.nan), converged, n_fit
+
+
+def _fit_goodness(xyz: np.ndarray, t: np.ndarray,
+                  vtx: np.ndarray, t_emit: float,
+                  sigma_tight: float = 5.0,
+                  sigma_wide:  float = 60.0) -> float:
+    """
+    SK FitGoodness metric (arXiv:2505.04409 eq. 3.1–3.2).
+
+    g = Σᵢ wᵢ × exp(−tᵣₑₛᵢ² / (2σ_tight²))
+    wᵢ ∝ exp(−tᵣₑₛᵢ² / (2σ_wide²))   [normalised to Σwᵢ = 1]
+
+    σ_tight = 5 ns  (PMT timing resolution)
+    σ_wide  = 60 ns (wide window for outlier suppression)
+    tᵣₑₛᵢ = tᵢ − |rᵢ − vtx|/c_w − t_emit
+
+    Larger g → tighter timing consistency → more signal-like.
+    """
+    dist   = np.linalg.norm(xyz - vtx[np.newaxis, :], axis=1)
+    t_res  = t - dist / SOL_WATER - t_emit
+
+    log_w  = -(t_res ** 2) / (2.0 * sigma_wide ** 2)
+    log_w -= log_w.max()
+    w      = np.exp(log_w)
+    w     /= w.sum()
+
+    return float(np.sum(w * np.exp(-(t_res ** 2) / (2.0 * sigma_tight ** 2))))
 
 
 def compute_cluster_features(df_cluster: pd.DataFrame,
@@ -319,7 +561,24 @@ def compute_cluster_features(df_cluster: pd.DataFrame,
     else:
         pe_bal = np.nan
 
-    # ---- Isotropy (beta parameters) ----
+    # ---- Legacy ANNIE charge balance ----
+    # CB = sqrt( sum_pmt(Q_i²) / (sum_pmt(Q_i))² − 1/121 )
+    # Q_i is total charge deposited on PMT tube i (hits summed per tube).
+    # 1/121 is the baseline for uniform distribution (legacy ClusterFinder constant).
+    # arg can go slightly negative for >121 PMTs with equal charge → clamp to 0.
+    if pe_total > 0:
+        pmt_q: dict = {}
+        for pid, p in zip(ids, pe):
+            pmt_q[int(pid)] = pmt_q.get(int(pid), 0.0) + float(p)
+        q_arr   = np.array(list(pmt_q.values()), dtype=float)
+        sum_q   = float(q_arr.sum())
+        sum_q2  = float((q_arr ** 2).sum())
+        arg     = sum_q2 / (sum_q * sum_q) - 1.0 / 121.0
+        charge_bal_legacy = float(np.sqrt(max(arg, 0.0)))
+    else:
+        charge_bal_legacy = np.nan
+
+    # ---- Isotropy (beta parameters, SK convention β1–β5) ----
     # Unit vectors from vertex to each hit PMT
     vecs  = xyz - vertex[np.newaxis, :]
     norms = np.linalg.norm(vecs, axis=1, keepdims=True)
@@ -328,10 +587,13 @@ def compute_cluster_features(df_cluster: pd.DataFrame,
 
     beta1 = _beta_k(uvecs, k=1)
     beta2 = _beta_k(uvecs, k=2)
+    beta3 = _beta_k(uvecs, k=3)
+    beta4 = _beta_k(uvecs, k=4)
+    beta5 = _beta_k(uvecs, k=5)
 
-    # ---- Direct-light window features (P3) ----
-    # n_hits_early: hits within the first 20 ns of the cluster (direct Cherenkov
-    # only, cuts reflections).  Uses offset-corrected times centred on the
+    # ---- Direct-light window features ----
+    # n_hits_early: hits within ±10 ns of the cluster median (direct Cherenkov
+    # only, cuts reflections). Uses offset-corrected times centred on the
     # cluster median to be robust to absolute time offset.
     # 20 ns ≈ maximum direct photon travel time across the tank diagonal.
     DIRECT_LIGHT_NS = 20.0
@@ -360,6 +622,45 @@ def compute_cluster_features(df_cluster: pd.DataFrame,
     else:
         t_window_80pct = 0.0
 
+    # ---- Gauss-Newton vertex fitter ----
+    vtx_fit, fit_rms_ns, fit_converged, n_fit_hits = fit_vertex_gauss_newton(
+        xyz, t_corr, geo)
+
+    if fit_converged:
+        v_xz_fit   = vtx_fit[[0, 2]] - geo.tank_center[[0, 2]]
+        r_vtx_fit  = float(np.linalg.norm(v_xz_fit))
+        d_wall_fit = float(min(geo.tank_radius - r_vtx_fit,
+                               geo.tank_top - float(vtx_fit[1]),
+                               float(vtx_fit[1]) - geo.tank_bot))
+
+        vecs_fit  = xyz - vtx_fit[np.newaxis, :]
+        norms_fit = np.linalg.norm(vecs_fit, axis=1, keepdims=True)
+        norms_fit = np.where(norms_fit > 1e-6, norms_fit, 1e-6)
+        uvecs_fit = vecs_fit / norms_fit
+        beta1_fit = _beta_k(uvecs_fit, k=1)
+        beta2_fit = _beta_k(uvecs_fit, k=2)
+        beta3_fit = _beta_k(uvecs_fit, k=3)
+        beta4_fit = _beta_k(uvecs_fit, k=4)
+        beta5_fit = _beta_k(uvecs_fit, k=5)
+
+        dist_fit            = np.linalg.norm(xyz - vtx_fit[np.newaxis, :], axis=1)
+        t_tof_fit           = t_corr - dist_fit / SOL_WATER
+        sigma_t_mad_tof_fit = 1.4826 * float(
+            np.median(np.abs(t_tof_fit - np.median(t_tof_fit))))
+        t_emit_fit          = float(np.mean(t_tof_fit))
+        fit_goodness_reco   = _fit_goodness(xyz, t_corr, vtx_fit, t_emit_fit)
+
+        d_source_fit = (float(np.linalg.norm(vtx_fit - np.asarray(source_pos_m, dtype=float)))
+                        if source_pos_m is not None else np.nan)
+    else:
+        d_wall_fit = beta1_fit = beta2_fit = beta3_fit = beta4_fit = beta5_fit = np.nan
+        sigma_t_mad_tof_fit = fit_goodness_reco = d_source_fit = np.nan
+
+    # SK FitGoodness using PE-weighted centroid (INIT mode — no fitter needed)
+    dist_init   = np.linalg.norm(xyz - vertex[np.newaxis, :], axis=1)
+    t_emit_init = float(np.mean(t_corr - dist_init / SOL_WATER))
+    fit_goodness_init = _fit_goodness(xyz, t_corr, vertex, t_emit_init)
+
     return {
         "n_hits":              n,
         "t_mean":              t_mean,
@@ -378,16 +679,40 @@ def compute_cluster_features(df_cluster: pd.DataFrame,
         # Charge / spatial
         "pe_total":            pe_total,
         "pe_balance":          pe_bal,
+        "charge_bal_legacy":   charge_bal_legacy,
         "spatial_rms":         spatial_rms,
         "d_wall":              d_wall,
         "d_source":            d_source,
-        # Isotropy
+        # Isotropy β1–β5 (SK convention: 2/(N*(N-1)) × Σᵢ≠ⱼ P_k(cos θᵢⱼ))
         "beta1":               beta1,
         "beta2":               beta2,
-        # Vertex
+        "beta3":               beta3,
+        "beta4":               beta4,
+        "beta5":               beta5,
+        # Vertex — PE-weighted centroid
         "vtx_x":               float(vertex[0]),
         "vtx_y":               float(vertex[1]),
         "vtx_z":               float(vertex[2]),
+        # Vertex — Gauss-Newton fitted
+        "vtx_fit_x":           float(vtx_fit[0]) if fit_converged else np.nan,
+        "vtx_fit_y":           float(vtx_fit[1]) if fit_converged else np.nan,
+        "vtx_fit_z":           float(vtx_fit[2]) if fit_converged else np.nan,
+        "fit_rms_ns":          fit_rms_ns,
+        "fit_converged":       int(fit_converged),
+        "n_fit_hits":          n_fit_hits,
+        "d_wall_fit":          d_wall_fit,
+        "d_source_fit":        d_source_fit,
+        # β1–β5 using fitted-vertex directions
+        "beta1_fit":           beta1_fit,
+        "beta2_fit":           beta2_fit,
+        "beta3_fit":           beta3_fit,
+        "beta4_fit":           beta4_fit,
+        "beta5_fit":           beta5_fit,
+        # Timing spread: ToF-corrected with fitted vertex
+        "sigma_t_mad_tof_fit": sigma_t_mad_tof_fit,
+        # SK FitGoodness — larger = tighter timing consistency = more signal-like
+        "fit_goodness_init":   fit_goodness_init,
+        "fit_goodness_reco":   fit_goodness_reco,
     }
 
 
@@ -522,7 +847,11 @@ def extract_all_features(ctx: RunContext,
           f"OPTICS config: ms={min_samples} xi={xi} t_unit={t_unit_ns}ns  "
           f"prefilter={hit_prefilter_ns}ns  source_tof={src_str}")
 
-    for evid in event_ids:
+    t_start     = time.time()
+    n_total     = len(event_ids)
+    print_every = max(1, n_total // 20)   # ~20 progress lines over the full run
+
+    for i_ev, evid in enumerate(event_ids):
         df_ev = pulses[pulses["eventID"] == evid].reset_index(drop=True)
         if len(df_ev) < min_pulses_per_event:
             continue
@@ -571,12 +900,16 @@ def extract_all_features(ctx: RunContext,
                 is_n, dom_tid = _truth_label_cluster(mask, df_ev, truth_mask)
                 comp = _hit_composition(mask, df_ev)
 
-                # Gamma-cluster flag: cluster arriving >500 ns before capture
-                # = prompt AmBe 4.44 MeV gamma, not a false-positive spurious
+                # Prompt-signal flag: cluster is prompt AmBe gamma, muon light, etc.
+                # Tagged by timing (early arrival) OR composition (class-5 dominant
+                # with only stray neutron contamination ≤ PROMPT_SIGNAL_MAX_NEUTRON_HITS).
                 cluster_offset = (feats["t_mean"] - neu_ref_t
                                   if not (neu_ref_t != neu_ref_t) else float("nan"))
-                is_gamma = int(cluster_offset < GAMMA_CLUSTER_THRESHOLD_NS
-                               if cluster_offset == cluster_offset else False)
+                timing_prompt = (cluster_offset < PROMPT_SIGNAL_THRESHOLD_NS
+                                 if cluster_offset == cluster_offset else False)
+                comp_prompt   = (comp["frac_nonneutron"] > 0.5 and
+                                 comp["n_neutron"] <= PROMPT_SIGNAL_MAX_NEUTRON_HITS)
+                is_prompt = int(timing_prompt or comp_prompt)
 
                 row = {
                     "eventID":                 int(evid),
@@ -587,11 +920,20 @@ def extract_all_features(ctx: RunContext,
                     "cluster_time_offset_ns":  round(cluster_offset, 1)
                                                if cluster_offset == cluster_offset
                                                else float("nan"),
-                    "is_gamma_cluster":        is_gamma,
+                    "is_prompt_cluster":       is_prompt,
                 }
                 row.update(feats)
                 row.update(comp)
                 rows.append(row)
+
+        if (i_ev + 1) % print_every == 0 or (i_ev + 1) == n_total:
+            elapsed   = time.time() - t_start
+            rate      = (i_ev + 1) / elapsed
+            remaining = (n_total - i_ev - 1) / rate if rate > 0 else 0
+            print(f"[cluster_features]  {i_ev+1:5d}/{n_total}  "
+                  f"({100*(i_ev+1)/n_total:.0f}%)  "
+                  f"elapsed={elapsed:.0f}s  rate={rate:.1f} ev/s  "
+                  f"ETA={remaining:.0f}s  clusters={len(rows)}", flush=True)
 
     df = pd.DataFrame(rows)
     print(f"[cluster_features] extracted {len(df)} cluster records  "
@@ -619,13 +961,31 @@ FEATURE_LABELS = {
     "t_window_80pct":      "Narrowest window containing 80% of hits (ns)",
     # Charge / spatial
     "pe_total":            "Total PE",
-    "pe_balance":          "Charge balance  (max−min)/total",
+    "pe_balance":          "Charge balance  (max−min)/total  [quadrant]",
+    "charge_bal_legacy":   "Legacy charge balance  sqrt(ΣQ²/ΣQ² − 1/121)  [per-PMT]",
     "spatial_rms":         "Spatial RMS of hit PMTs  (m)",
     "d_wall":              "Distance to nearest wall  (m)",
     "d_source":            "Distance from vertex to AmBe source  (m)",
-    # Isotropy
-    "beta1":               "Isotropy β₁  (Legendre P₁)",
-    "beta2":               "Isotropy β₂  (Legendre P₂)",
+    # Isotropy β1–β5 (SK convention, PE-weighted centroid vertex)
+    "beta1":               "Isotropy β₁  (Legendre P₁, SK)",
+    "beta2":               "Isotropy β₂  (Legendre P₂, SK)",
+    "beta3":               "Isotropy β₃  (Legendre P₃, SK)",
+    "beta4":               "Isotropy β₄  (Legendre P₄, SK)",
+    "beta5":               "Isotropy β₅  (Legendre P₅, SK)",
+    # Gauss-Newton fitted vertex
+    "fit_rms_ns":          "Vertex fit timing RMS (ns)",
+    "fit_converged":       "Vertex fit converged  (0/1)",
+    "n_fit_hits":          "N hits used in vertex fit",
+    "d_wall_fit":          "Distance to wall — fitted vertex  (m)",
+    "d_source_fit":        "Distance to AmBe source — fitted vertex  (m)",
+    "beta1_fit":           "Isotropy β₁ — fitted vertex",
+    "beta2_fit":           "Isotropy β₂ — fitted vertex",
+    "beta3_fit":           "Isotropy β₃ — fitted vertex",
+    "beta4_fit":           "Isotropy β₄ — fitted vertex",
+    "beta5_fit":           "Isotropy β₅ — fitted vertex",
+    "sigma_t_mad_tof_fit": "σ_t MAD — ToF-corrected (fitted vertex)  (ns)",
+    "fit_goodness_init":   "SK FitGoodness — centroid vertex  (0–1)",
+    "fit_goodness_reco":   "SK FitGoodness — fitted vertex  (0–1)",
 }
 
 
@@ -661,10 +1021,10 @@ def feature_plots(df: pd.DataFrame, ctx: RunContext):
                     lo, hi = float(all_vals.min()), float(all_vals.max()) + 1e-6
                 bins = np.linspace(lo, hi, 40)
 
-                ax.hist(sig, bins=bins, density=True, alpha=0.6,
-                        color="tomato",    label=f"Truth neutron  (n={len(sig)})")
+                ax.hist(sig, bins=bins, density=True, alpha=0.6, histtype="step",
+                        color=C_SIG,    label=f"Truth neutron  (n={len(sig)})")
                 ax.hist(bkg, bins=bins, density=True, alpha=0.6,
-                        color="steelblue", label=f"Spurious  (n={len(bkg)})")
+                        color=C_SPU, label=f"Spurious  (n={len(bkg)})")
                 ax.set_xlabel(xlabel, fontsize=9)
                 ax.set_ylabel("Density")
                 ax.set_title(method.upper(), fontsize=10)
@@ -706,11 +1066,11 @@ def separation_summary(df: pd.DataFrame) -> pd.DataFrame:
     """
     Print a ranked table of feature separation power.
     Separates background into:
-      - gamma clusters (is_gamma_cluster=1): prompt AmBe gamma, not false positives
-      - real spurious  (is_truth_neutron=0 and is_gamma_cluster=0): true background
+      - prompt signal clusters (is_prompt_cluster=1): AmBe gamma / muon / beam light
+      - real spurious  (is_truth_neutron=0 and is_prompt_cluster=0): true background
     Separation is computed against real spurious only.
     """
-    has_gamma_flag = "is_gamma_cluster" in df.columns
+    has_prompt_flag = "is_prompt_cluster" in df.columns
     rows = []
     for feat in FEATURE_LABELS:
         if feat not in df.columns:
@@ -718,10 +1078,10 @@ def separation_summary(df: pd.DataFrame) -> pd.DataFrame:
         for method in ["optics", "clusterfinder"]:
             sub = df[df["method"] == method]
             sig = sub[sub["is_truth_neutron"] == 1][feat].dropna()
-            # Exclude gamma clusters from background for cleaner separation metric
-            if has_gamma_flag:
+            # Exclude prompt signal clusters from background for cleaner separation metric
+            if has_prompt_flag:
                 real_bkg = sub[(sub["is_truth_neutron"] == 0) &
-                               (sub["is_gamma_cluster"] == 0)]
+                               (sub["is_prompt_cluster"] == 0)]
             else:
                 real_bkg = sub[sub["is_truth_neutron"] == 0]
             bkg = real_bkg[feat].dropna()
@@ -766,21 +1126,21 @@ def spurious_composition_summary(df: pd.DataFrame) -> pd.DataFrame:
         matched   = sub[sub["is_truth_neutron"] == 1]
         n_spur    = len(spurious)
 
-        # Split spurious into gamma clusters vs real spurious
-        has_gamma_flag = "is_gamma_cluster" in sub.columns
-        if has_gamma_flag:
-            gamma_clusters = spurious[spurious["is_gamma_cluster"] == 1]
-            real_spurious  = spurious[spurious["is_gamma_cluster"] == 0]
+        # Split spurious into prompt signal clusters vs real spurious
+        has_prompt_flag = "is_prompt_cluster" in sub.columns
+        if has_prompt_flag:
+            prompt_clusters = spurious[spurious["is_prompt_cluster"] == 1]
+            real_spurious   = spurious[spurious["is_prompt_cluster"] == 0]
         else:
-            gamma_clusters = pd.DataFrame()
-            real_spurious  = spurious
+            prompt_clusters = pd.DataFrame()
+            real_spurious   = spurious
 
         print(f"\n[{method.upper()}]  {n_total} clusters total: "
               f"{len(matched)} matched, {n_spur} spurious")
-        if has_gamma_flag and len(gamma_clusters) > 0:
-            print(f"  ↳ Of spurious: {len(gamma_clusters)} prompt gamma clusters "
-                  f"(offset < {GAMMA_CLUSTER_THRESHOLD_NS:.0f} ns) + "
-                  f"{len(real_spurious)} real spurious")
+        if has_prompt_flag and len(prompt_clusters) > 0:
+            print(f"  ↳ Of spurious: {len(prompt_clusters)} prompt signal clusters "
+                  f"(early timing or class-5 dominant ≤{PROMPT_SIGNAL_MAX_NEUTRON_HITS} "
+                  f"neutron hits) + {len(real_spurious)} real spurious")
 
         if n_spur == 0:
             print("  No spurious clusters.")
@@ -826,22 +1186,22 @@ def spurious_composition_summary(df: pd.DataFrame) -> pd.DataFrame:
         print(f"  Mixed (>0% neutron hits):      {mixed} / {n_spur}  "
               f"({100*mixed/n_spur:.1f}%)")
 
-        if has_gamma_flag and len(real_spurious) > 0:
+        if has_prompt_flag and len(real_spurious) > 0:
             real_means = real_spurious[frac_cols + n_cols].mean()
             print(f"\n  Real spurious only ({len(real_spurious)} clusters, "
-                  f"excluding gamma):")
+                  f"excluding prompt signal):")
             print(f"    Neutron (class 1-4):       {real_means['frac_neutron']:.3f}  "
                   f"(mean {real_means['n_neutron']:.1f} hits/cluster)")
             print(f"    Non-neutron physics (−5):  {real_means['frac_nonneutron']:.3f}  "
                   f"(mean {real_means['n_nonneutron']:.1f} hits/cluster)")
             real_pur = len(matched) / (len(matched) + len(real_spurious))
-            print(f"  Corrected purity (excl. gamma clusters): {real_pur:.3f}")
+            print(f"  Corrected purity (excl. prompt signal clusters): {real_pur:.3f}")
 
         rows.append({
             "method":               method,
             "n_spurious":           n_spur,
-            "n_gamma_clusters":     len(gamma_clusters) if has_gamma_flag else 0,
-            "n_real_spurious":      len(real_spurious)  if has_gamma_flag else n_spur,
+            "n_prompt_clusters":    len(prompt_clusters) if has_prompt_flag else 0,
+            "n_real_spurious":      len(real_spurious)   if has_prompt_flag else n_spur,
             "mean_frac_neutron":    round(float(means["frac_neutron"]), 4),
             "mean_frac_nonneutron": round(float(means["frac_nonneutron"]), 4),
             "mean_frac_darknoise":  round(float(means["frac_darknoise"]), 4),
@@ -881,6 +1241,155 @@ def _config_from_ctx(ctx: RunContext):
         source_pos_m = None
 
     return ms, xi, t_unit, prefilter, truth_win, geo_path, off_path, source_pos_m
+
+
+def make_separation_plots(df: pd.DataFrame, ctx: "RunContext") -> Path:
+    """
+    Generate per-feature distribution plots comparing three cluster categories:
+      - Signal         (is_truth_neutron == 1)
+      - Prompt signal  (is_prompt_cluster == 1)  — AmBe gamma / muon / beam light
+      - Real spurious  (is_truth_neutron == 0, is_prompt_cluster == 0)
+                                                 — true false-positive clusters
+
+    Produces one PDF page per method (optics / clusterfinder) with a 6×3 grid
+    of subplots — one per physics feature.  Each subplot shows overlapping
+    density histograms with vertical median lines and the separation σ values
+    printed in the title.
+
+    Saved to: <plots_dir>/<run_name>__feature_separation_plots.pdf
+    """
+    # ── features & display ranges (xlim may clip tails for readability) ───────
+    FEAT_CFG = [
+        ("n_hits",            "N hits in cluster",                  (0,   55)),
+        ("pe_total",          "Total PE",                           (0,  110)),
+        ("n_hits_early",      "N hits early (±10 ns window)",       (0,   50)),
+        ("sigma_t_mad",       "σ_t MAD — raw (ns)  [robust]",      (0,   30)),
+        ("sigma_t_mad_corr",  "σ_t MAD — offset-corrected (ns)",   (0,   30)),
+        ("sigma_t_mad_tof",   "σ_t MAD — ToF-corrected (ns)",      (0,   30)),
+        ("sigma_t_early_mad", "σ_t MAD — direct-light window (ns)",(0,   20)),
+        ("t_window_80pct",    "80% hit window width (ns)",          (0,  200)),
+        ("sigma_t",           "σ_t std — raw (ns)",                 (0,  500)),
+        ("sigma_t_corr",      "σ_t std — offset-corrected (ns)",   (0,  500)),
+        ("sigma_t_tof",       "σ_t std — ToF-corrected (ns)",      (0,  500)),
+        ("pe_balance",        "Charge balance  [0–1]  (quadrant)",  (0,    1)),
+        ("charge_bal_legacy", "Legacy charge balance  CB",          (0,  0.5)),
+        ("spatial_rms",       "Spatial RMS (m)",                    (0,    2)),
+        ("d_wall",            "Distance to wall (m)",               (0,  1.6)),
+        ("d_source",          "Distance to AmBe source (m)",        (0,  1.9)),
+        ("beta1",             "β₁ — Legendre P1 (SK)",             (-0.5, 2)),
+        ("beta2",             "β₂ — Legendre P2 (SK)",             (-0.5, 2)),
+        ("beta3",             "β₃ — Legendre P3 (SK)",             (-0.5, 2)),
+        ("beta4",             "β₄ — Legendre P4 (SK)",             (-0.5, 2)),
+        ("beta5",             "β₅ — Legendre P5 (SK)",             (-0.5, 2)),
+        # Gauss-Newton fitted vertex
+        ("fit_rms_ns",          "Vertex fit timing RMS (ns)",          (0,   30)),
+        ("fit_goodness_reco",   "SK FitGoodness — fitted vtx (0–1)",   (0,    1)),
+        ("fit_goodness_init",   "SK FitGoodness — centroid (0–1)",     (0,    1)),
+        ("d_wall_fit",          "Distance to wall — fitted vtx (m)",   (0,  1.6)),
+        ("sigma_t_mad_tof_fit", "σ_t MAD ToF — fitted vtx (ns)",      (0,   20)),
+        ("beta1_fit",           "β₁ — fitted vertex",                 (-0.5, 2)),
+    ]
+
+    def _sep(a, b):
+        """Separation in units of pooled std."""
+        if len(a) < 2 or len(b) < 2:
+            return float("nan")
+        return abs(a.mean() - b.mean()) / np.sqrt((a.std()**2 + b.std()**2) / 2 + 1e-9)
+
+    has_prompt = "is_prompt_cluster" in df.columns
+
+    pdf_path = ctx.plots_dir / f"{ctx.run_name}__feature_separation_plots.pdf"
+    ctx.plots_dir.mkdir(parents=True, exist_ok=True)
+
+    with PdfPages(pdf_path) as pdf:
+        for method in ["optics", "clusterfinder"]:
+            sub = df[df["method"] == method]
+            if len(sub) == 0:
+                continue
+
+            sig = sub[sub["is_truth_neutron"] == 1]
+            if has_prompt:
+                gam = sub[(sub["is_truth_neutron"] == 0) & (sub["is_prompt_cluster"] == 1)]
+                spu = sub[(sub["is_truth_neutron"] == 0) & (sub["is_prompt_cluster"] == 0)]
+            else:
+                gam = pd.DataFrame()
+                spu = sub[sub["is_truth_neutron"] == 0]
+
+            NCOLS, NROWS = 3, 10
+            fig, axes = plt.subplots(NROWS, NCOLS, figsize=(15, 22))
+            fig.suptitle(
+                f"{ctx.run_name.upper()} — {method.upper()} clusters\n"
+                f"Feature distributions: Signal / Prompt signal / Real spurious\n"
+                f"n = {len(sig)} signal  |  {len(gam)} prompt  |  {len(spu)} real spurious",
+                fontsize=11, y=1.001,
+            )
+
+            for idx, (col, label, xlim) in enumerate(FEAT_CFG):
+                row, c = divmod(idx, NCOLS)
+                ax = axes[row, c]
+
+                if col not in sub.columns:
+                    ax.set_visible(False)
+                    continue
+
+                s = sig[col].dropna().clip(*xlim)
+                g = gam[col].dropna().clip(*xlim) if len(gam) > 0 else pd.Series(dtype=float)
+                r = spu[col].dropna().clip(*xlim)
+
+                bins = np.linspace(xlim[0], xlim[1], 40)
+                kw = dict(bins=bins, density=True)
+
+                ax.hist(s, histtype="stepfilled", color=C_SIG, alpha=0.4, edgecolor=C_SIG, linewidth=1.2, **kw)
+                if len(g) > 1:
+                    ax.hist(g, histtype="step", color=C_GAM, linewidth=1.8, **kw)
+                if len(r) > 1:
+                    ax.hist(r, histtype="step", color=C_SPU, linewidth=1.8, linestyle="--", **kw)
+
+                # Median lines
+                if len(s): ax.axvline(s.median(), color=C_SIG, lw=1.8, ls="--")
+                if len(g) > 1: ax.axvline(g.median(), color=C_GAM, lw=1.8, ls="--")
+                if len(r) > 1: ax.axvline(r.median(), color=C_SPU, lw=1.8, ls="--")
+
+                sep_sr = _sep(s, r)
+                sep_sg = _sep(s, g) if len(g) > 1 else float("nan")
+                sep_str = f"sep(sig|spu)={sep_sr:.2f}σ"
+                if not np.isnan(sep_sg):
+                    sep_str += f"  sep(sig|prompt)={sep_sg:.2f}σ"
+
+                ax.set_title(f"{label}\n{sep_str}", fontsize=8)
+                ax.set_xlabel(label, fontsize=7)
+                ax.set_ylabel("Density", fontsize=7)
+                ax.tick_params(labelsize=7)
+                ax.set_xlim(*xlim)
+
+            # Hide unused subplots (17 features in 6×3 grid → 1 spare)
+            for spare in range(len(FEAT_CFG), NROWS * NCOLS):
+                r2, c2 = divmod(spare, NCOLS)
+                axes[r2, c2].set_visible(False)
+
+            # Shared legend in spare cell
+            legend_elements = [
+                Line2D([0], [0], color=C_SIG, lw=8, alpha=0.7,
+                       label=f"Signal — neutron capture  (n={len(sig)})"),
+                Line2D([0], [0], color=C_GAM, lw=8, alpha=0.7,
+                       label=f"Prompt signal — γ / muon / beam  (n={len(gam)})"),
+                Line2D([0], [0], color=C_SPU, lw=8, alpha=0.7,
+                       label=f"Real spurious — true false positives  (n={len(spu)})"),
+                Line2D([0], [0], color="gray", lw=1.8, ls="--",
+                       label="Median of each category"),
+            ]
+            spare_ax = axes[NROWS - 1, NCOLS - 1]
+            spare_ax.set_visible(True)
+            spare_ax.axis("off")
+            spare_ax.legend(handles=legend_elements, loc="center",
+                            fontsize=9, framealpha=0.9)
+
+            plt.tight_layout()
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+    print(f"[cluster_features] wrote separation plots → {pdf_path}")
+    return pdf_path
 
 
 def run(ctx: RunContext, argv: Optional[Iterable[str]] = None) -> Path:
@@ -929,8 +1438,11 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None) -> Path:
     comp_summary.to_csv(comp_csv, index=False)
     print(f"\n[cluster_features] wrote spurious composition → {comp_csv}")
 
-    # Diagnostic plots
+    # Diagnostic plots — existing feature distributions
     feature_plots(df, ctx)
+
+    # Signal / gamma / real-spurious separation plots (all 17 physics features)
+    make_separation_plots(df, ctx)
 
     return out_parquet
 

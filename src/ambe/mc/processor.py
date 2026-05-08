@@ -18,7 +18,7 @@ Two failure sub-modes are tracked in match_failure_reason:
                     time match exceeds MATCH_TOL (likely a merged-pulse physics
                     hit whose MCHit arrival time doesn't align with the ADCPulse
                     peak; is_darknoise is carried from the nearest DP entry)
-
+                    
 This matters for OPTICS training: conflating the two failure modes would label
 merged-pulse physics hits as dark noise, corrupting the training set.
 

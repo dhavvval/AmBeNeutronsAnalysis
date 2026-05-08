@@ -26,8 +26,8 @@ optics:
   xi: [0.10]
   t_unit_ns: [10, 25]
   truth_window_ns: 75.0
-  hit_prefilter_ns: 2000.0         # grid sweep only
-  source_position_m: [0.0, 0.0, 0.0]
+  hit_prefilter_ns: 0.0         # grid sweep only
+  source_position_m: [0, -0.1446, 1.681]
 
 features:
   # ms=8 gives mean_n_predicted=0.968 (≈1/event), 0 spurious — correct for single-neutron file.
@@ -38,7 +38,7 @@ features:
   t_unit_ns: 10.0
   hit_prefilter_ns: 0.0            # no prefilter during feature extraction
   truth_window_ns: 75.0
-  source_position_m: [0.0, 0.0, 0.0]
+  source_position_m: [0, -0.1446, 1.681]
 
 geometry:
   pmt_geometry:   /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/FullTankPMTGeometry.csv

@@ -16,7 +16,7 @@ Metrics per (event, method, hyperparameters):
 
 The old `t_scale` parameter was a no-op: multiplying the time column by a
 constant before StandardScaler() has no effect because StandardScaler
-normalises each column to unit variance independently, cancelling the factor.
+normalises each column to unit variance independently, cancelling the factor. 
 
 The correct approach is to:
   1. StandardScaler on x, y, z only  →  spatial axes: zero mean, unit std
@@ -53,6 +53,7 @@ from __future__ import annotations
 import argparse
 import itertools
 from pathlib import Path
+import time
 from typing import Iterable, Optional, Sequence
 
 import numpy as np
@@ -71,12 +72,14 @@ DEFAULT_T_UNIT    = 50.0    # ns — default time-axis unit (see module docstrin
 DEFAULT_WINDOW    = 75.0    # ns — default truth window (see module docstring)
 DEFAULT_PREFILTER = 2000.0  # ns — default hit pre-filter window (see _prefilter_hits)
 
-# Clusters whose mean time is earlier than this offset from the neutron capture
-# reference are counted as gamma clusters, not spurious background.
-# The prompt AmBe 4.44 MeV gamma arrives ~18,000 ns BEFORE the neutron capture;
-# -500 ns sits cleanly in the gap between Population 1 (gamma) and Population 2
-# (near-capture contamination at ~-1.4 ns).
-GAMMA_CLUSTER_THRESHOLD_NS = -500.0
+# Clusters are tagged as "prompt signal" (not real spurious) when EITHER:
+#   1. Timing:     cluster mean time < (capture ref - PROMPT_SIGNAL_THRESHOLD_NS).
+#      Catches AmBe gamma (~-18,000 ns), muon prompt light (~-30,000 ns), etc.
+#   2. Composition: cluster is class-5 dominant (>50%) with only stray neutron
+#      contamination (≤ PROMPT_SIGNAL_MAX_NEUTRON_HITS hits).
+#      Catches near-capture class-5 clusters that picked up 1-2 stray neutron hits.
+PROMPT_SIGNAL_THRESHOLD_NS     = -500.0
+PROMPT_SIGNAL_MAX_NEUTRON_HITS = 2       # stray neutron hits ≤ this → prompt signal
 
 # Speed of light in water (m/ns).  Used for source ToF correction.
 SOL_WATER = 0.299792458 * 0.75
@@ -300,19 +303,21 @@ def _optics_cluster_outcomes(df_event: pd.DataFrame,
 
     Returns keys: n_truth, n_predicted, n_matched, n_spurious, n_missed,
                   n_split, agreement,
-                  n_gamma_clusters, n_real_spurious, corrected_agreement.
+                  n_prompt_clusters, n_real_spurious, corrected_agreement.
 
-    n_gamma_clusters    — subset of spurious clusters that are the prompt AmBe
-                          gamma (cluster mean time offset from neutron capture
-                          reference < GAMMA_CLUSTER_THRESHOLD_NS = -500 ns).
-                          These are real physical clusters, not false positives.
-    n_real_spurious     — n_spurious - n_gamma_clusters: true false-positive clusters.
-    corrected_agreement — agreement counting only n_real_spurious (not gamma clusters).
+    n_prompt_clusters   — subset of spurious clusters identified as prompt signal
+                          (AmBe gamma, muon light, etc.) by timing criterion
+                          (offset < PROMPT_SIGNAL_THRESHOLD_NS) OR composition
+                          (class-5 dominant with ≤ PROMPT_SIGNAL_MAX_NEUTRON_HITS
+                          stray neutron hits).  These are not false positives.
+    n_real_spurious     — n_spurious - n_prompt_clusters: true false-positive clusters.
+    corrected_agreement — agreement counting only n_real_spurious (not prompt clusters).
     """
-    labels     = np.asarray(labels, dtype=int)
-    track_ids  = df_event["ancestor_trackID"].to_numpy(int)
-    pdgs       = df_event["ancestor_pdg"].to_numpy(int)
-    hit_times  = df_event["t"].to_numpy(float)
+    labels      = np.asarray(labels, dtype=int)
+    track_ids   = df_event["ancestor_trackID"].to_numpy(int)
+    pdgs        = df_event["ancestor_pdg"].to_numpy(int)
+    hit_times   = df_event["t"].to_numpy(float)
+    truth_class = df_event["truth_class"].to_numpy(int)
 
     # Truth neutron capture reference time (median of in-window neutron hits)
     neu_times = hit_times[truth_neutron_mask] if truth_neutron_mask.any() else np.array([])
@@ -329,22 +334,29 @@ def _optics_cluster_outcomes(df_event: pd.DataFrame,
     unique_labels = [c for c in np.unique(labels) if c >= 0]
     n_predicted   = len(unique_labels)
 
-    matched_tids    = set()
-    split_tids      = set()
-    n_spurious      = 0
-    n_gamma_clusters = 0
+    matched_tids     = set()
+    split_tids       = set()
+    n_spurious       = 0
+    n_prompt_clusters = 0
 
     for c in unique_labels:
         mask    = labels == c
         n_total = int(mask.sum())
 
+        n_neutron_c = int(np.isin(truth_class[mask], list(NEUTRON_CLASSES)).sum())
+        n_class5_c  = int((truth_class[mask] == -5).sum())
+
+        def _is_prompt(mean_t):
+            timing = (not np.isnan(neu_ref_t) and
+                      (mean_t - neu_ref_t) < PROMPT_SIGNAL_THRESHOLD_NS)
+            comp   = (n_class5_c > n_total / 2 and
+                      n_neutron_c <= PROMPT_SIGNAL_MAX_NEUTRON_HITS)
+            return timing or comp
+
         neutron_mask_c = mask & (pdgs == NEUTRON_PDG) & (track_ids >= 0)
         if not neutron_mask_c.any():
-            # No neutron hits at all — check if this is a gamma cluster
-            if not np.isnan(neu_ref_t):
-                cluster_mean_t = float(hit_times[mask].mean())
-                if (cluster_mean_t - neu_ref_t) < GAMMA_CLUSTER_THRESHOLD_NS:
-                    n_gamma_clusters += 1
+            if _is_prompt(float(hit_times[mask].mean())):
+                n_prompt_clusters += 1
             n_spurious += 1
             continue
 
@@ -358,25 +370,22 @@ def _optics_cluster_outcomes(df_event: pd.DataFrame,
                 split_tids.add(dom_tid)
             matched_tids.add(dom_tid)
         else:
-            # Has neutron hits but doesn't match truth — also check gamma timing
-            if not np.isnan(neu_ref_t):
-                cluster_mean_t = float(hit_times[mask].mean())
-                if (cluster_mean_t - neu_ref_t) < GAMMA_CLUSTER_THRESHOLD_NS:
-                    n_gamma_clusters += 1
+            if _is_prompt(float(hit_times[mask].mean())):
+                n_prompt_clusters += 1
             n_spurious += 1
 
-    n_matched      = len(matched_tids)
-    n_missed       = len(truth_trackIDs - matched_tids)
-    n_split        = len(split_tids)
-    n_real_spurious = n_spurious - n_gamma_clusters
+    n_matched       = len(matched_tids)
+    n_missed        = len(truth_trackIDs - matched_tids)
+    n_split         = len(split_tids)
+    n_real_spurious = n_spurious - n_prompt_clusters
 
     return {
         "n_truth":              n_truth,
         "n_predicted":          n_predicted,
         "n_matched":            n_matched,
-        "n_spurious":           n_spurious,           # all non-matched (incl. gamma)
-        "n_gamma_clusters":     n_gamma_clusters,     # subset: prompt gamma clusters
-        "n_real_spurious":      n_real_spurious,      # true false positives only
+        "n_spurious":           n_spurious,            # all non-matched (incl. prompt)
+        "n_prompt_clusters":    n_prompt_clusters,     # subset: prompt signal clusters
+        "n_real_spurious":      n_real_spurious,       # true false positives only
         "n_missed":             n_missed,
         "n_split":              n_split,
         "agreement":            int(n_matched == n_truth and n_spurious == 0
@@ -481,12 +490,18 @@ def train_and_evaluate(ctx: RunContext,
     event_ids = pulses["eventID"].unique()
     n_hits_after_filter = []
 
+    n_configs   = len(min_samples_list) * len(xi_list) * len(t_unit_ns_list)
     print(f"[mc.optics] {len(event_ids)} events, {len(pulses)} total hits")
     print(f"[mc.optics] truth_window_ns={truth_window_ns} ns  |  "
           f"hit_prefilter_ns={hit_prefilter_ns} ns  |  "
-          f"t_unit_ns grid={list(t_unit_ns_list)}")
+          f"t_unit_ns grid={list(t_unit_ns_list)}  |  "
+          f"{n_configs} configs per event")
 
-    for evid in event_ids:
+    t_start     = time.time()
+    n_total     = len(event_ids)
+    print_every = max(1, n_total // 20)
+
+    for i_ev, evid in enumerate(event_ids):
         df_ev = pulses[pulses["eventID"] == evid].reset_index(drop=True)
         if len(df_ev) < min_pulses_per_event:
             continue
@@ -550,6 +565,16 @@ def train_and_evaluate(ctx: RunContext,
                         "n_hits_optics": len(df_ev)})
             rows.append(row)
 
+        if (i_ev + 1) % print_every == 0 or (i_ev + 1) == n_total:
+            elapsed   = time.time() - t_start
+            rate      = (i_ev + 1) / elapsed
+            remaining = (n_total - i_ev - 1) / rate if rate > 0 else 0
+            n_hits_ev = n_hits_after_filter[-1] if n_hits_after_filter else len(df_ev)
+            print(f"[mc.optics]  {i_ev+1:5d}/{n_total}  "
+                  f"({100*(i_ev+1)/n_total:.0f}%)  "
+                  f"elapsed={elapsed:.0f}s  rate={rate:.1f} ev/s  "
+                  f"ETA={remaining:.0f}s  hits/ev={n_hits_ev}", flush=True)
+
     if n_hits_after_filter:
         print(f"[mc.optics] hits fed to OPTICS: "
               f"mean={np.mean(n_hits_after_filter):.0f}  "
@@ -572,8 +597,8 @@ def summarise(metrics: pd.DataFrame) -> pd.DataFrame:
         mean_n_truth=("n_truth",         "mean"),
         mean_n_predicted=("n_predicted", "mean"),
         mean_matched=("n_matched",                   "mean"),
-        mean_spurious=("n_spurious",               "mean"),  # all non-matched incl. gamma
-        mean_gamma_clusters=("n_gamma_clusters",   "mean"),  # prompt gamma clusters
+        mean_spurious=("n_spurious",                 "mean"),  # all non-matched incl. prompt
+        mean_prompt_clusters=("n_prompt_clusters", "mean"),  # prompt signal clusters
         mean_real_spurious=("n_real_spurious",     "mean"),  # true false positives only
         mean_missed=("n_missed",                   "mean"),
         mean_split=("n_split",                     "mean"),
