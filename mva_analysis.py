@@ -84,6 +84,7 @@ PHYSICS_FEATURES = [
     "spatial_rms",
     "d_wall",
     "d_source",
+    "vtx_y",               # bottom-of-tank (Y < −0.5 m) has 19 LUX PMTs vs 92 barrel — systematic hit-count drop
     # ---- Isotropy — centroid vertex ----
     "beta1",
     "beta2",
@@ -105,6 +106,8 @@ PHYSICS_FEATURES = [
     "beta3_fit",
     "beta4_fit",
     "beta5_fit",
+    "vtx_fit_y",           # fitted Y: more accurate than centroid for bottom-bias detection
+    "d_source_fit",        # distance to AmBe source from fitted vertex (more accurate than centroid-based)
 ]
 
 COLORS = {"signal": "#0077BB", "background": "#BBBBBB", "prompt": "#EE7733"}
@@ -134,19 +137,55 @@ def load_paths(config_path: str) -> tuple[str, Path, Path, Path]:
 # ---------------------------------------------------------------------------
 
 def prepare_data(df: pd.DataFrame,
-                 method: str = "optics") -> tuple[np.ndarray, np.ndarray, list[str], pd.DataFrame]:
+                 method: str = "optics",
+                 bkg_mode: str = "all") -> tuple[np.ndarray, np.ndarray, list[str], pd.DataFrame]:
     """
     Filter to one clustering method, build feature matrix and binary labels.
+
+    bkg_mode:
+      "all"       — signal vs all non-neutron non-prompt clusters (default)
+      "darknoise" — signal vs clusters where dark noise (class 0) is the dominant component;
+                    excludes class-5 (non-physics) dominated clusters from the background sample
 
     Returns X, y, feature_names, filtered_sub_df.
     """
     sub = df[df["method"] == method].copy().reset_index(drop=True)
 
     is_sig = sub["is_truth_neutron"] == 1
-    if "is_prompt_cluster" in sub.columns:
-        is_bkg = (sub["is_truth_neutron"] == 0) & (sub["is_prompt_cluster"] == 0)
+
+    if bkg_mode in ("darknoise", "nonneutron", "pop2"):
+        if "dominant_class" not in sub.columns:
+            raise ValueError(
+                f"--bkg-mode {bkg_mode} requires 'dominant_class' column in the features parquet. "
+                "Re-run: ambe mc features ..."
+            )
+        if bkg_mode == "darknoise":
+            # Background = clusters dominated by class-0 dark noise (excludes class -5)
+            is_bkg = (sub["is_truth_neutron"] == 0) & (sub["dominant_class"] == 0)
+        elif bkg_mode == "nonneutron":
+            # Background = clusters dominated by class -5 (both prompt gamma + near-capture)
+            is_bkg = (sub["is_truth_neutron"] == 0) & (sub["dominant_class"] == -5)
+        else:
+            # "pop2": Population 2 only — class-5 clusters that are NOT the prompt AmBe gamma.
+            # Population 1 (offset ~-17,846 ns) is already flagged as is_prompt_cluster=1.
+            # Population 2 (offset ~-1.4 ns) is the near-capture contamination that is
+            # indistinguishable by timing alone — the genuinely hard spurious problem.
+            if "is_prompt_cluster" not in sub.columns:
+                raise ValueError(
+                    "--bkg-mode pop2 requires 'is_prompt_cluster' column in the features parquet. "
+                    "Re-run: ambe mc features ..."
+                )
+            is_bkg = (
+                (sub["is_truth_neutron"] == 0) &
+                (sub["dominant_class"] == -5) &
+                (sub["is_prompt_cluster"] == 0)
+            )
     else:
-        is_bkg = sub["is_truth_neutron"] == 0
+        # "all": exclude only the prompt AmBe gamma cluster (is_prompt_cluster) if flagged
+        if "is_prompt_cluster" in sub.columns:
+            is_bkg = (sub["is_truth_neutron"] == 0) & (sub["is_prompt_cluster"] == 0)
+        else:
+            is_bkg = sub["is_truth_neutron"] == 0
 
     mask = is_sig | is_bkg
     sub  = sub[mask].reset_index(drop=True)
@@ -218,27 +257,35 @@ def train_trees(X_tr: np.ndarray, y_tr: np.ndarray) -> dict:
 # Neural network
 # ---------------------------------------------------------------------------
 
-NN_HIDDEN_UNITS = 64
-NN_HIDDEN_LAYERS = 2
-NN_DROPOUT = 0.3
-NN_EPOCHS = 20
-NN_BATCH_SIZE = 256
-NN_VERBOSE = 1
+NN_HIDDEN_UNITS  = 128    # 64 was underfitting 30 features with class imbalance
+NN_HIDDEN_LAYERS = 3      # third layer for nonlinear interactions between β-params and timing
+NN_DROPOUT       = 0.3
+NN_LR            = 1e-3   # initial Adam lr; ReduceLROnPlateau will lower it
+NN_EPOCHS        = 100    # was 20 — too restrictive; EarlyStopping handles overfitting
+NN_BATCH_SIZE    = 256
+NN_VERBOSE       = 1
 
 def _build_nn(n_features: int):
     """
-    Lightweight test architecture (easy to revise later):
-        input → [Dense(64, ReLU) → Dropout(0.3)] × 2 → Dense(1, sigmoid)
-    Binary cross-entropy loss, Adam optimiser.
+    input → [Dense(128) → BatchNorm → ReLU → Dropout(0.3)] × 3 → Dense(1, sigmoid)
+
+    BatchNorm before activation stabilises training across physics features with very
+    different scales (ns timing, metres, PE counts, dimensionless β-parameters).
     """
     inp = tf.keras.Input(shape=(n_features,))
     x = inp
     for _ in range(NN_HIDDEN_LAYERS):
-        x = tf.keras.layers.Dense(NN_HIDDEN_UNITS, activation="relu")(x)
+        x = tf.keras.layers.Dense(NN_HIDDEN_UNITS)(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Activation("relu")(x)
         x = tf.keras.layers.Dropout(NN_DROPOUT)(x)
     out = tf.keras.layers.Dense(1, activation="sigmoid")(x)
     model = tf.keras.Model(inp, out)
-    model.compile(optimizer="adam", loss="binary_crossentropy")
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=NN_LR),
+        loss="binary_crossentropy",
+        metrics=[tf.keras.metrics.AUC(name="auc")],
+    )
     return model
 
 
@@ -265,11 +312,15 @@ def train_nn(X_tr: np.ndarray, y_tr: np.ndarray):
         validation_split=0.15,
         callbacks=[
             tf.keras.callbacks.EarlyStopping(
-                monitor="val_loss", patience=10,
+                monitor="val_auc", mode="max", patience=15,
                 restore_best_weights=True, verbose=1,
-            )
+            ),
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor="val_auc", mode="max", factor=0.5,
+                patience=7, min_lr=1e-5, verbose=0,
+            ),
         ],
-        verbose=NN_VERBOSE,  # show batch-level progress for responsiveness
+        verbose=NN_VERBOSE,
     )
     return model, scaler, history
 
@@ -377,15 +428,27 @@ def _top_features_page(pdf, X_te, y_te, rf, features, run_name):
 
 
 def _nn_history_page(pdf, history, run_name: str):
-    """NN training and validation loss curves."""
-    fig, ax = plt.subplots(figsize=(8, 5))
+    has_auc = "val_auc" in history.history
+    fig, axes = plt.subplots(1, 2 if has_auc else 1, figsize=(14 if has_auc else 8, 5), squeeze=False)
     fig.suptitle(f"{run_name.upper()}  —  Neural network training history", fontsize=11)
+
+    ax = axes[0, 0]
     ax.plot(history.history["loss"],     lw=2, label="Train loss")
     ax.plot(history.history["val_loss"], lw=2, ls="--", label="Val loss")
     best_epoch = int(np.argmin(history.history["val_loss"])) + 1
-    ax.axvline(best_epoch, color="gray", ls=":", lw=1, label=f"Best epoch {best_epoch}")
+    ax.axvline(best_epoch, color="gray", ls=":", lw=1, label=f"Best loss epoch {best_epoch}")
     ax.set_xlabel("Epoch"); ax.set_ylabel("Binary cross-entropy")
-    ax.set_title("Loss (early stopping on val_loss)"); ax.legend(); ax.grid(alpha=0.3)
+    ax.set_title("Loss"); ax.legend(); ax.grid(alpha=0.3)
+
+    if has_auc:
+        ax = axes[0, 1]
+        ax.plot(history.history["auc"],     lw=2, label="Train AUC")
+        ax.plot(history.history["val_auc"], lw=2, ls="--", label="Val AUC")
+        best_auc_epoch = int(np.argmax(history.history["val_auc"])) + 1
+        ax.axvline(best_auc_epoch, color="gray", ls=":", lw=1, label=f"Best AUC epoch {best_auc_epoch}")
+        ax.set_xlabel("Epoch"); ax.set_ylabel("AUC")
+        ax.set_title("AUC (early-stopping monitor)"); ax.legend(); ax.grid(alpha=0.3)
+
     plt.tight_layout()
     pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
 
@@ -452,12 +515,24 @@ def main():
                    help="Fraction of clusters held out for testing (default 0.2)")
     p.add_argument("--no-nn", action="store_true",
                    help="Skip neural network training (faster — tree models only)")
+    p.add_argument("--bkg-mode", default="all",
+                   choices=["all", "darknoise", "nonneutron", "pop2"],
+                   help="Background sample: 'all' = all non-neutron non-prompt clusters (default); "
+                        "'darknoise' = clusters dominated by class-0 dark noise; "
+                        "'nonneutron' = clusters dominated by class-5 (prompt gamma + near-capture); "
+                        "'pop2' = Population 2 only: class-5 near-capture clusters with "
+                        "is_prompt_cluster=0 (excludes the trivially-rejected prompt gamma)")
     args = p.parse_args()
 
     if not _HAS_XGB:
         print("[mva] WARNING: xgboost not installed — skipping XGBoost.  pip install xgboost")
     if not _HAS_KERAS:
         print("[mva] WARNING: tensorflow not installed — skipping NN.  pip install tensorflow")
+    if _HAS_KERAS:
+        # TF auto-selects one GPU if CUDA is visible; no MirroredStrategy → single-device only.
+        gpus = tf.config.list_physical_devices("GPU")
+        print(f"[mva] TensorFlow: {len(gpus)} GPU(s) visible"
+              + ("  (no MirroredStrategy — using GPU:0 only)" if len(gpus) > 1 else ""))
 
     run_name, parquet_dir, plots_dir, csv_dir = load_paths(args.config)
 
@@ -469,9 +544,15 @@ def main():
     print(f"[mva] loading {feat_path}")
     df = pd.read_parquet(feat_path)
 
-    X, y, features, sub = prepare_data(df, method=args.method)
+    bkg_mode = args.bkg_mode
+    X, y, features, sub = prepare_data(df, method=args.method, bkg_mode=bkg_mode)
     n_sig = int(y.sum())
     n_bkg = int((y == 0).sum())
+    bkg_label = {"darknoise":  "dark noise only (class 0)",
+                 "nonneutron": "class-5 spurious (prompt gamma + near-capture)",
+                 "pop2":       "Population 2 only (near-capture, offset ~-1 ns)",
+                 "all":        "all non-neutron (excl. prompt)"}.get(bkg_mode, bkg_mode)
+    print(f"[mva] bkg_mode={bkg_mode}  ({bkg_label})")
     print(f"[mva] {X.shape[0]} clusters  |  "
           f"signal={n_sig}  background={n_bkg}  |  {len(features)} features")
     print(f"[mva] features: {features}")
@@ -479,19 +560,16 @@ def main():
     if n_sig < 10 or n_bkg < 10:
         sys.exit("[mva] Too few samples to train — check features parquet.")
 
-    # Stratified train / test split
     X_tr, X_te, y_tr, y_te, idx_tr, idx_te = train_test_split(
         X, y, np.arange(len(y)),
         test_size=args.test_size, stratify=y, random_state=42,
     )
     print(f"[mva] train={len(y_tr)}  test={len(y_te)}")
 
-    # ---- Tree models ----
     tree_label = "RF, GBT" + (", XGBoost" if _HAS_XGB else "")
     print(f"[mva] training tree models ({tree_label}) …")
     tree_models = train_trees(X_tr, y_tr)
 
-    # ---- Neural network ----
     nn_model, nn_scaler, nn_history = None, None, None
     if _HAS_KERAS and not args.no_nn:
         hidden = "-".join([str(NN_HIDDEN_UNITS)] * NN_HIDDEN_LAYERS)
@@ -500,11 +578,10 @@ def main():
               f"  [{len(features)} features after NaN filter]")
         nn_model, nn_scaler, nn_history = train_nn(X_tr, y_tr)
         n_epochs = len(nn_history.history["loss"])
-        print(f"[mva] NN stopped at epoch {n_epochs} / 50")
+        print(f"[mva] NN stopped at epoch {n_epochs} / {NN_EPOCHS}")
     elif args.no_nn:
         print("[mva] NN skipped (--no-nn)")
 
-    # ---- Collect scores on test set and full dataset ----
     model_scores  = []   # (display_name, test_scores, linestyle) — for plots
     all_score_cols = {}  # col_name -> scores on full X, for parquet
 
@@ -525,35 +602,37 @@ def main():
     for name, sc, _ in model_scores:
         print(f"[mva] AUC  {name:20s} = {roc_auc_score(y_te, sc):.3f}")
 
-    # Attach scores to sub dataframe
     sub = sub.copy()
     for col, vals in all_score_cols.items():
         sub[col] = vals
     sub["in_test"] = False
     sub.loc[idx_te, "in_test"] = True
 
-    # ---- Plots ----
-    pdf_path = plots_dir / f"{run_name}__mva.pdf"
+    # Include bkg_mode in output filenames so both modes can coexist on disk.
+    mode_tag = "" if bkg_mode == "all" else f"__{bkg_mode}"
+    pdf_path   = plots_dir   / f"{run_name}__mva{mode_tag}.pdf"
+    score_path = parquet_dir / f"{run_name}__mva_scores{mode_tag}.parquet"
+    csv_path   = csv_dir     / f"{run_name}__mva_summary{mode_tag}.csv"
+
     print(f"[mva] writing plots → {pdf_path}")
     best_event_col = next(
         (c for c in ["xgb_score", "nn_score", "gbt_score"] if c in sub.columns),
         "gbt_score",
     )
+    # Pass mode info into ROC page title via run_name suffix
+    plot_run_name = f"{run_name} [{bkg_mode} bkg]" if bkg_mode != "all" else run_name
     with PdfPages(pdf_path) as pdf:
-        _roc_page(pdf, y_te, model_scores, run_name, args.method)
-        _score_dist_page(pdf, y_te, model_scores, run_name)
-        _importance_page(pdf, tree_models, features, run_name)
-        _top_features_page(pdf, X_te, y_te, tree_models["rf"], features, run_name)
+        _roc_page(pdf, y_te, model_scores, plot_run_name, args.method)
+        _score_dist_page(pdf, y_te, model_scores, plot_run_name)
+        _importance_page(pdf, tree_models, features, plot_run_name)
+        _top_features_page(pdf, X_te, y_te, tree_models["rf"], features, plot_run_name)
         if nn_history is not None:
-            _nn_history_page(pdf, nn_history, run_name)
-        _event_level_page(pdf, sub, run_name, score_col=best_event_col)
+            _nn_history_page(pdf, nn_history, plot_run_name)
+        _event_level_page(pdf, sub, plot_run_name, score_col=best_event_col)
 
-    # ---- Scored parquet ----
-    score_path = parquet_dir / f"{run_name}__mva_scores.parquet"
     sub.to_parquet(score_path, index=False)
     print(f"[mva] wrote scores → {score_path}")
 
-    # ---- Summary CSV ----
     imp_df = pd.DataFrame({"feature": features})
     for key, model in tree_models.items():
         if hasattr(model, "feature_importances_"):
@@ -562,7 +641,6 @@ def main():
         imp_df = imp_df.sort_values("rf_importance", ascending=False).reset_index(drop=True)
         imp_df.insert(0, "rf_rank", range(1, len(features) + 1))
 
-    csv_path = csv_dir / f"{run_name}__mva_summary.csv"
     imp_df.to_csv(csv_path, index=False)
 
     print(f"\n[mva] ===== SUMMARY =====")

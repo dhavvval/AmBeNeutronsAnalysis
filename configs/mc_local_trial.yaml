@@ -6,7 +6,7 @@ output_root: /Users/dajana/Documents/ambe_output
 
 inputs:
   root_files:
-    - /Users/dajana/Documents/ANNIEEvent_MC_wcsimlucho_0.root
+    - /Users/dajana/Documents/ANNIEEvent/ANNIEEvent_MC_wcsimlucho_0.root
 
 cuts:
   min_pulses_per_event: 0

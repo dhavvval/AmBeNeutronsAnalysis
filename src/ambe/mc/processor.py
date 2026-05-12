@@ -276,10 +276,19 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
               + (f"  (max_events={max_events})" if max_events else ""))
 
     pulse_frames, cluster_frames = [], []
+    event_id_offset = 0
     for rp in root_files:
         pf, cf = _process_single_file(rp, tree_name, verbose, max_events=max_events)
         pf["_source_file"] = rp.name
         cf["_source_file"] = rp.name
+        if event_id_offset > 0:
+            pf["eventID"] = pf["eventID"] + event_id_offset
+            if len(cf):
+                cf["eventID"] = cf["eventID"] + event_id_offset
+            if verbose:
+                print(f"[mc.processor]   eventID offset +{event_id_offset} applied to {rp.name}")
+        if len(pf):
+            event_id_offset = int(pf["eventID"].max()) + 1
         pulse_frames.append(pf)
         cluster_frames.append(cf)
 

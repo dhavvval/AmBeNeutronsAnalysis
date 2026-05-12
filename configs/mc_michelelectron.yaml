@@ -1,5 +1,5 @@
-run_name: mc_oneneutron_no_darknoise
-campaign: "MC AmBe One-Neutron No Dark Noise"
+run_name: mc_michel_electron
+campaign: "MC Michel Electron"
 description: >
   OPTICS training on the 896-event ANNIEEvent_MC_AmBe_withoutdarknoise_0_999.root file, which contains only one neutron per event and no dark noise. This is a "best case" scenario for OPTICS clustering, so we expect to find exactly one cluster per event with the right settings. Use this config to verify that the pipeline is working end-to-end before running on more complex files with multiple neutrons and dark noise.
 
@@ -9,7 +9,7 @@ output_root: /Users/dajana/Documents/AmBe/AmBeNeutronsAnalysis/ambe_output
 inputs:
   root_files:
     # ⚠ Confirm this path on your machine before running
-    - /Users/dajana/Documents/ANNIEEvent/ANNIEEvent_MC_AmBe_withoutdarknoise_0_999.root
+    - /Users/dajana/Documents/ANNIEEvent/ANNIEEvent_MC_MichelElectron.root
 
 cuts:
   min_pulses_per_event: 0  # OPTICS min_samples handles thresholding — do not pre-filter events here
