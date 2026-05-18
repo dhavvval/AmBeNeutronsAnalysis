@@ -113,14 +113,17 @@ def _classify_hits(hit_ck, hit_t, dp_pmtid, dp_t, dp_class, dp_dn, offset, tol=8
     for idx, ck in enumerate(dp_pmtid):
         dp_by_ck.setdefault(int(ck), []).append(idx)
 
-    labels = np.full(len(hit_ck), "unclaimed", dtype=object)
+    labels          = np.full(len(hit_ck), "unclaimed", dtype=object)
+    failure_reasons = np.full(len(hit_ck), None,        dtype=object)
     for j, (ck, t) in enumerate(zip(hit_ck, hit_t)):
         indices = dp_by_ck.get(int(ck))
         if not indices:
+            failure_reasons[j] = "no_entry"
             continue
         t_shifted = t + offset
         best = min(indices, key=lambda i: abs(dp_t[i] - t_shifted))
         if abs(dp_t[best] - t_shifted) > tol:
+            failure_reasons[j] = "time_mismatch"
             continue
         cls = int(dp_class[best])
         dn  = int(dp_dn[best])
@@ -130,7 +133,7 @@ def _classify_hits(hit_ck, hit_t, dp_pmtid, dp_t, dp_class, dp_dn, offset, tol=8
             labels[j] = "background"
         else:
             labels[j] = "darknoise"
-    return labels
+    return labels, failure_reasons
 
 
 def _dp_label_from_class(cls: int, dn: int) -> str:
@@ -148,6 +151,7 @@ def _diagnose_unclaimed(
     dp_pmtid, dp_t, dp_dn, dp_pdg, dp_class,
     offset: float,
     labels: np.ndarray,
+    failure_reasons: np.ndarray,
     cf_ck_lists, cf_t_lists,
     evid: int,
 ) -> list[dict]:
@@ -168,9 +172,10 @@ def _diagnose_unclaimed(
     def rkey(ck, t):
         return (int(ck), round(float(t), 4))
 
-    hit_label_map = {rkey(ck, t): lbl for ck, t, lbl in zip(hit_ck, hit_t, labels)}
-    hit_pe_map    = {rkey(ck, t): pe  for ck, t, pe  in zip(hit_ck, hit_t, hit_pe)}
-    hit_pmt_map   = {rkey(ck, t): pt  for ck, t, pt  in zip(hit_ck, hit_t, hit_pmt_type)}
+    hit_label_map  = {rkey(ck, t): lbl for ck, t, lbl in zip(hit_ck, hit_t, labels)}
+    hit_fail_map   = {rkey(ck, t): fr  for ck, t, fr  in zip(hit_ck, hit_t, failure_reasons)}
+    hit_pe_map     = {rkey(ck, t): pe  for ck, t, pe  in zip(hit_ck, hit_t, hit_pe)}
+    hit_pmt_map    = {rkey(ck, t): pt  for ck, t, pt  in zip(hit_ck, hit_t, hit_pmt_type)}
 
     for cidx, (ck_list, t_list) in enumerate(zip(cf_ck_lists, cf_t_lists)):
         if not ck_list:
@@ -216,6 +221,7 @@ def _diagnose_unclaimed(
                 "hit_t":                     float(t),
                 "hit_pe":                    pe,
                 "hit_pmt_type":              pmt_type,
+                "failure_reason":            hit_fail_map.get(k),
                 "dt_from_cluster_median_ns": dt_from_cluster_median,
                 "has_dp_entry":              has_dp_entry,
                 "min_dt_to_dp_ns":           min_dt,
@@ -294,8 +300,22 @@ def extract(root_path: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
         # --- time offset for this event ---
         offset = _compute_dp_offset(hit_ck, hit_t, dp_ck, dp_t)
 
-        # --- classify every detector hit ---
-        hit_labels = _classify_hits(hit_ck, hit_t, dp_ck, dp_t, dp_cls, dp_dn, offset)
+        # --- classify every detector hit (±8 ns tight tolerance) ---
+        hit_labels, failure_reasons = _classify_hits(
+            hit_ck, hit_t, dp_ck, dp_t, dp_cls, dp_dn, offset
+        )
+
+        # --- Step 5: wide-tolerance re-match for ALL untraced hits (±WIDE_TOL ns) ---
+        wide_labels, _ = _classify_hits(
+            hit_ck, hit_t, dp_ck, dp_t, dp_cls, dp_dn, offset, tol=WIDE_TOL
+        )
+        wide_resolved_mask = (hit_labels == "unclaimed") & (wide_labels != "unclaimed")
+
+        # --- per-hit failure reason map (for cluster composition and diagnostics) ---
+        fail_reason_map = {
+            (int(ck), round(float(t), 4)): fr
+            for ck, t, fr in zip(hit_ck, hit_t, failure_reasons)
+        }
 
         # --- which hits are inside any CF cluster? ---
         clustered_keys = set()
@@ -321,15 +341,25 @@ def extract(root_path: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
         cl_counts = {lbl: int((cl_lbl == lbl).sum())
                      for lbl in ("neutron", "background", "darknoise", "unclaimed")}
 
+        # untraced sub-type counts (no_entry + time_mismatch = unclaimed)
+        n_no_entry   = int((failure_reasons == "no_entry").sum())
+        n_time_mm    = int((failure_reasons == "time_mismatch").sum())
+        n_wide_res   = int(wide_resolved_mask.sum())
+        n_wide_tm_res = int((wide_resolved_mask & (failure_reasons == "time_mismatch")).sum())
+
         ev_rows.append({
-            "eventID":           evid,
-            "nhits":             nhits,
-            "n_dp_labeled":      n_dp,
-            "n_clustered":       n_clustered,
-            "n_unclustered":     n_unclustered,
-            "dp_offset_ns":      round(offset, 2),
+            "eventID":                    evid,
+            "nhits":                      nhits,
+            "n_dp_labeled":               n_dp,
+            "n_clustered":                n_clustered,
+            "n_unclustered":              n_unclustered,
+            "dp_offset_ns":               round(offset, 2),
             **{f"total_{k}": v for k, v in lbl_counts.items()},
             **{f"cf_{k}":    v for k, v in cl_counts.items()},
+            "n_no_entry":                 n_no_entry,
+            "n_time_mismatch":            n_time_mm,
+            "n_wide_resolved":            n_wide_res,
+            "n_wide_time_mismatch_resolved": n_wide_tm_res,
         })
 
         # --- per-cluster composition ---
@@ -343,15 +373,25 @@ def extract(root_path: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
         }
         for cidx, (ck_list, t_list) in enumerate(zip(cf_ck_lists, cf_t_lists)):
             comp = {"neutron": 0, "background": 0, "darknoise": 0, "unclaimed": 0}
+            n_no_entry_cl   = 0
+            n_time_mm_cl    = 0
             for ck, t in zip(ck_list, t_list):
-                lbl = hit_label_map.get((int(ck), round(float(t), 4)), "unclaimed")
+                key = (int(ck), round(float(t), 4))
+                lbl = hit_label_map.get(key, "unclaimed")
                 comp[lbl] += 1
+                fr = fail_reason_map.get(key)
+                if fr == "no_entry":
+                    n_no_entry_cl += 1
+                elif fr == "time_mismatch":
+                    n_time_mm_cl += 1
             total = sum(comp.values())
             cl_rows.append({
-                "eventID":     evid,
-                "cluster_idx": cidx,
-                "n_hits":      total,
+                "eventID":         evid,
+                "cluster_idx":     cidx,
+                "n_hits":          total,
                 **comp,
+                "n_no_entry":      n_no_entry_cl,
+                "n_time_mismatch": n_time_mm_cl,
                 **{f"frac_{k}": v / total if total else 0.0 for k, v in comp.items()},
             })
 
@@ -366,7 +406,7 @@ def extract(root_path: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
         unc_rows.extend(_diagnose_unclaimed(
             hit_ck, hit_t, hit_pe, hit_pmt,
             dp_ck, dp_t, dp_dn, dp_pdg, dp_cls,
-            offset, hit_labels, cf_ck_lists, cf_t_lists, evid,
+            offset, hit_labels, failure_reasons, cf_ck_lists, cf_t_lists, evid,
         ))
 
     return (
@@ -663,6 +703,20 @@ def run(ctx: RunContext, verbose: bool = True) -> Path:
         rec = has_n["cf_neutron"] / has_n["total_neutron"]
         print(f"  Median fraction of event's neutron hits captured in CF: {rec.median()*100:.1f}%")
         print(f"  Mean:   {rec.mean()*100:.1f}%")
+
+        ne_total  = int(ev_df["n_no_entry"].sum())
+        tm_total  = int(ev_df["n_time_mismatch"].sum())
+        wr_total  = int(ev_df["n_wide_resolved"].sum())
+        wtm_total = int(ev_df["n_wide_time_mismatch_resolved"].sum())
+        untraced  = ne_total + tm_total
+        print(f"\n--- Untraced hit sub-types (Step 5 wide-tolerance ±{WIDE_TOL:.0f} ns) ---")
+        print(f"  no_entry     : {ne_total:7,}  (chankey absent — sub-threshold / masked PMT)")
+        print(f"  time_mismatch: {tm_total:7,}  (DP entry exists but |dt|>8 ns — merged-pulse)")
+        if untraced:
+            print(f"  Wide-resolved: {wr_total:7,} / {untraced:,}  ({100*wr_total/untraced:.1f}% of all untraced)")
+            print(f"    time_mismatch resolved: {wtm_total:7,} / {tm_total:,}  ({100*wtm_total/tm_total:.1f}%)" if tm_total else "    time_mismatch resolved: 0")
+            no_entry_res = wr_total - wtm_total
+            print(f"    no_entry resolved:      {no_entry_res:7,} / {ne_total:,}  (expect ~0 — no DP to match against)")
 
         if len(unc_df):
             nu = len(unc_df)

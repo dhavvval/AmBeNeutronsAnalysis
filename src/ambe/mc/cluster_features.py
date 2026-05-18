@@ -1021,10 +1021,18 @@ def feature_plots(df: pd.DataFrame, ctx: RunContext):
                     lo, hi = float(all_vals.min()), float(all_vals.max()) + 1e-6
                 bins = np.linspace(lo, hi, 40)
 
+<<<<<<< Updated upstream
                 ax.hist(sig, bins=bins, density=True, alpha=0.6, histtype="step",
                         color=C_SIG,    label=f"Truth neutron  (n={len(sig)})")
                 ax.hist(bkg, bins=bins, density=True, alpha=0.6,
                         color=C_SPU, label=f"Spurious  (n={len(bkg)})")
+=======
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    ax.hist(sig, bins=bins, density=True, alpha=0.6,
+                            color="tomato",    label=f"Truth neutron  (n={len(sig)})")
+                    ax.hist(bkg, bins=bins, density=True, alpha=0.6,
+                            color="steelblue", label=f"Spurious  (n={len(bkg)})")
+>>>>>>> Stashed changes
                 ax.set_xlabel(xlabel, fontsize=9)
                 ax.set_ylabel("Density")
                 ax.set_title(method.upper(), fontsize=10)
@@ -1392,6 +1400,60 @@ def make_separation_plots(df: pd.DataFrame, ctx: "RunContext") -> Path:
     return pdf_path
 
 
+def extract_features_from_background_hits(
+        hits_parquet: str,
+        geo: ANNIEGeometry,
+        source_pos_m: "Optional[np.ndarray]" = None,
+) -> pd.DataFrame:
+    """
+    Compute cluster features for background data that has already been through
+    OPTICS pre-selection (output of analyze_optics_data_rate.py).
+
+    Reads background_optics_hits.parquet — columns:
+        run, event_number, cluster_id, is_background, x, y, z, t, pe, pmtID
+
+    For each (run, event_number, cluster_id) group it calls
+    compute_cluster_features() directly, skipping truth labelling (real data
+    has no MC truth).  The is_background=1 label is carried through unchanged.
+
+    Returns a DataFrame with the same feature columns as extract_all_features()
+    except the MC-only columns (is_truth_neutron, dominant_trackID,
+    is_prompt_cluster, hit composition fractions).
+    """
+    hits = pd.read_parquet(hits_parquet)
+    required = {"run", "event_number", "cluster_id", "is_background",
+                "x", "y", "z", "t", "pe", "pmtID"}
+    missing = required - set(hits.columns)
+    if missing:
+        raise ValueError(f"background hits parquet is missing columns: {missing}")
+
+    rows = []
+    groups = list(hits.groupby(["run", "event_number", "cluster_id"]))
+    print(f"[cluster_features] background mode: {len(groups)} clusters from {hits_parquet}")
+
+    for i, ((run, ev, cid), df_cl) in enumerate(groups):
+        feats = compute_cluster_features(
+            df_cl.reset_index(drop=True), geo, source_pos_m=source_pos_m)
+        if not feats:
+            continue
+        row = {
+            "run":           run,
+            "event_number":  ev,
+            "cluster_id":    int(cid),
+            "is_background": 1,
+        }
+        row.update(feats)
+        rows.append(row)
+
+        if (i + 1) % max(1, len(groups) // 20) == 0 or (i + 1) == len(groups):
+            print(f"[cluster_features]  {i+1}/{len(groups)} clusters processed",
+                  flush=True)
+
+    df = pd.DataFrame(rows)
+    print(f"[cluster_features] background: extracted features for {len(df)} clusters")
+    return df
+
+
 def run(ctx: RunContext, argv: Optional[Iterable[str]] = None) -> Path:
     p = argparse.ArgumentParser(prog="ambe mc features")
     p.add_argument("--min-pulses", type=int,
@@ -1410,6 +1472,17 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None) -> Path:
         )
 
     geo = load_geometry(geo_path, off_path)
+
+    # Beamoff mode: hits parquet already has OPTICS cluster assignments —
+    # skip OPTICS re-run and truth labelling, just compute features.
+    background_hits = ctx.extra.get("features", {}).get("background_hits", None)
+    if background_hits:
+        df = extract_features_from_background_hits(background_hits, geo,
+                                                   source_pos_m=src_pos)
+        out_parquet = ctx.parquet_path(f"{ctx.run_name}__background_cluster_features")
+        df.to_parquet(out_parquet, index=False)
+        print(f"[cluster_features] wrote background features → {out_parquet}")
+        return out_parquet
 
     df = extract_all_features(
         ctx, geo,

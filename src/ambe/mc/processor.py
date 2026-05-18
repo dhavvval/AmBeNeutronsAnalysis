@@ -12,8 +12,10 @@ DirectParent arrays using:
 
 Unmatched hits are assigned truth_class=0 and flagged with is_untraced=True.
 Two failure sub-modes are tracked in match_failure_reason:
-  "no_entry"      – chankey has no DirectParent record at all (sub-threshold
-                    or masked PMT — genuine dark noise invisible to BackTracker)
+  "no_entry"      – chankey has no DirectParent record at all (most likely
+                    sub-threshold or masked PMT; probable dark noise, but a
+                    physics photon that fell below the ADC threshold can also
+                    land here — not confirmed dark noise)
   "time_mismatch" – a DirectParent entry exists for the chankey but the best
                     time match exceeds MATCH_TOL (likely a merged-pulse physics
                     hit whose MCHit arrival time doesn't align with the ADCPulse

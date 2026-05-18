@@ -11,9 +11,16 @@ that event merged — CF cluster boundaries discarded).  Parameters mirror the
 mc_lucho_full features config exactly: ms=8, xi=0.10, t_unit=25 ns, no prefilter.
 
 Outputs:
-    optics_data_rate.pdf    — 4-panel comparison plot (CF vs OPTICS)
-    optics_data_stats.csv   — per-event table with run, n_cf, n_optics, n_hits
-    optics_summary.txt      — headline statistics for all runs combined
+    optics_data_rate.pdf          — 4-panel comparison plot (CF vs OPTICS)
+    optics_data_stats.csv         — per-event table with run, n_cf, n_optics, n_hits
+    optics_summary.txt            — headline statistics for all runs combined
+    background_optics_hits.parquet — per-hit table for every OPTICS cluster that
+                                    passed pre-selection, columns:
+                                      run, event_number, cluster_id, is_background,
+                                      x, y, z, t, pe, pmtID
+                                    Feed cluster slices to compute_cluster_features()
+                                    from ambe.mc.cluster_features to get physics
+                                    features without duplicating that logic here.
 
 Usage:
     # single file
@@ -49,16 +56,13 @@ MIN_SAMPLES = 8
 XI          = 0.10
 T_UNIT_NS   = 25.0
 
-# Events with more than this many hits are very busy; skipped with a flag.
-MAX_HITS_PER_EVENT = 500
-
 _RUN_RE = re.compile(r"R(\d+)_extracted_off_beam_data\.ntuple\.root")
 
 
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("input", nargs="?",
-                   default="/Users/dajana/Documents/BeamCluster/",
+                   default="/pnfs/annie/persistent/users/doran/datasets/NCQE_BEAMCLUSTER_DATA/EXTRACTED_FULL_OFFBEAM_DATA/",
                    help="ROOT file, directory, or glob pattern")
     p.add_argument("--output-dir", default=".",
                    help="Directory for outputs (default: current dir)")
@@ -104,7 +108,6 @@ def load_file(root_file: Path) -> list[dict]:
 
     ev_nums = ak.to_numpy(data["event_number"])
 
-    # Aggregate hits and CF count per event
     hit_chunks  = defaultdict(list)
     cf_count_ev = {}
     for i, ev in enumerate(ev_nums):
@@ -133,19 +136,26 @@ def load_file(root_file: Path) -> list[dict]:
 
 # ── OPTICS ────────────────────────────────────────────────────────────────────
 
-def run_optics_all(events: list[dict]) -> list[dict]:
-    """Run OPTICS on every event.  Returns list of result dicts."""
-    results = []
+def run_optics_all(events: list[dict]) -> tuple[list[dict], list[pd.DataFrame]]:
+    """
+    Run OPTICS on every event.
+
+    Returns
+    -------
+    results    : per-event summary dicts (for rate comparison plots/CSV)
+    hit_frames : list of DataFrames, one per OPTICS cluster, each carrying
+                 run, event_number, cluster_id, is_background plus the hit
+                 columns (x, y, z, t, pe, pmtID).  Concatenate and pass
+                 cluster slices to compute_cluster_features() for features.
+    """
+    results    = []
+    hit_frames = []
+
     for ev in events:
         df    = ev["df"]
         nhits = len(df)
         base  = {"run": ev["run"], "event_number": ev["event_number"],
                  "n_cf": ev["n_cf"], "n_hits_total": nhits}
-
-        if nhits > MAX_HITS_PER_EVENT:
-            results.append({**base, "n_optics": np.nan,
-                             "n_hits_per_cluster": [], "skipped": True})
-            continue
 
         labels   = run_optics_on_event(df, min_samples=MIN_SAMPLES, xi=XI,
                                        t_unit_ns=T_UNIT_NS, source_pos_m=None)
@@ -154,39 +164,44 @@ def run_optics_all(events: list[dict]) -> list[dict]:
         nhits_cl = [int((labels == c).sum()) for c in cl_ids]
 
         results.append({**base, "n_optics": n_optics,
-                        "n_hits_per_cluster": nhits_cl, "skipped": False})
-    return results
+                        "n_hits_per_cluster": nhits_cl})
+
+        for cid in cl_ids:
+            df_cl = df[labels == cid].copy()
+            df_cl["run"]          = ev["run"]
+            df_cl["event_number"] = ev["event_number"]
+            df_cl["cluster_id"]   = int(cid)
+            df_cl["is_background"] = 1
+            hit_frames.append(df_cl)
+
+    return results, hit_frames
 
 
 # ── Summary + plots ───────────────────────────────────────────────────────────
 
 def summarise(results: list[dict], run_list: list[int]) -> dict:
-    proc = [r for r in results if not r["skipped"]]
-    skip = [r for r in results if r["skipped"]]
-
-    cf_arr  = np.array([r["n_cf"]     for r in proc])
-    opt_arr = np.array([r["n_optics"] for r in proc])
-    all_nhits = [h for r in proc for h in r["n_hits_per_cluster"]]
+    cf_arr  = np.array([r["n_cf"]     for r in results])
+    opt_arr = np.array([r["n_optics"] for r in results])
+    all_nhits = [h for r in results for h in r["n_hits_per_cluster"]]
 
     agree    = int((cf_arr == opt_arr).sum())
     opt_more = int((opt_arr > cf_arr).sum())
     opt_less = int((opt_arr < cf_arr).sum())
+    n = len(results)
 
     stats = {
         "runs":              sorted(run_list),
-        "n_events_total":    len(results),
-        "n_events_skipped":  len(skip),
-        "n_events_processed":len(proc),
+        "n_events_total":    n,
         "cf_mean":           float(cf_arr.mean()),
         "cf_median":         float(np.median(cf_arr)),
         "optics_mean":       float(opt_arr.mean()),
         "optics_median":     float(np.median(opt_arr)),
         "n_agree":           agree,
-        "pct_agree":         100 * agree / len(proc),
+        "pct_agree":         100 * agree / n,
         "n_optics_more":     opt_more,
-        "pct_optics_more":   100 * opt_more / len(proc),
+        "pct_optics_more":   100 * opt_more / n,
         "n_optics_less":     opt_less,
-        "pct_optics_less":   100 * opt_less / len(proc),
+        "pct_optics_less":   100 * opt_less / n,
         "optics_clusters_total": int(opt_arr.sum()),
         "nhits_per_cluster_median": float(np.median(all_nhits)) if all_nhits else np.nan,
         "nhits_per_cluster_mean":   float(np.mean(all_nhits))   if all_nhits else np.nan,
@@ -201,13 +216,11 @@ def print_summary(stats: dict, cf_arr, opt_arr):
     print("=" * 60)
     print(f"Runs processed      : {stats['runs']}")
     print(f"Events total        : {stats['n_events_total']}")
-    print(f"  skipped (>{MAX_HITS_PER_EVENT} hits) : {stats['n_events_skipped']}")
-    print(f"  processed         : {stats['n_events_processed']}")
     print()
     print(f"CF     mean/median  : {stats['cf_mean']:.2f} / {stats['cf_median']:.1f}")
     print(f"OPTICS mean/median  : {stats['optics_mean']:.2f} / {stats['optics_median']:.1f}")
     print()
-    n = stats["n_events_processed"]
+    n = stats["n_events_total"]
     print(f"Exact agreement     : {stats['n_agree']}/{n}  ({stats['pct_agree']:.1f}%)")
     print(f"OPTICS > CF         : {stats['n_optics_more']}/{n}  ({stats['pct_optics_more']:.1f}%)")
     print(f"OPTICS < CF         : {stats['n_optics_less']}/{n}  ({stats['pct_optics_less']:.1f}%)")
@@ -227,7 +240,6 @@ def print_summary(stats: dict, cf_arr, opt_arr):
 def make_plots(stats: dict, cf_arr, opt_arr, all_nhits, output_dir: Path):
     fig, axes = plt.subplots(1, 4, figsize=(18, 4.5))
 
-    # Panel 1: side-by-side cluster count histograms
     mx   = int(min(max(cf_arr.max(), opt_arr.max()), 20))
     bins = np.arange(-0.5, mx + 1.5)
     axes[0].hist(cf_arr,  bins=bins, alpha=0.65, color="#0077BB",
@@ -240,7 +252,6 @@ def make_plots(stats: dict, cf_arr, opt_arr, all_nhits, output_dir: Path):
     axes[0].legend(fontsize=8)
     axes[0].set_xlim(-0.5, mx + 0.5)
 
-    # Panel 2: scatter CF vs OPTICS (jittered)
     rng    = np.random.default_rng(0)
     jit    = rng.uniform(-0.2, 0.2, len(cf_arr))
     lim    = int(min(max(cf_arr.max(), opt_arr.max()), 20))
@@ -253,7 +264,6 @@ def make_plots(stats: dict, cf_arr, opt_arr, all_nhits, output_dir: Path):
     axes[1].set_ylim(-0.5, lim + 0.5)
     axes[1].legend(fontsize=8)
 
-    # Panel 3: OPTICS − CF difference
     diff  = opt_arr.astype(int) - cf_arr.astype(int)
     dcnt  = Counter(diff)
     dk    = sorted(dcnt)
@@ -266,7 +276,6 @@ def make_plots(stats: dict, cf_arr, opt_arr, all_nhits, output_dir: Path):
     dk_range = max(abs(dk[0]), abs(dk[-1]))
     axes[2].set_xlim(-min(dk_range, 15) - 0.5, min(dk_range, 15) + 0.5)
 
-    # Panel 4: hits per OPTICS cluster
     if all_nhits:
         axes[3].hist(all_nhits, bins=40, color="darkorange", edgecolor="white")
         axes[3].axvline(np.median(all_nhits), color="k", ls="--",
@@ -281,7 +290,7 @@ def make_plots(stats: dict, cf_arr, opt_arr, all_nhits, output_dir: Path):
         runs_str += f" … ({len(stats['runs'])} runs)"
     fig.suptitle(
         f"OPTICS (ms={MIN_SAMPLES}, xi={XI}, t={T_UNIT_NS} ns) vs ClusterFinder\n"
-        f"{runs_str}  |  {stats['n_events_processed']} events",
+        f"{runs_str}  |  {stats['n_events_total']} events",
         fontsize=10)
     fig.tight_layout()
 
@@ -290,7 +299,8 @@ def make_plots(stats: dict, cf_arr, opt_arr, all_nhits, output_dir: Path):
     print(f"Plot  → {out}")
 
 
-def save_outputs(results: list[dict], stats: dict, output_dir: Path):
+def save_outputs(results: list[dict], stats: dict,
+                 hit_frames: list[pd.DataFrame], output_dir: Path):
     # Per-event CSV
     rows = []
     for r in results:
@@ -302,7 +312,6 @@ def save_outputs(results: list[dict], stats: dict, output_dir: Path):
             "n_hits_total":  r["n_hits_total"],
             "n_hits_cluster_median": (np.median(r["n_hits_per_cluster"])
                                       if r["n_hits_per_cluster"] else np.nan),
-            "skipped":       r["skipped"],
         })
     csv_out = output_dir / "optics_data_stats.csv"
     pd.DataFrame(rows).to_csv(csv_out, index=False)
@@ -313,7 +322,7 @@ def save_outputs(results: list[dict], stats: dict, output_dir: Path):
     lines = [
         f"OPTICS params: min_samples={MIN_SAMPLES}, xi={XI}, t_unit_ns={T_UNIT_NS}",
         f"Runs: {stats['runs']}",
-        f"Events processed: {stats['n_events_processed']}  skipped: {stats['n_events_skipped']}",
+        f"Events processed: {stats['n_events_total']}",
         f"CF  mean={stats['cf_mean']:.3f}  median={stats['cf_median']:.1f}",
         f"OPTICS mean={stats['optics_mean']:.3f}  median={stats['optics_median']:.1f}",
         f"Agreement: {stats['pct_agree']:.1f}%  OPTICS>CF: {stats['pct_optics_more']:.1f}%  OPTICS<CF: {stats['pct_optics_less']:.1f}%",
@@ -322,6 +331,17 @@ def save_outputs(results: list[dict], stats: dict, output_dir: Path):
     ]
     txt_out.write_text("\n".join(lines) + "\n")
     print(f"Summary → {txt_out}")
+
+    # Per-cluster hit parquet — feed to compute_cluster_features() for features
+    if hit_frames:
+        hits_out = output_dir / "background_optics_hits.parquet"
+        col_order = ["run", "event_number", "cluster_id", "is_background",
+                     "x", "y", "z", "t", "pe", "pmtID"]
+        pd.concat(hit_frames, ignore_index=True)[col_order].to_parquet(
+            hits_out, index=False)
+        n_clusters = sum(1 for r in results for _ in r["n_hits_per_cluster"])
+        print(f"Hits   → {hits_out}  ({n_clusters} clusters, "
+              f"{sum(len(f) for f in hit_frames)} hits)")
 
 
 def main():
@@ -334,7 +354,6 @@ def main():
     for f in files:
         print(f"  {f.name}")
 
-    # Load all files — pool events across runs
     all_events = []
     run_list   = []
     for f in files:
@@ -348,12 +367,12 @@ def main():
     print(f"\nTotal across all runs: {len(all_events)} events")
 
     print(f"\nRunning OPTICS (ms={MIN_SAMPLES}, xi={XI}, t_unit={T_UNIT_NS} ns) ...")
-    results = run_optics_all(all_events)
+    results, hit_frames = run_optics_all(all_events)
 
     stats, cf_arr, opt_arr, all_nhits = summarise(results, run_list)
     print_summary(stats, cf_arr, opt_arr)
     make_plots(stats, cf_arr, opt_arr, all_nhits, output_dir)
-    save_outputs(results, stats, output_dir)
+    save_outputs(results, stats, hit_frames, output_dir)
 
 
 if __name__ == "__main__":
