@@ -24,7 +24,7 @@ michel_background_hits.parquet
 
 Selection cuts (Michel_tuning.py)
 ----------------------------------
-Dirt muon:  HasMRD==0, TankMRDCoinc==0, NoVeto==0, Extended==1,
+Dirt muon:  Extended==1,
             hits>=50, 1000<PE<4000, CB<0.2, CT in (200,1800) ns,
             charge barycenter downstream
 Michel:     adj_time in (200, 5000) ns, PE<650, hits>=20, CB<0.18
@@ -32,16 +32,16 @@ Michel:     adj_time in (200, 5000) ns, PE<650, hits>=20, CB<0.18
 Usage
 -----
     # Single file
-    python michel/tag_michel_background.py /path/to/ANNIEEvent_dirtmuon_91500_91999.root
+    python3 michel/tag_michel_background.py /path/to/ANNIEEvent_dirtmuon_91500_91999.root
 
     # All files in a directory
-    python michel/tag_michel_background.py /path/to/dirtmuon/
-
+    python3 michel/tag_michel_background.py /path/to/dirtmuon/
+    
     # Glob
-    python michel/tag_michel_background.py "/path/to/ANNIEEvent_dirtmuon_*.root"
+    python3 michel/tag_michel_background.py "/path/to/ANNIEEvent_dirtmuon_*.root"
 
     # Custom output location
-    python michel/tag_michel_background.py /path/to/dirtmuon/ --output-dir ambe_output/
+    python3 michel/tag_michel_background.py /path/to/dirtmuon/ --output-dir ambe_output/
 """
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ _DIRT_CT_MAX    = 1800.0
 _MICHEL_DT_MIN  = 200.0
 _MICHEL_DT_MAX  = 5000.0
 _MICHEL_MAX_PE  = 650.0
-_MICHEL_CB_MAX  = 0.18   # tightened from 0.2, per Michel_tuning.py line 207
+_MICHEL_CB_MAX  = 0.20  
 
 _RUN_RE = re.compile(r"(\d+)")
 
@@ -121,7 +121,6 @@ def _is_dirt_muon(hits, pe, cb, ct, hit_z, hit_pe) -> bool:
 
 
 def _is_michel(adj_time: float, pe: float, hits: int, cb: float) -> bool:
-    """Michel candidate cuts — Michel_tuning.py Michel() + CB<0.18 tightening."""
     if not (_MICHEL_DT_MIN < adj_time < _MICHEL_DT_MAX):
         return False
     if pe <= 0 or pe >= _MICHEL_MAX_PE:
@@ -147,16 +146,11 @@ def process_file(root_path: Path, tree_name: str) -> list[pd.DataFrame]:
         tree = f[tree_name]
         n = tree.num_entries
 
-        has_mrd_arr  = tree["HasMRD"].array(library="np")
-        tmrd_arr     = tree["TankMRDCoinc"].array(library="np")
-        noveto_arr   = tree["NoVeto"].array(library="np")
         extended_arr = tree["Extended"].array(library="np")
-
         ct_arr   = tree["clusterTime"].array(library="ak")
         cpe_arr  = tree["clusterPE"].array(library="ak")
         ch_arr   = tree["clusterHits"].array(library="ak")
         ccb_arr  = tree["clusterChargeBalance"].array(library="ak")
-
         hx_arr   = tree["Cluster_HitX"].array(library="ak")
         hy_arr   = tree["Cluster_HitY"].array(library="ak")
         hz_arr   = tree["Cluster_HitZ"].array(library="ak")
@@ -169,9 +163,6 @@ def process_file(root_path: Path, tree_name: str) -> list[pd.DataFrame]:
 
     for i in range(n):
         # Event-level flag cuts
-        if int(has_mrd_arr[i])  != 0: continue
-        if int(tmrd_arr[i])     != 0: continue
-        if int(noveto_arr[i])   != 0: continue
         if int(extended_arr[i]) != 1: continue
 
         ct  = ak.to_list(ct_arr[i])

@@ -100,18 +100,10 @@ def _exact_cutflow(root_path: str, tree_name: str = "Event;1") -> None:
             except Exception:
                 return None
 
-        has_mrd   = _try_load("HasMRD")
-        tmrd_coinc= _try_load("TankMRDCoinc")
-        no_veto   = _try_load("NoVeto")
         extended  = _try_load("hadExtended")
 
         # Report what's available
-        flag_avail = {
-            "HasMRD":       has_mrd   is not None,
-            "TankMRDCoinc": tmrd_coinc is not None,
-            "NoVeto":       no_veto   is not None,
-            "hadExtended":  extended  is not None,
-        }
+        flag_avail = {"hadExtended": extended is not None}
         print("Event-level branches found in ROOT file:")
         for name, found in flag_avail.items():
             status = "YES" if found else "NOT FOUND (cut skipped)"
@@ -124,41 +116,13 @@ def _exact_cutflow(root_path: str, tree_name: str = "Event;1") -> None:
     # Accumulate per-event pass/fail
     survive = np.ones(n_total, dtype=bool)  # all events start passing
 
-    # ── Cut 1: HasMRD == 0 ────────────────────────────────────────────────────
-    if has_mrd is not None:
-        cut1 = (has_mrd == 0)
-        survive &= cut1
-        print(f"  Cut 1  HasMRD==0:              {survive.sum():5d} / {n_total} events pass"
-              f"   (HasMRD distribution: "
-              f"0={int((has_mrd==0).sum())} 1={int((has_mrd==1).sum())})")
-    else:
-        print(f"  Cut 1  HasMRD==0:              SKIPPED (branch absent) — all {n_total} events remain")
-
-    after_mrd = survive.sum()
-
-    # ── Cut 2: TankMRDCoinc == 0 ──────────────────────────────────────────────
-    if tmrd_coinc is not None:
-        cut2 = (tmrd_coinc == 0)
-        survive &= cut2
-        print(f"  Cut 2  TankMRDCoinc==0:        {survive.sum():5d} / {after_mrd} pass")
-    else:
-        print(f"  Cut 2  TankMRDCoinc==0:        SKIPPED (branch absent)")
-
-    # ── Cut 3: NoVeto == 0 ────────────────────────────────────────────────────
-    if no_veto is not None:
-        cut3 = (no_veto == 0)
-        survive &= cut3
-        print(f"  Cut 3  NoVeto==0:              {survive.sum():5d} / {survive.sum()} pass")
-    else:
-        print(f"  Cut 3  NoVeto==0:              SKIPPED (branch absent)")
-
-    # ── Cut 4: hadExtended == 1 ───────────────────────────────────────────────
+    # ── Cut 1: hadExtended == 1 ───────────────────────────────────────────────
     if extended is not None:
-        cut4 = (extended == 1)
-        survive &= cut4
-        print(f"  Cut 4  hadExtended==1:         {survive.sum():5d} events pass")
+        cut1 = (extended == 1)
+        survive &= cut1
+        print(f"  Cut 1  hadExtended==1:         {survive.sum():5d} events pass")
     else:
-        print(f"  Cut 4  hadExtended==1:         SKIPPED (branch absent)")
+        print(f"  Cut 1  hadExtended==1:         SKIPPED (branch absent)")
 
     print(f"\nAfter event-level flag cuts: {survive.sum()} events remain.\n")
     print("Continuing muon cluster cuts on ALL events (ignoring unavailable flags):\n")
