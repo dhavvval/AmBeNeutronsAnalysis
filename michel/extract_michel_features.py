@@ -30,6 +30,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import glob
 from pathlib import Path
 import sys
 
@@ -38,7 +39,7 @@ import numpy as np
 import pandas as pd
 import uproot
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.ambe.mc.cluster_features import compute_cluster_features, load_geometry
 
 
@@ -284,17 +285,18 @@ def _exact_cutflow(root_path: str, tree_name: str = "Event;1") -> None:
     print(f"{'='*60}\n")
 
 
-def _michel_indices(ct: list, cpe: list, ch: list) -> list[int]:
+def _michel_indices(ct: list, cpe: list, ch: list, ccb: list) -> list[int]:
     """
     Return cluster indices that pass the Michel selection in one event.
     Muon = max-PE cluster; Michel must arrive >= MICHEL_MIN_DT_NS later.
+    Applies Michel_tuning.py CB cut: charge balance strictly in (0, 0.2).
     """
     if len(cpe) < 2:
         return []
     muon_idx = int(np.argmax(cpe))
     muon_t   = float(ct[muon_idx])
     out = []
-    for k, (t_k, pe_k, h_k) in enumerate(zip(ct, cpe, ch)):
+    for k, (t_k, pe_k, h_k, cb_k) in enumerate(zip(ct, cpe, ch, ccb)):
         if k == muon_idx:
             continue
         dt = float(t_k) - muon_t
@@ -303,6 +305,8 @@ def _michel_indices(ct: list, cpe: list, ch: list) -> list[int]:
         if float(pe_k) >= MICHEL_MAX_PE:
             continue
         if int(h_k) < MICHEL_MIN_HITS:
+            continue
+        if not (0 < float(cb_k) < 0.2):
             continue
         out.append(k)
     return out
@@ -343,11 +347,12 @@ def extract_michel_features(root_path: str, geo,
         ct  = ak.to_list(ct_arr[i])
         cpe = ak.to_list(cpe_arr[i])
         ch  = ak.to_list(ch_arr[i])
+        ccb = ak.to_list(ccb_arr[i])
 
         if not cpe or float(max(cpe)) < MUON_MIN_PE:
             continue
 
-        for k in _michel_indices(ct, cpe, ch):
+        for k in _michel_indices(ct, cpe, ch, ccb):
             hx  = np.asarray(ak.to_list(hx_arr[i][k]),  dtype=float)
             hy  = np.asarray(ak.to_list(hy_arr[i][k]),  dtype=float)
             hz  = np.asarray(ak.to_list(hz_arr[i][k]),  dtype=float)
@@ -385,6 +390,22 @@ def extract_michel_features(root_path: str, geo,
     return df
 
 
+def _resolve_files(input_path: str) -> list[Path]:
+    """Accept a single ROOT file, a directory, or a glob pattern."""
+    p = Path(input_path)
+    if p.is_file():
+        return [p]
+    if p.is_dir():
+        files = sorted(p.glob("ANNIEEvent_*.root"))
+        if not files:
+            files = sorted(p.glob("*.root"))
+    else:
+        files = sorted(Path(f) for f in glob.glob(input_path))
+    if not files:
+        raise FileNotFoundError(f"No ROOT files found for: {input_path}")
+    return files
+
+
 def _load_config(config_path: str) -> dict:
     import yaml
     with open(config_path) as f:
@@ -395,7 +416,8 @@ def main():
     p = argparse.ArgumentParser(prog="extract_michel_features")
     p.add_argument("--config",      help="YAML config (configs/mc_michel_mva.yaml)")
     # Individual args — override config when both are supplied
-    p.add_argument("--input",       help="ANNIEEvent_MC_MichelElectron.root")
+    p.add_argument("--input",       help="ROOT file, directory, or glob "
+                                        "(e.g. /path/to/ANNIEEvent_dirtmuon_*.root)")
     p.add_argument("--geo",         help="FullTankPMTGeometry.csv")
     p.add_argument("--offsets",     help="TankPMTTimingOffsets.csv")
     p.add_argument("--output",      help="Output .parquet path")
@@ -440,15 +462,25 @@ def main():
     MICHEL_MIN_DT_NS = float(michel_block.get("michel_min_dt_ns", MICHEL_MIN_DT_NS))
     MICHEL_MAX_DT_NS = float(michel_block.get("michel_max_dt_ns", MICHEL_MAX_DT_NS))
 
-    geo = load_geometry(geo_path, off_path)
-    df  = extract_michel_features(root_path, geo,
-                                  source_pos_m=source_pos_m,
-                                  tree_name=args.tree)
+    geo   = load_geometry(geo_path, off_path)
+    files = _resolve_files(root_path)
+    print(f"[michel] found {len(files)} file(s)")
+
+    frames = []
+    for i, f in enumerate(files):
+        print(f"[michel] [{i+1}/{len(files)}] {f.name}")
+        df_f = extract_michel_features(str(f), geo,
+                                       source_pos_m=source_pos_m,
+                                       tree_name=args.tree)
+        if len(df_f):
+            frames.append(df_f)
+
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out, index=False)
-    print(f"[michel] wrote {len(df)} rows → {out}")
+    print(f"[michel] wrote {len(df)} rows from {len(files)} file(s) → {out}")
 
 
 if __name__ == "__main__":

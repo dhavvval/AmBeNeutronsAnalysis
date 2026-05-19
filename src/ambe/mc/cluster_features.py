@@ -1,32 +1,71 @@
 """
 Cluster-level feature extraction for OPTICS clusters.
 
+Physics features (computable from both MC and real data)
+---------------------------------------------------------
+Timing — std-based (kept for comparison with legacy tools):
     n_hits              Number of PMT hits in the cluster
     t_mean              Mean hit time (ns)
-    sigma_t             RMS of raw hit times (ns)  [std-based, kept for comparison]
+    sigma_t             RMS of raw hit times (ns)
     sigma_t_corr        RMS after per-PMT timing offset correction (ns)
-    sigma_t_tof         RMS after offset correction + time-of-flight correction (ns)
-    sigma_t_mad         MAD-based robust sigma_t — raw (ns)  *** preferred for MVA ***
-    sigma_t_mad_corr    MAD-based robust sigma_t — offset-corrected (ns)
-    sigma_t_mad_tof     MAD-based robust sigma_t — ToF-corrected (ns)
-    n_hits_early        Hits within ±10 ns of cluster median (direct Cherenkov only)
-    sigma_t_early_mad   MAD of direct-light-window hit times (ns)
-    t_window_80pct      Narrowest window (ns) containing 80% of cluster hits
-    pe_total            Total photoelectrons in cluster (0 if hitPE unavailable)
-    pe_balance          Charge balance: (max_quad - min_quad) / total PE  [0, 1]
-    spatial_rms         RMS of hit PMT positions around cluster centroid (m)
-    d_wall              Distance from estimated vertex to nearest tank wall (m)
-    beta1               Legendre P1 isotropy:  0 = isotropic, >0 = directional
-    beta2               Legendre P2 isotropy
-    
-Note on MAD: sigma_t_mad = 1.4826 × median(|t − median(t)|).  For Gaussian
-data this equals sigma_t.  For data with 1–2 thermalization-scatter outlier
-hits at microsecond timescales, sigma_t can be inflated 100×; sigma_t_mad
-stays correct because the median is insensitive to outliers.
+    sigma_t_tof         RMS after offset + PE-weighted-centroid ToF correction (ns)
 
-Truth labels (MC only):
-    is_truth_neutron    1 if cluster matches a truth neutron (majority vote ≥50%)
+Timing — MAD-based (robust, preferred for MVA):
+    sigma_t_mad         1.4826 × median(|t − median(t)|) on raw times (ns)
+    sigma_t_mad_corr    Same after per-PMT timing offset correction (ns)
+    sigma_t_mad_tof     Same after offset + PE-weighted-centroid ToF correction (ns)
+
+Direct-light window:
+    n_hits_early        Hits within ±10 ns of the offset-corrected cluster median
+    sigma_t_early_mad   MAD of the direct-light-window hits only (ns)
+    t_window_80pct      Narrowest window (ns) containing 80% of offset-corrected hits
+
+Charge:
+    pe_total            Total photoelectrons (0 if hitPE unavailable — re-run processor)
+    pe_balance          Quadrant charge asymmetry: (max_quad − min_quad) / pe_total  [0,1]
+    charge_bal_legacy   Legacy CB = sqrt(ΣQ²/(ΣQ)² − 1/121) per-PMT  [ClusterFinder convention]
+
+Spatial:
+    spatial_rms         RMS of hit PMT positions around PE-weighted centroid (m)
+    d_wall              Distance from PE-weighted centroid to nearest tank surface (m)
+    d_source            Distance from PE-weighted centroid to AmBe source (m); NaN if no source
+
+Isotropy — SK Legendre convention, β_k = 2/(N(N−1)) Σᵢ≠ⱼ P_k(cos θᵢⱼ):
+    beta1 … beta5       β₁–β₅ computed from directions to hit PMTs (PE-weighted centroid vertex)
+
+PE-weighted centroid vertex:
+    vtx_x, vtx_y, vtx_z   Centroid position in metres (Y = vertical axis)
+
+Gauss-Newton fitted vertex (ported from VertexLeastSquares.cpp):
+    vtx_fit_x/y/z       Best-fit vertex position (NaN if fit did not converge)
+    fit_rms_ns          RMS of timing residuals at best-fit vertex (ns)
+    fit_converged       1 if any seed produced an in-tank converged vertex, else 0
+    n_fit_hits          Number of causally compatible hits used in the fit
+    d_wall_fit          Distance to nearest wall — fitted vertex (m)
+    d_source_fit        Distance to AmBe source — fitted vertex (m)
+    beta1_fit … beta5_fit  β₁–β₅ using fitted-vertex directions
+    sigma_t_mad_tof_fit    MAD of ToF-corrected times using fitted vertex (ns)
+    fit_goodness_init   SK FitGoodness (eq. 3.1) evaluated at PE-weighted centroid
+    fit_goodness_reco   SK FitGoodness evaluated at Gauss-Newton fitted vertex
+
+Truth labels (MC only — not available for real data):
+    is_truth_neutron    1 if cluster matches a truth neutron (dominant trackID ≥ MIN_MATCH_FRAC)
     dominant_trackID    Matched neutron trackID (-1 if spurious)
+    cluster_time_offset_ns  t_mean − median(neutron hit times) for the event (ns)
+    is_prompt_cluster   1 if cluster is a prompt signal (AmBe gamma or other early physics)
+    n_neutron           Neutron hits (truth_class ∈ {1,2,3,4})
+    n_darknoise         Dark-noise hits (truth_class == 0)
+    n_nonneutron        Non-neutron physics hits (truth_class == −5; AmBe prompt gamma)
+    n_untraced          Hits BackTracker could not trace (~11%)
+    frac_neutron/darknoise/nonneutron/untraced   Hit fractions
+    dominant_class      Most frequent truth_class in the cluster
+
+Note on MAD
+-----------
+sigma_t_mad = 1.4826 × median(|t − median(t)|).  For Gaussian data this equals
+sigma_t (std).  Geant4 thermalization tracking adds 1–2 outlier hits per cluster
+at microsecond timescales; these inflate sigma_t by up to 100× while leaving
+sigma_t_mad unaffected.  Use MAD variants for any MVA input.
 
 Usage
 -----
@@ -35,7 +74,7 @@ Run as part of the MC pipeline after `ambe mc optics`:
 
 Or import directly:
     from ambe.mc.cluster_features import extract_all_features, run
-    df_feat = extract_all_features(ctx, min_samples=8, xi=0.10, t_unit_ns=25.0)
+    df_feat = extract_all_features(ctx, geo, min_samples=8, xi=0.10, t_unit_ns=25.0)
 
 Config block (add to your YAML under `features:`)
 --------------------------------------------------
@@ -43,8 +82,9 @@ features:
   min_samples: 8          # OPTICS config to use (best from grid sweep)
   xi: 0.10
   t_unit_ns: 25.0
-  hit_prefilter_ns: 0     # 0 = no prefilter (recommended)
+  hit_prefilter_ns: 0     # 0 = no prefilter (required for clean sigma_t)
   truth_window_ns: 75.0
+  source_position_m: [x, y, z]   # AmBe source in metres; omit to disable ToF/d_source
 
 geometry:
   pmt_geometry:    /path/to/FullTankPMTGeometry.csv
@@ -76,7 +116,7 @@ from .optics import (
 )
 
 
-# Speed of light in water (m/ns) — matches processor.py / data/processor.py
+# Speed of light in water (m/ns)
 SOL_WATER = 0.299792458 * 0.75
 
 NEUTRON_CLASSES = {1, 2, 3, 4}
@@ -468,13 +508,16 @@ def compute_cluster_features(df_cluster: pd.DataFrame,
 
     Parameters
     ----------
-    df_cluster : DataFrame slice — all hits in one cluster.
-                 Required columns: x, y, z, t, pe, pmtID
-    geo        : ANNIEGeometry (PMT positions, offsets, tank dimensions)
+    df_cluster   : DataFrame slice — all hits in one cluster.
+                   Required columns: x, y, z, t, pe, pmtID
+    geo          : ANNIEGeometry (PMT positions, offsets, tank dimensions)
+    source_pos_m : AmBe source position in metres as (3,) array, or None.
+                   When provided, d_source and d_source_fit are computed and
+                   the source ToF is available for OPTICS (passed separately).
 
     Returns
     -------
-    dict of feature name → float value
+    dict of feature name → float (empty dict if df_cluster is empty)
     """
     n = len(df_cluster)
     if n == 0:
@@ -817,12 +860,18 @@ def extract_all_features(ctx: RunContext,
 
     Parameters
     ----------
-    geo              : pre-loaded ANNIEGeometry
-    min_samples, xi, t_unit_ns : OPTICS hyperparameters (use best from grid)
-    hit_prefilter_ns : CF-time prefilter (0 = disabled, recommended)
-    truth_window_ns  : truth signal window for labelling
-    source_pos_m     : AmBe source position in metres for ToF correction
-                       and d_source feature.  None disables both.
+    ctx                  : RunContext (parquet paths, run name, config)
+    geo                  : pre-loaded ANNIEGeometry
+    min_samples, xi, t_unit_ns : OPTICS hyperparameters (use best config from grid sweep)
+    hit_prefilter_ns     : CF-time prefilter window (0 = disabled — required for clean sigma_t)
+    truth_window_ns      : truth hit window for neutron labelling (75 ns recommended)
+    source_pos_m         : AmBe source in metres for source ToF correction and d_source.
+                           None disables both.
+    min_pulses_per_event : skip events with fewer hits than this (0 = keep all)
+
+    Returns
+    -------
+    DataFrame with one row per cluster (both OPTICS and ClusterFinder methods).
     """
     pulses_path   = ctx.parquet_path(f"{ctx.run_name}__pulses")
     clusters_path = ctx.parquet_path(f"{ctx.run_name}__clusterfinder")
@@ -1021,18 +1070,10 @@ def feature_plots(df: pd.DataFrame, ctx: RunContext):
                     lo, hi = float(all_vals.min()), float(all_vals.max()) + 1e-6
                 bins = np.linspace(lo, hi, 40)
 
-<<<<<<< Updated upstream
                 ax.hist(sig, bins=bins, density=True, alpha=0.6, histtype="step",
                         color=C_SIG,    label=f"Truth neutron  (n={len(sig)})")
                 ax.hist(bkg, bins=bins, density=True, alpha=0.6,
                         color=C_SPU, label=f"Spurious  (n={len(bkg)})")
-=======
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    ax.hist(sig, bins=bins, density=True, alpha=0.6,
-                            color="tomato",    label=f"Truth neutron  (n={len(sig)})")
-                    ax.hist(bkg, bins=bins, density=True, alpha=0.6,
-                            color="steelblue", label=f"Spurious  (n={len(bkg)})")
->>>>>>> Stashed changes
                 ax.set_xlabel(xlabel, fontsize=9)
                 ax.set_ylabel("Density")
                 ax.set_title(method.upper(), fontsize=10)
@@ -1105,10 +1146,6 @@ def separation_summary(df: pd.DataFrame) -> pd.DataFrame:
         return df_out
     return df_out.sort_values("separation_sigma", ascending=False)
 
-
-# --------------------------------------------------------------------------- #
-# CLI entry point
-# --------------------------------------------------------------------------- #
 
 def spurious_composition_summary(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -1223,6 +1260,10 @@ def spurious_composition_summary(df: pd.DataFrame) -> pd.DataFrame:
 
     return pd.DataFrame(rows)
 
+
+# --------------------------------------------------------------------------- #
+# CLI entry point
+# --------------------------------------------------------------------------- #
 
 def _config_from_ctx(ctx: RunContext):
     feat_block = ctx.extra.get("features", {}) or {}
@@ -1370,7 +1411,7 @@ def make_separation_plots(df: pd.DataFrame, ctx: "RunContext") -> Path:
                 ax.tick_params(labelsize=7)
                 ax.set_xlim(*xlim)
 
-            # Hide unused subplots (17 features in 6×3 grid → 1 spare)
+            # Hide unused subplots (27 features in 10×3 grid → 3 spare)
             for spare in range(len(FEAT_CFG), NROWS * NCOLS):
                 r2, c2 = divmod(spare, NCOLS)
                 axes[r2, c2].set_visible(False)
