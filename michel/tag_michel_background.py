@@ -1,41 +1,47 @@
 """
 tag_michel_background.py
 
-Select Michel electron clusters from real ANNIE beam data ROOT files and
-extract per-cluster physics features — same output schema as
-extract_michel_features.py (MC version), so both feed directly into
-mva_neutron_vs_michel.py without any extra processing step.
+Select Michel electron clusters from WCSim ANNIEEvent ROOT files using the
+strict Michel_tuning.py cuts (dirt muon + Michel selection) and write a
+background-tagged hits parquet.
 
-Selection mirrors Michel_tuning.py exactly (dirt muon + Michel cuts with
-CB < 0.18 tightening).  Features are computed by compute_cluster_features()
-from src/ambe/mc/cluster_features.py — identical to the MC pipeline.
+Same two-step design as the off-beam pipeline:
+    analyze_optics_data_rate.py  →  background_optics_hits.parquet  (hits)
+    tag_michel_background.py     →  michel_background_hits.parquet   (hits)
+                                        ↓
+                          compute features downstream via
+                          extract_features_from_background_hits()
+                          in src/ambe/mc/cluster_features.py
+
+No geometry files needed — this script only applies selection cuts and
+saves raw hit coordinates.
 
 Output
 ------
-michel_data_features.parquet
-    All physics features from cluster_features.py, plus:
-      run, event_number, muon_event_idx, adj_time_ns, is_michel=1
+michel_background_hits.parquet
+    run, event_number, muon_event_idx, cluster_id, is_background=1,
+    x, y, z, t, pe, pmtID
 
-Input format
-------------
-BeamClusterAnalysis ntuples ("data" tree), same files as Michel_tuning.py.
-Cluster-level branches per event row:
-  cluster_time, cluster_PE, cluster_Hits, cluster_Qb, cluster_Number,
-  isBrightest, hadExtended, NoVeto, TankMRDCoinc, MRD_activity
-Hit-level branches (one array per cluster row):
-  hitX, hitY, hitZ, hitT, hitPE, hitID
+Selection cuts (Michel_tuning.py)
+----------------------------------
+Dirt muon:  HasMRD==0, TankMRDCoinc==0, NoVeto==0, Extended==1,
+            hits>=50, 1000<PE<4000, CB<0.2, CT in (200,1800) ns,
+            charge barycenter downstream
+Michel:     adj_time in (200, 5000) ns, PE<650, hits>=20, CB<0.18
 
 Usage
 -----
-    python tag_michel_background.py \\
-        /path/to/beam_data.root \\
-        --geo    /path/to/FullTankPMTGeometry.csv \\
-        --offsets /path/to/TankPMTTimingOffsets.csv \\
-        --output michel/michel_data_features.parquet
+    # Single file
+    python michel/tag_michel_background.py /path/to/ANNIEEvent_dirtmuon_91500_91999.root
 
-    # Directory of beam files
-    python tag_michel_background.py /path/to/BeamCluster/ \\
-        --geo ... --offsets ... --output michel/michel_data_features.parquet
+    # All files in a directory
+    python michel/tag_michel_background.py /path/to/dirtmuon/
+
+    # Glob
+    python michel/tag_michel_background.py "/path/to/ANNIEEvent_dirtmuon_*.root"
+
+    # Custom output location
+    python michel/tag_michel_background.py /path/to/dirtmuon/ --output-dir ambe_output/
 """
 from __future__ import annotations
 
@@ -50,9 +56,6 @@ import numpy as np
 import pandas as pd
 import uproot
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-from ambe.mc.cluster_features import compute_cluster_features, load_geometry
-
 # ── Michel_tuning.py cut thresholds ──────────────────────────────────────────
 _DIRT_MIN_HITS  = 50
 _DIRT_MIN_PE    = 1000.0
@@ -64,26 +67,19 @@ _DIRT_CT_MAX    = 1800.0
 _MICHEL_DT_MIN  = 200.0
 _MICHEL_DT_MAX  = 5000.0
 _MICHEL_MAX_PE  = 650.0
-_MICHEL_CB_MAX  = 0.18   # tightened from 0.2 after initial pass, per Michel_tuning.py line 207
+_MICHEL_CB_MAX  = 0.18   # tightened from 0.2, per Michel_tuning.py line 207
 
-_RUN_RE = re.compile(r"R(\d+)")
+_RUN_RE = re.compile(r"(\d+)")
 
 
 def _parse_args():
     p = argparse.ArgumentParser(prog="tag_michel_background")
-    p.add_argument("input",      help="ROOT file, directory, or glob "
-                                      "(e.g. /path/to/ANNIEEvent_dirtmuon_*.root)")
-    p.add_argument("--geo",      required=True,
-                   help="FullTankPMTGeometry.csv")
-    p.add_argument("--offsets",  required=True,
-                   help="TankPMTTimingOffsets.csv")
-    p.add_argument("--output",   required=True,
-                   help="Output .parquet path (e.g. michel/michel_data_features.parquet)")
-    p.add_argument("--tree",     default="Event;1",
-                   help="ROOT tree name (default: Event;1 for WCSim MC files)")
-    p.add_argument("--source-pos", type=float, nargs=3, default=None,
-                   metavar=("X", "Y", "Z"),
-                   help="Source position in metres for d_source feature (optional)")
+    p.add_argument("input",        help="ROOT file, directory, or glob "
+                                        "(e.g. /path/to/ANNIEEvent_dirtmuon_*.root)")
+    p.add_argument("--output-dir", default=".",
+                   help="Output directory (default: current dir)")
+    p.add_argument("--tree",       default="Event;1",
+                   help="ROOT tree name (default: Event;1)")
     return p.parse_args()
 
 
@@ -109,19 +105,8 @@ def _run_number(path: Path) -> int:
 
 # ── Selection functions (Michel_tuning.py logic) ──────────────────────────────
 
-def _is_dirt_muon(mrd_activity, tmrd_coinc, no_veto, extended,
-                  is_brightest, hits, pe, cb, ct, hit_z, hit_pe) -> bool:
-    """Dirt muon selection — mirrors Michel_tuning.py dirt()."""
-    if mrd_activity == 1:
-        return False
-    if tmrd_coinc == 1:
-        return False
-    if no_veto == 1:
-        return False
-    if extended == 0:
-        return False
-    if is_brightest == 0:
-        return False
+def _is_dirt_muon(hits, pe, cb, ct, hit_z, hit_pe) -> bool:
+    """Cluster-level dirt muon cuts (event-level flags checked before calling)."""
     if hits < _DIRT_MIN_HITS:
         return False
     if not (_DIRT_MIN_PE < pe < _DIRT_MAX_PE):
@@ -136,7 +121,7 @@ def _is_dirt_muon(mrd_activity, tmrd_coinc, no_veto, extended,
 
 
 def _is_michel(adj_time: float, pe: float, hits: int, cb: float) -> bool:
-    """Michel candidate selection — mirrors Michel_tuning.py Michel() + CB<0.18 tightening."""
+    """Michel candidate cuts — Michel_tuning.py Michel() + CB<0.18 tightening."""
     if not (_MICHEL_DT_MIN < adj_time < _MICHEL_DT_MAX):
         return False
     if pe <= 0 or pe >= _MICHEL_MAX_PE:
@@ -148,43 +133,30 @@ def _is_michel(adj_time: float, pe: float, hits: int, cb: float) -> bool:
     return True
 
 
-# ── Feature extraction ────────────────────────────────────────────────────────
+# ── Per-file processing ───────────────────────────────────────────────────────
 
-def extract_features(root_path: Path, geo, source_pos_m,
-                     tree_name: str = "Event;1") -> list[dict]:
+def process_file(root_path: Path, tree_name: str) -> list[pd.DataFrame]:
     """
-    Apply strict Michel_tuning.py selection to one WCSim ANNIEEvent ROOT file
-    and extract per-cluster physics features with compute_cluster_features().
-
-    Reads WCSim Event;1 branch names (clusterTime, clusterPE, clusterChargeBalance,
-    clusterHits, Cluster_HitX/Y/Z/T/PE/Chankey) and event-level flags
-    (HasMRD, TankMRDCoinc, NoVeto, Extended).
-
-    Returns a list of feature dicts (one per Michel cluster), each containing
-    all cluster_features.py columns plus run, event_number, muon_event_idx,
-    adj_time_ns, and is_michel=1.
+    Apply Michel selection to one ROOT file.
+    Returns a list of per-cluster hit DataFrames tagged with is_background=1.
     """
     run = _run_number(root_path)
-    rows = []
+    hit_frames = []
 
     with uproot.open(str(root_path)) as f:
-        # Use the latest cycle if tree_name not found directly
         tree = f[tree_name]
         n = tree.num_entries
 
-        # Event-level flags (one value per event)
         has_mrd_arr  = tree["HasMRD"].array(library="np")
         tmrd_arr     = tree["TankMRDCoinc"].array(library="np")
         noveto_arr   = tree["NoVeto"].array(library="np")
         extended_arr = tree["Extended"].array(library="np")
 
-        # Per-event cluster arrays (WCSim branch names)
         ct_arr   = tree["clusterTime"].array(library="ak")
         cpe_arr  = tree["clusterPE"].array(library="ak")
         ch_arr   = tree["clusterHits"].array(library="ak")
         ccb_arr  = tree["clusterChargeBalance"].array(library="ak")
 
-        # Doubly-nested hit arrays: (event, cluster, hit)
         hx_arr   = tree["Cluster_HitX"].array(library="ak")
         hy_arr   = tree["Cluster_HitY"].array(library="ak")
         hz_arr   = tree["Cluster_HitZ"].array(library="ak")
@@ -196,7 +168,7 @@ def extract_features(root_path: Path, geo, source_pos_m,
     n_michel = 0
 
     for i in range(n):
-        # Event-level flag cuts (strict Michel_tuning.py dirt() requirements)
+        # Event-level flag cuts
         if int(has_mrd_arr[i])  != 0: continue
         if int(tmrd_arr[i])     != 0: continue
         if int(noveto_arr[i])   != 0: continue
@@ -210,23 +182,16 @@ def extract_features(root_path: Path, geo, source_pos_m,
         if not cpe:
             continue
 
-        # Find the dirt muon cluster — brightest cluster passing all muon cuts
+        # Find dirt muon cluster
         muon_idx = None
         for j in range(len(cpe)):
-            hz_j  = ak.to_list(hz_arr[i][j])
-            hpe_j = ak.to_list(hpe_arr[i][j])
             if _is_dirt_muon(
-                mrd_activity=int(has_mrd_arr[i]),
-                tmrd_coinc=int(tmrd_arr[i]),
-                no_veto=int(noveto_arr[i]),
-                extended=int(extended_arr[i]),
-                is_brightest=1,   # already filtered at event level; use max-PE cluster
                 hits=int(ch[j]),
                 pe=float(cpe[j]),
                 cb=float(ccb[j]),
                 ct=float(ct[j]),
-                hit_z=hz_j,
-                hit_pe=hpe_j,
+                hit_z=ak.to_list(hz_arr[i][j]),
+                hit_pe=ak.to_list(hpe_arr[i][j]),
             ):
                 muon_idx = j
                 break
@@ -237,7 +202,7 @@ def extract_features(root_path: Path, geo, source_pos_m,
 
         muon_t = float(ct[muon_idx])
 
-        # Find Michel candidates in subsequent clusters of the same event
+        # Find Michel candidates
         for k in range(len(cpe)):
             if k == muon_idx:
                 continue
@@ -257,58 +222,43 @@ def extract_features(root_path: Path, geo, source_pos_m,
 
             df_cl = pd.DataFrame({"x": hx, "y": hy, "z": hz,
                                   "t": ht, "pe": hpe, "pmtID": hid})
-            feats = compute_cluster_features(df_cl, geo, source_pos_m=source_pos_m)
-            if not feats:
-                continue
-
-            feats["run"]            = run
-            feats["event_number"]   = int(i)
-            feats["muon_event_idx"] = int(muon_idx)
-            feats["adj_time_ns"]    = round(adj_time, 1)
-            feats["is_michel"]      = 1
-            rows.append(feats)
+            df_cl["run"]            = run
+            df_cl["event_number"]   = int(i)
+            df_cl["muon_event_idx"] = int(muon_idx)
+            df_cl["cluster_id"]     = n_michel
+            df_cl["is_background"]  = 1
+            hit_frames.append(df_cl)
             n_michel += 1
 
     print(f"  {root_path.name}: {n} events → {n_dirt} dirt muons → {n_michel} Michel clusters")
-    return rows
+    return hit_frames
 
 
 def main():
-    args = _parse_args()
-
-    source_pos_m = (np.array([float(v) for v in args.source_pos])
-                    if args.source_pos else None)
-    if source_pos_m is not None:
-        print(f"Source position: {tuple(source_pos_m)} m  (d_source enabled)")
-
-    geo = load_geometry(args.geo, args.offsets)
+    args       = _parse_args()
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     files = _resolve_files(args.input)
-    print(f"Found {len(files)} ROOT file(s):")
-    for f in files:
-        print(f"  {f.name}")
+    print(f"Found {len(files)} file(s)")
 
-    all_rows: list[dict] = []
+    all_frames: list[pd.DataFrame] = []
     for i, f in enumerate(files):
-        print(f"[michel] [{i+1}/{len(files)}] {f.name}")
-        all_rows.extend(extract_features(f, geo, source_pos_m,
-                                         tree_name=args.tree))
+        print(f"[{i+1}/{len(files)}] {f.name}")
+        all_frames.extend(process_file(f, tree_name=args.tree))
 
-    df = pd.DataFrame(all_rows)
-    n = len(df)
-    print(f"\nTotal Michel clusters extracted: {n}")
-    if n > 0:
-        print(f"adj_time_ns:  min={df['adj_time_ns'].min():.0f}  "
-              f"median={df['adj_time_ns'].median():.0f}  "
-              f"max={df['adj_time_ns'].max():.0f} ns")
-        print(f"n_hits:       min={int(df['n_hits'].min())}  "
-              f"median={df['n_hits'].median():.0f}  "
-              f"max={int(df['n_hits'].max())}")
+    col_order = ["run", "event_number", "muon_event_idx", "cluster_id",
+                 "is_background", "x", "y", "z", "t", "pe", "pmtID"]
 
-    out = Path(args.output)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    if all_frames:
+        df = pd.concat(all_frames, ignore_index=True)[col_order]
+    else:
+        df = pd.DataFrame(columns=col_order)
+
+    n_clusters = int(df.groupby(["run", "event_number", "cluster_id"]).ngroups) if len(df) else 0
+    out = output_dir / "michel_background_hits.parquet"
     df.to_parquet(out, index=False)
-    print(f"Wrote {n} rows → {out}")
+    print(f"\nWrote {n_clusters} clusters ({len(df)} hits) → {out}")
 
 
 if __name__ == "__main__":
