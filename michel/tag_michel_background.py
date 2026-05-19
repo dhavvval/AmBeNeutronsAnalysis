@@ -25,9 +25,9 @@ michel_background_hits.parquet
 Selection cuts (Michel_tuning.py)
 ----------------------------------
 Dirt muon:  Extended==1,
-            hits>=50, 1000<PE<4000, CB<0.2, CT in (200,1800) ns,
-            charge barycenter downstream
-Michel:     adj_time in (200, 5000) ns, PE<650, hits>=20, CB<0.18
+            hits>=50, 1000<PE<4000, CB<0.2,
+            charge barycenter downstream (no absolute CT window — WCSim convention)
+Michel:     adj_time in (1000, 100000) ns, PE<650, hits>=5, CB<0.20
 
 Usage
 -----
@@ -56,18 +56,19 @@ import numpy as np
 import pandas as pd
 import uproot
 
-# ── Michel_tuning.py cut thresholds ──────────────────────────────────────────
+# ── Cut thresholds ────────────────────────────────────────────────────────────
+# Dirt muon: no absolute CT window (WCSim t=0, no beam trigger offset)
 _DIRT_MIN_HITS  = 50
 _DIRT_MIN_PE    = 1000.0
 _DIRT_MAX_PE    = 4000.0
 _DIRT_CB_MAX    = 0.2
-_DIRT_CT_MIN    = 200.0
-_DIRT_CT_MAX    = 1800.0
 
-_MICHEL_DT_MIN  = 200.0
-_MICHEL_DT_MAX  = 5000.0
+# Michel: relative timing only; lower hits threshold for WCSim (fewer hits than data)
+# CB cut removed — WCSim small clusters (5–33 hits) naturally have CB 0.2–0.6
+_MICHEL_DT_MIN  = 1000.0   # ns after muon cluster (µs-scale muon lifetime)
+_MICHEL_DT_MAX  = 100000.0 # 100 µs — covers full muon lifetime tail
 _MICHEL_MAX_PE  = 650.0
-_MICHEL_CB_MAX  = 0.20  
+_MICHEL_MIN_HITS = 5        # WCSim produces ~5–33 hits for Michel; data cut was 20
 
 _RUN_RE = re.compile(r"(\d+)")
 
@@ -105,29 +106,25 @@ def _run_number(path: Path) -> int:
 
 # ── Selection functions (Michel_tuning.py logic) ──────────────────────────────
 
-def _is_dirt_muon(hits, pe, cb, ct, hit_z, hit_pe) -> bool:
-    """Cluster-level dirt muon cuts (event-level flags checked before calling)."""
+def _is_dirt_muon(hits, pe, cb, hit_z, hit_pe) -> bool:
+    """Cluster-level dirt muon cuts (no absolute CT window — WCSim has no beam trigger offset)."""
     if hits < _DIRT_MIN_HITS:
         return False
     if not (_DIRT_MIN_PE < pe < _DIRT_MAX_PE):
         return False
     if cb > _DIRT_CB_MAX or cb < 0:
         return False
-    if ct > _DIRT_CT_MAX or ct < _DIRT_CT_MIN:
-        return False
     bary = float(np.dot(np.asarray(hit_z, dtype=float),
                         np.asarray(hit_pe, dtype=float)))
     return bary >= 0
 
 
-def _is_michel(adj_time: float, pe: float, hits: int, cb: float) -> bool:
+def _is_michel(adj_time: float, pe: float, hits: int) -> bool:
     if not (_MICHEL_DT_MIN < adj_time < _MICHEL_DT_MAX):
         return False
     if pe <= 0 or pe >= _MICHEL_MAX_PE:
         return False
-    if hits < 20:
-        return False
-    if cb >= _MICHEL_CB_MAX or cb <= 0:
+    if hits < _MICHEL_MIN_HITS:
         return False
     return True
 
@@ -180,7 +177,6 @@ def process_file(root_path: Path, tree_name: str) -> list[pd.DataFrame]:
                 hits=int(ch[j]),
                 pe=float(cpe[j]),
                 cb=float(ccb[j]),
-                ct=float(ct[j]),
                 hit_z=ak.to_list(hz_arr[i][j]),
                 hit_pe=ak.to_list(hpe_arr[i][j]),
             ):
@@ -198,7 +194,7 @@ def process_file(root_path: Path, tree_name: str) -> list[pd.DataFrame]:
             if k == muon_idx:
                 continue
             adj_time = float(ct[k]) - muon_t
-            if not _is_michel(adj_time, float(cpe[k]), int(ch[k]), float(ccb[k])):
+            if not _is_michel(adj_time, float(cpe[k]), int(ch[k])):
                 continue
 
             hx  = np.asarray(ak.to_list(hx_arr[i][k]),  dtype=float)
