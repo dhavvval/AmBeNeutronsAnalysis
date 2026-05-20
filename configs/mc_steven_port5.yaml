@@ -1,0 +1,35 @@
+run_name: mc_AmBe_steven
+campaign: "MC AmBe Steven for port 5"
+description: "Port 5 ~50k-event from AmBe Steven"
+
+output_root: /Users/dajana/Documents/AmBe/AmBeNeutronsAnalysis/ambe_output
+
+inputs:
+  root_files:
+    - /Users/dajana/Documents/ANNIEEvent/Steven_ANNIEEvent/ANNIEEvent_port5_z0QE_1.50*.root
+
+cuts:
+  min_pulses_per_event: 0   # OPTICS min_samples handles thresholding — do not pre-filter events here
+  # max_events is NOT set — runs all 10,001 events
+
+fit_params: {}
+
+optics:
+  min_samples: [3, 5, 8]
+  xi: [0.10]
+  t_unit_ns: [10, 25]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 0.0      # keep hits ±1000 ns around CF cluster time (~28 hits/event → fast)
+  source_position_m: [0, -0.1446, 1.681]   # AmBe source at Port 5 centre, but WCSim files coordinate for the port5 are 0 -14.46 168.1
+
+features:
+  min_samples: 8
+  xi: 0.10
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0          # no prefilter for features (needed for clean sigma_t)
+  truth_window_ns: 75.0
+  source_position_m: [0, -0.1446, 1.681]
+
+geometry:
+  pmt_geometry:   /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/TankPMTTimingOffsets.csv

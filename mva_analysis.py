@@ -44,8 +44,8 @@ import pandas as pd
 import yaml
 from matplotlib.backends.backend_pdf import PdfPages
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
-from sklearn.metrics import roc_auc_score, roc_curve
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score, roc_curve, auc
+from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_sample_weight
 
@@ -109,6 +109,26 @@ PHYSICS_FEATURES = [
     "vtx_fit_y",           # fitted Y: more accurate than centroid for bottom-bias detection
     "d_source_fit",        # distance to AmBe source from fitted vertex (more accurate than centroid-based)
 ]
+
+# Columns that are never valid MVA inputs regardless of source — truth labels,
+# bookkeeping IDs, and source-specific geometry excluded from external background runs.
+_EXTERNAL_BKG_EXCLUDE = {
+    "is_truth_neutron", "dominant_trackID", "cluster_time_offset_ns", "is_prompt_cluster",
+    "n_neutron", "n_darknoise", "n_nonneutron", "n_untraced",
+    "frac_neutron", "frac_darknoise", "frac_nonneutron", "frac_untraced", "dominant_class",
+    "d_source", "d_source_fit",          # source position not meaningful for background files
+    "vtx_x", "vtx_y", "vtx_z",          # vertex coordinates — not discriminating quantities
+    "vtx_fit_x", "vtx_fit_y", "vtx_fit_z",
+    "eventID", "event_number", "run", "cluster_id",
+    "cf_cluster_id", "optics_cluster_id", "n_optics_noise",
+    "method", "is_background", "t_mean",
+}
+
+# Background parquet paths for named shorthand options
+_NAMED_BACKGROUNDS = {
+    "offbeam": Path("/Users/dajana/Documents/AmBe/off-beam/off-beam_background_features.parquet"),
+    "michel":  Path("/Users/dajana/Documents/AmBe/michel-electron/michel_background_features.parquet"),
+}
 
 COLORS = {"signal": "#0077BB", "background": "#BBBBBB", "prompt": "#EE7733"}
 _NAME  = {"rf": "Random Forest", "gbt": "GBT", "xgb": "XGBoost", "nn": "Neural Network"}
@@ -208,13 +228,245 @@ def prepare_data(df: pd.DataFrame,
     return X, y, avail, sub
 
 
+def prepare_data_external_bkg(
+        df_sig_full: pd.DataFrame,
+        bkg_path: Path,
+        method: str = "optics",
+) -> tuple[np.ndarray, np.ndarray, list[str], pd.DataFrame, pd.DataFrame]:
+    """
+    Build feature matrix from MC signal + external real-data background parquet.
+
+    Signal  : OPTICS true neutron clusters from df_sig_full (is_truth_neutron==1).
+    Background : all rows from bkg_path (assumed pre-selected, label=0).
+
+    Features used = intersection of PHYSICS_FEATURES present in both datasets,
+    minus _EXTERNAL_BKG_EXCLUDE (truth columns, source geometry, bookkeeping IDs).
+    Residual NaNs are median-imputed column-wise on the combined dataset.
+
+    Returns X, y, feature_names, sig_df (signal rows only), bkg_df (background rows only).
+    """
+    sig = df_sig_full[(df_sig_full["method"] == method) &
+                      (df_sig_full["is_truth_neutron"] == 1)].copy()
+    bkg = pd.read_parquet(bkg_path)
+    print(f"[external bkg] signal: {len(sig)} clusters  |  background: {len(bkg)} clusters "
+          f"from {bkg_path.name}")
+
+    # Features = PHYSICS_FEATURES that are (a) in both datasets, (b) not excluded,
+    # (c) have ≥50% non-NaN coverage in both signal and background.
+    candidate_feats = [
+        f for f in PHYSICS_FEATURES
+        if f not in _EXTERNAL_BKG_EXCLUDE
+        and f in sig.columns
+        and f in bkg.columns
+        and sig[f].notna().mean() >= 0.5
+        and bkg[f].notna().mean() >= 0.5
+    ]
+    print(f"[external bkg] {len(candidate_feats)} features: {candidate_feats}")
+
+    sig_X = sig[candidate_feats].copy()
+    bkg_X = bkg[candidate_feats].copy()
+    sig_X["_label"] = 1
+    bkg_X["_label"] = 0
+
+    combined = pd.concat([sig_X, bkg_X], ignore_index=True)
+
+    # Median-impute residual NaNs column-wise (fitted-vertex features ~36% NaN
+    # in signal when Gauss-Newton did not converge — impute rather than drop rows)
+    for f in candidate_feats:
+        nan_mask = combined[f].isna()
+        if nan_mask.any():
+            med = float(combined[f].median())
+            combined.loc[nan_mask, f] = med
+
+    X = combined[candidate_feats].to_numpy(float)
+    y = combined["_label"].to_numpy(int)
+    print(f"[external bkg] final: {y.sum()} signal  +  {(y==0).sum()} background")
+    return X, y, candidate_feats, sig, bkg
+
+
+# ---------------------------------------------------------------------------
+# Split utilities
+# ---------------------------------------------------------------------------
+
+def event_train_test_split(
+        X: np.ndarray,
+        y: np.ndarray,
+        sub: pd.DataFrame,
+        test_size: float = 0.2,
+        random_state: int = 42,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Event-level stratified train/test split.
+
+    Assigns whole events to train or test so that clusters from the same event
+    never appear on both sides of the split — preventing information leakage
+    when OPTICS finds multiple clusters per event.
+
+    Strategy
+    --------
+    1. Collect unique eventIDs from the signal side (background is external
+       real data with independent event numbering, so only signal events matter).
+    2. For each event, determine its label: 1 if it contains ≥1 signal cluster,
+       0 otherwise (pure-background events in internal MC mode).
+    3. Stratified split of events → assign all clusters of each event to the
+       same partition.
+
+    Falls back to a standard cluster-level stratified split if sub has no
+    'eventID' column (external background mode where event structure is mixed).
+    """
+    # Fall back to cluster-level split when:
+    # (a) no eventID column — external background mode, or
+    # (b) eventID is present but only on the signal side (concat with external bkg
+    #     leaves NaN eventIDs for background rows) — detect via NaN fraction.
+    has_event_id = ("eventID" in sub.columns and
+                    sub["eventID"].notna().mean() > 0.4)
+    if not has_event_id:
+        idx = np.arange(len(y))
+        idx_tr, idx_te = train_test_split(idx, test_size=test_size,
+                                          stratify=y, random_state=random_state)
+        print(f"[split] cluster-level fallback (no shared eventID): "
+              f"train={len(idx_tr)}  test={len(idx_te)}")
+        return (X[idx_tr], X[idx_te],
+                y[idx_tr], y[idx_te],
+                idx_tr, idx_te)
+
+    event_ids = sub["eventID"].fillna(-1).to_numpy(int)
+    unique_events = np.unique(event_ids[event_ids >= 0])
+
+    # Label each event: 1 if it has any signal cluster, 0 if all background
+    ev_label = np.array([
+        int(y[event_ids == ev].max()) for ev in unique_events
+    ])
+
+    # Stratified split at event level
+    ev_tr, ev_te = train_test_split(
+        unique_events, test_size=test_size,
+        stratify=ev_label, random_state=random_state,
+    )
+    ev_tr_set = set(ev_tr.tolist())
+    ev_te_set = set(ev_te.tolist())
+
+    idx_tr = np.where(np.isin(event_ids, list(ev_tr_set)))[0]
+    idx_te = np.where(np.isin(event_ids, list(ev_te_set)))[0]
+
+    # Rows with event_id == -1 are external background (no shared event structure).
+    # Split them independently and append to both partitions so they aren't dropped.
+    ext_idx = np.where(event_ids == -1)[0]
+    if len(ext_idx) > 0:
+        ext_tr, ext_te = train_test_split(ext_idx, test_size=test_size,
+                                          random_state=random_state)
+        idx_tr = np.concatenate([idx_tr, ext_tr])
+        idx_te = np.concatenate([idx_te, ext_te])
+
+    n_ev_tr = len(ev_tr); n_ev_te = len(ev_te)
+    print(f"[split] event-level: {n_ev_tr} train events ({len(idx_tr)} clusters)  "
+          f"| {n_ev_te} test events ({len(idx_te)} clusters)  "
+          f"| test sig={y[idx_te].sum()}  test bkg={(y[idx_te]==0).sum()}")
+
+    return (X[idx_tr], X[idx_te],
+            y[idx_tr], y[idx_te],
+            idx_tr, idx_te)
+
+
+def cap_background(X: np.ndarray, y: np.ndarray,
+                   max_ratio: float = 3.0,
+                   random_state: int = 42) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Cap the background sample so it is at most max_ratio × n_signal.
+
+    When signal > background (ratio inverted), caps signal to max_ratio × n_background
+    to avoid the model simply learning "there are more signal examples".
+
+    """
+    rng   = np.random.default_rng(random_state)
+    n_sig = int(y.sum())
+    n_bkg = int((y == 0).sum())
+
+    sig_idx = np.where(y == 1)[0]
+    bkg_idx = np.where(y == 0)[0]
+
+    cap_sig = int(max_ratio * n_bkg)   # max signal given background size
+    cap_bkg = int(max_ratio * n_sig)   # max background given signal size
+
+    if n_bkg > cap_bkg:
+        # More background than allowed — subsample background
+        keep = rng.choice(bkg_idx, size=cap_bkg, replace=False)
+        keep = np.sort(np.concatenate([sig_idx, keep]))
+        print(f"[cap] background capped: {n_bkg} → {cap_bkg}  "
+              f"(ratio was 1:{n_bkg/n_sig:.1f}, now 1:{cap_bkg/n_sig:.1f})")
+    elif n_sig > cap_sig:
+        # More signal than allowed — subsample signal
+        keep = rng.choice(sig_idx, size=cap_sig, replace=False)
+        keep = np.sort(np.concatenate([keep, bkg_idx]))
+        print(f"[cap] signal capped: {n_sig} → {cap_sig}  "
+              f"(ratio was {n_sig/n_bkg:.1f}:1, now {cap_sig/n_bkg:.1f}:1)")
+    else:
+        print(f"[cap] ratio {n_sig}:{n_bkg} within max_ratio={max_ratio} — no capping")
+        keep = np.arange(len(y))
+        return X, y, keep
+
+    return X[keep], y[keep], keep
+
+
+def cv_roc_trees(
+        X_tr: np.ndarray, y_tr: np.ndarray,
+        n_splits: int = 5,
+) -> tuple[dict, dict]:
+    """
+    Stratified k-fold cross-validation on the training set for tree models.
+
+    Fits fresh RF, GBT (and XGBoost if available) on each fold's inner-train
+    partition and evaluates on the inner-test partition.  Imputation medians and
+    sample weights are computed inside each fold (no leakage).
+
+    Returns
+    -------
+    cv_aucs  : dict  key → list of per-fold AUC scores
+    cv_curves: dict  key → list of (fpr, tpr) per fold
+    """
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    cv_aucs   = {"rf": [], "gbt": []}
+    cv_curves = {"rf": [], "gbt": []}
+    if _HAS_XGB:
+        cv_aucs["xgb"]   = []
+        cv_curves["xgb"] = []
+
+    for fold, (inner_tr, inner_te) in enumerate(skf.split(X_tr, y_tr)):
+        X_f_tr, X_f_te = X_tr[inner_tr], X_tr[inner_te]
+        y_f_tr, y_f_te = y_tr[inner_tr], y_tr[inner_te]
+
+        # Re-impute medians on fold training data only (no leakage across folds)
+        medians = np.nanmedian(X_f_tr, axis=0)
+        for j in range(X_f_tr.shape[1]):
+            X_f_tr[:, j] = np.where(np.isnan(X_f_tr[:, j]), medians[j], X_f_tr[:, j])
+            X_f_te[:, j] = np.where(np.isnan(X_f_te[:, j]), medians[j], X_f_te[:, j])
+
+        fold_models = train_trees(X_f_tr, y_f_tr)
+        for key, model in fold_models.items():
+            sc = model.predict_proba(X_f_te)[:, 1]
+            fpr, tpr, _ = roc_curve(y_f_te, sc)
+            fold_auc = float(auc(fpr, tpr))
+            cv_aucs[key].append(fold_auc)
+            cv_curves[key].append((fpr, tpr))
+
+        fold_aucs_str = "  ".join(
+            f"{k}={cv_aucs[k][-1]:.3f}" for k in cv_aucs)
+        print(f"  [cv fold {fold+1}/{n_splits}]  {fold_aucs_str}")
+
+    for key in cv_aucs:
+        aucs_arr = cv_aucs[key]
+        print(f"  [cv] {_NAME[key]:20s}  AUC = {np.mean(aucs_arr):.4f} ± {np.std(aucs_arr):.4f}")
+
+    return cv_aucs, cv_curves
+
+
 # ---------------------------------------------------------------------------
 # Tree model training
 # ---------------------------------------------------------------------------
 
 def train_trees(X_tr: np.ndarray, y_tr: np.ndarray) -> dict:
     """
-    Fit RF, GBT, and (if xgboost installed) XGBoost.
+    Fit RF, GBT, and XGBoost.
     Returns dict keyed by 'rf', 'gbt', 'xgb'.
     """
     sw = compute_sample_weight("balanced", y_tr)
@@ -328,6 +580,34 @@ def train_nn(X_tr: np.ndarray, y_tr: np.ndarray):
 # ---------------------------------------------------------------------------
 # Plotting helpers
 # ---------------------------------------------------------------------------
+
+def _cv_roc_page(pdf, cv_aucs: dict, cv_curves: dict, run_name: str):
+    """
+    One panel per model showing all k fold ROC curves + mean ± std AUC annotation.
+    Gives a visual sense of variance across folds — tight bands = stable model.
+    """
+    keys = list(cv_aucs.keys())
+    fig, axes = plt.subplots(1, len(keys), figsize=(6 * len(keys), 5), squeeze=False)
+    fig.suptitle(f"{run_name.upper()}  —  Cross-validation ROC  ({len(list(cv_curves.values())[0])}-fold)",
+                 fontsize=11)
+
+    for ax, key in zip(axes[0], keys):
+        colors = plt.cm.Blues(np.linspace(0.35, 0.85, len(cv_curves[key])))
+        for i, (fpr, tpr) in enumerate(cv_curves[key]):
+            ax.plot(fpr, tpr, color=colors[i], lw=1.2, alpha=0.8,
+                    label=f"fold {i+1}  AUC={cv_aucs[key][i]:.3f}" if i == 0 else
+                          f"fold {i+1}  AUC={cv_aucs[key][i]:.3f}")
+        ax.plot([0, 1], [0, 1], "k:", lw=1)
+        mean_auc = float(np.mean(cv_aucs[key]))
+        std_auc  = float(np.std(cv_aucs[key]))
+        ax.set_title(f"{_NAME[key]}\nAUC = {mean_auc:.4f} ± {std_auc:.4f}", fontsize=10)
+        ax.set_xlabel("False positive rate"); ax.set_ylabel("True positive rate")
+        ax.legend(fontsize=7, loc="lower right"); ax.grid(alpha=0.3)
+        ax.set_xlim(0, 1); ax.set_ylim(0, 1.02)
+
+    plt.tight_layout()
+    pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
+
 
 def _roc_page(pdf, y_te: np.ndarray, model_scores: list, run_name: str, method: str):
     """model_scores: list of (display_name, test_scores, linestyle)."""
@@ -515,13 +795,23 @@ def main():
                    help="Fraction of clusters held out for testing (default 0.2)")
     p.add_argument("--no-nn", action="store_true",
                    help="Skip neural network training (faster — tree models only)")
+    p.add_argument("--no-cv", action="store_true",
+                   help="Skip 5-fold cross-validation (faster — single train/test split only)")
     p.add_argument("--bkg-mode", default="all",
                    choices=["all", "darknoise", "nonneutron", "pop2"],
-                   help="Background sample: 'all' = all non-neutron non-prompt clusters (default); "
-                        "'darknoise' = clusters dominated by class-0 dark noise; "
-                        "'nonneutron' = clusters dominated by class-5 (prompt gamma + near-capture); "
-                        "'pop2' = Population 2 only: class-5 near-capture clusters with "
-                        "is_prompt_cluster=0 (excludes the trivially-rejected prompt gamma)")
+                   help="Internal background sample (MC only): 'all' = all non-neutron non-prompt "
+                        "clusters (default); 'darknoise' = class-0 dominated; "
+                        "'nonneutron' = class-5 dominated; "
+                        "'pop2' = Population 2 near-capture clusters only. "
+                        "Ignored when --external-background is set.")
+    p.add_argument("--external-background", default=None, metavar="PATH_OR_NAME",
+                   help="Use real-data background instead of MC internal background. "
+                        "Pass a parquet file path, or one of the named shorthands: "
+                        + ", ".join(_NAMED_BACKGROUNDS.keys()) + ". "
+                        "Output files are tagged with --background-label.")
+    p.add_argument("--background-label", default=None, metavar="LABEL",
+                   help="Short label for the background source, used in output filenames "
+                        "(e.g. 'offbeam', 'michel'). Auto-derived from named shorthands if omitted.")
     args = p.parse_args()
 
     if not _HAS_XGB:
@@ -544,15 +834,49 @@ def main():
     print(f"[mva] loading {feat_path}")
     df = pd.read_parquet(feat_path)
 
-    bkg_mode = args.bkg_mode
-    X, y, features, sub = prepare_data(df, method=args.method, bkg_mode=bkg_mode)
+    # ── external real-data background mode ────────────────────────────────
+    external_bkg = args.external_background
+    if external_bkg is not None:
+        # Resolve named shorthands → Path
+        if external_bkg in _NAMED_BACKGROUNDS:
+            bkg_path = _NAMED_BACKGROUNDS[external_bkg]
+            bkg_tag  = args.background_label or external_bkg
+        else:
+            bkg_path = Path(external_bkg)
+            bkg_tag  = args.background_label or bkg_path.stem
+        if not bkg_path.exists():
+            sys.exit(f"[mva] External background parquet not found: {bkg_path}")
+
+        print(f"[mva] external background mode: {bkg_path.name}  (tag={bkg_tag})")
+        X, y, features, sig_df, bkg_df = prepare_data_external_bkg(
+            df, bkg_path, method=args.method)
+
+        # For external mode, sub is a combined frame with a _label column for bookkeeping
+        sig_df = sig_df.copy(); sig_df["_label"] = 1
+        bkg_df = bkg_df.copy(); bkg_df["_label"] = 0
+        sub = pd.concat([sig_df, bkg_df], ignore_index=True)
+
+        plot_run_name = f"{run_name} vs {bkg_tag}"
+        # Output tag: <run_name>__mva__vs_<bkg_tag>  e.g. mc_lucho_full__mva__vs_offbeam
+        mode_tag = f"__vs_{bkg_tag}"
+        # Event-level page requires eventID; not meaningful with external background
+        skip_event_level = True
+
+    # ── internal MC background mode (default) ────────────────────────────
+    else:
+        bkg_mode = args.bkg_mode
+        X, y, features, sub = prepare_data(df, method=args.method, bkg_mode=bkg_mode)
+        bkg_label_str = {"darknoise":  "dark noise only (class 0)",
+                         "nonneutron": "class-5 spurious (prompt gamma + near-capture)",
+                         "pop2":       "Population 2 only (near-capture, offset ~-1 ns)",
+                         "all":        "all non-neutron (excl. prompt)"}.get(bkg_mode, bkg_mode)
+        print(f"[mva] bkg_mode={bkg_mode}  ({bkg_label_str})")
+        mode_tag = "" if bkg_mode == "all" else f"__{bkg_mode}"
+        plot_run_name = f"{run_name} [{bkg_mode} bkg]" if bkg_mode != "all" else run_name
+        skip_event_level = False
+
     n_sig = int(y.sum())
     n_bkg = int((y == 0).sum())
-    bkg_label = {"darknoise":  "dark noise only (class 0)",
-                 "nonneutron": "class-5 spurious (prompt gamma + near-capture)",
-                 "pop2":       "Population 2 only (near-capture, offset ~-1 ns)",
-                 "all":        "all non-neutron (excl. prompt)"}.get(bkg_mode, bkg_mode)
-    print(f"[mva] bkg_mode={bkg_mode}  ({bkg_label})")
     print(f"[mva] {X.shape[0]} clusters  |  "
           f"signal={n_sig}  background={n_bkg}  |  {len(features)} features")
     print(f"[mva] features: {features}")
@@ -560,14 +884,35 @@ def main():
     if n_sig < 10 or n_bkg < 10:
         sys.exit("[mva] Too few samples to train — check features parquet.")
 
-    X_tr, X_te, y_tr, y_te, idx_tr, idx_te = train_test_split(
-        X, y, np.arange(len(y)),
-        test_size=args.test_size, stratify=y, random_state=42,
+    # ── Issue 2: cap imbalanced background before splitting ───────────────
+    # max_ratio=3 keeps training balanced: at most 3× background per signal
+    # (or 3× signal per background if the ratio is inverted, e.g. lucho vs michel).
+    X, y, _cap_keep = cap_background(X, y, max_ratio=3.0)
+    sub = sub.iloc[_cap_keep].reset_index(drop=True)
+    n_sig = int(y.sum())
+    n_bkg = int((y == 0).sum())
+    print(f"[mva] after capping: signal={n_sig}  background={n_bkg}")
+
+    # ── Issue 1: event-level train/test split ────────────────────────────
+    # Assigns whole events to train or test so no event leaks across the boundary.
+    # Falls back to cluster-level for external background (no shared event structure).
+    X_tr, X_te, y_tr, y_te, idx_tr, idx_te = event_train_test_split(
+        X, y, sub.iloc[:len(y)].reset_index(drop=True),
+        test_size=args.test_size,
     )
     print(f"[mva] train={len(y_tr)}  test={len(y_te)}")
 
+    # ── Issue 3: stratified k-fold CV on training set ────────────────────
+    if not args.no_cv:
+        print(f"\n[mva] 5-fold cross-validation on training set …")
+        cv_aucs, cv_curves = cv_roc_trees(X_tr, y_tr, n_splits=5)
+        print()
+    else:
+        print("[mva] CV skipped (--no-cv)")
+        cv_aucs, cv_curves = {}, {}
+
     tree_label = "RF, GBT" + (", XGBoost" if _HAS_XGB else "")
-    print(f"[mva] training tree models ({tree_label}) …")
+    print(f"[mva] training final models on full train set ({tree_label}) …")
     tree_models = train_trees(X_tr, y_tr)
 
     nn_model, nn_scaler, nn_history = None, None, None
@@ -608,8 +953,8 @@ def main():
     sub["in_test"] = False
     sub.loc[idx_te, "in_test"] = True
 
-    # Include bkg_mode in output filenames so both modes can coexist on disk.
-    mode_tag = "" if bkg_mode == "all" else f"__{bkg_mode}"
+    # Output paths — mode_tag encodes the background choice so all four combinations
+    # land in the same run directory without overwriting each other:
     pdf_path   = plots_dir   / f"{run_name}__mva{mode_tag}.pdf"
     score_path = parquet_dir / f"{run_name}__mva_scores{mode_tag}.parquet"
     csv_path   = csv_dir     / f"{run_name}__mva_summary{mode_tag}.csv"
@@ -619,16 +964,17 @@ def main():
         (c for c in ["xgb_score", "nn_score", "gbt_score"] if c in sub.columns),
         "gbt_score",
     )
-    # Pass mode info into ROC page title via run_name suffix
-    plot_run_name = f"{run_name} [{bkg_mode} bkg]" if bkg_mode != "all" else run_name
     with PdfPages(pdf_path) as pdf:
+        if cv_aucs:
+            _cv_roc_page(pdf, cv_aucs, cv_curves, plot_run_name)
         _roc_page(pdf, y_te, model_scores, plot_run_name, args.method)
         _score_dist_page(pdf, y_te, model_scores, plot_run_name)
         _importance_page(pdf, tree_models, features, plot_run_name)
         _top_features_page(pdf, X_te, y_te, tree_models["rf"], features, plot_run_name)
         if nn_history is not None:
             _nn_history_page(pdf, nn_history, plot_run_name)
-        _event_level_page(pdf, sub, plot_run_name, score_col=best_event_col)
+        if not skip_event_level:
+            _event_level_page(pdf, sub, plot_run_name, score_col=best_event_col)
 
     sub.to_parquet(score_path, index=False)
     print(f"[mva] wrote scores → {score_path}")
@@ -645,7 +991,10 @@ def main():
 
     print(f"\n[mva] ===== SUMMARY =====")
     for name, sc, _ in model_scores:
-        print(f"  AUC  {name:20s} : {roc_auc_score(y_te, sc):.4f}")
+        key = next((k for k, n in _NAME.items() if n == name), None)
+        cv_str = (f"  CV={np.mean(cv_aucs[key]):.4f}±{np.std(cv_aucs[key]):.4f}"
+                  if key and key in cv_aucs else "")
+        print(f"  AUC  {name:20s} : test={roc_auc_score(y_te, sc):.4f}{cv_str}")
     if "rf_importance" in imp_df.columns:
         imp_cols = [c for c in imp_df.columns if c.endswith("_importance")]
         print(f"\n  Feature importances (RF rank):")

@@ -260,14 +260,13 @@ def _beta_k(uvecs: np.ndarray, k: int) -> float:
     else:
         raise ValueError(f"k={k} not implemented (use 1–5)")
     # P_k(1) = 1 for all k, so the diagonal (i=j) contributes exactly N.
-    # Subtract to get the i≠j sum required by the SK convention.
     off_diag = float(Pk.sum()) - N
     return float(2.0 / (N * (N - 1)) * off_diag)
 
 
 # --------------------------------------------------------------------------- #
 # Gauss-Newton vertex fitter
-# Ported from VertexLeastSquares.cpp (Andrew Sutton, Sep 2024 collab meeting).
+# Ported from VertexLeastSquares.cpp by A. Sutton.
 # --------------------------------------------------------------------------- #
 
 _PHI_SQ = ((1.0 + np.sqrt(5.0)) / 2.0) ** 2   # golden-ratio squared for sunflower
@@ -1492,6 +1491,103 @@ def extract_features_from_background_hits(
 
     df = pd.DataFrame(rows)
     print(f"[cluster_features] background: extracted features for {len(df)} clusters")
+    return df
+
+
+def extract_features_from_background_hits_optics(
+        hits_parquet: str,
+        geo: ANNIEGeometry,
+        min_samples:  int   = 3,
+        xi:           float = 0.05,
+        t_unit_ns:    float = 25.0,
+        source_pos_m: "Optional[np.ndarray]" = None,
+) -> pd.DataFrame:
+    """
+    Re-run OPTICS on each saved background cluster's hits, then compute features
+    on the resulting OPTICS sub-clusters.
+
+    Unlike extract_features_from_background_hits(), this does NOT treat the
+    ClusterFinder cluster boundaries as fixed.  Instead it passes the raw hits
+    through run_optics_on_event() first, so that OPTICS can split, merge, or
+    reject hits before feature computation.  This is consistent with how signal
+    neutron clusters are processed in extract_all_features().
+
+    Parameters
+    ----------
+    hits_parquet : path to michel_background_hits.parquet (or equivalent)
+    geo          : pre-loaded ANNIEGeometry
+    min_samples  : OPTICS min_samples — use 3–5 for small Michel clusters
+                   (default 8 for neutrons would label all hits as noise)
+    xi           : OPTICS xi steepness parameter
+    t_unit_ns    : time axis scale (ns per OPTICS distance unit)
+    source_pos_m : source position in metres for ToF correction; None = disabled
+
+    Returns
+    -------
+    DataFrame with one row per OPTICS sub-cluster found within each input cluster.
+    Columns are the same as extract_features_from_background_hits() plus
+    optics_cluster_id (sub-cluster index within the original CF cluster) and
+    n_optics_noise (hits OPTICS labelled as noise within that CF cluster).
+    """
+    hits = pd.read_parquet(hits_parquet)
+    required = {"run", "event_number", "cluster_id", "is_background",
+                "x", "y", "z", "t", "pe", "pmtID"}
+    missing = required - set(hits.columns)
+    if missing:
+        raise ValueError(f"background hits parquet is missing columns: {missing}")
+
+    groups = list(hits.groupby(["run", "event_number", "cluster_id"]))
+    print(f"[cluster_features] OPTICS background mode: {len(groups)} input clusters "
+          f"| ms={min_samples} xi={xi} t_unit={t_unit_ns}ns")
+
+    rows = []
+    n_optics_clusters_total = 0
+    n_noise_total = 0
+
+    for i, ((run, ev, cid), df_cl) in enumerate(groups):
+        df_cl = df_cl.reset_index(drop=True)
+
+        labels = run_optics_on_event(
+            df_cl,
+            min_samples=min_samples,
+            xi=xi,
+            t_unit_ns=t_unit_ns,
+            source_pos_m=source_pos_m,
+        )
+
+        n_noise = int((labels == -1).sum())
+        n_noise_total += n_noise
+        unique_clusters = [c for c in np.unique(labels) if c >= 0]
+        n_optics_clusters_total += len(unique_clusters)
+
+        for optics_cid in unique_clusters:
+            mask = (labels == optics_cid)
+            df_sub = df_cl[mask].reset_index(drop=True)
+            feats = compute_cluster_features(df_sub, geo, source_pos_m=source_pos_m)
+            if not feats:
+                continue
+            row = {
+                "run":              run,
+                "event_number":     ev,
+                "cf_cluster_id":    int(cid),
+                "optics_cluster_id": int(optics_cid),
+                "n_optics_noise":   n_noise,
+                "is_background":    1,
+            }
+            row.update(feats)
+            rows.append(row)
+
+        if (i + 1) % max(1, len(groups) // 10) == 0 or (i + 1) == len(groups):
+            print(f"[cluster_features]  {i+1}/{len(groups)} CF clusters processed  "
+                  f"→ {n_optics_clusters_total} OPTICS clusters so far  "
+                  f"({n_noise_total} noise hits total)", flush=True)
+
+    df = pd.DataFrame(rows)
+    print(f"[cluster_features] OPTICS background: {len(df)} OPTICS clusters extracted "
+          f"from {len(groups)} input CF clusters")
+    if len(df) == 0:
+        print(f"[cluster_features] WARNING: 0 clusters survived OPTICS. "
+              f"Try lowering min_samples (currently {min_samples}).")
     return df
 
 
