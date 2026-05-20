@@ -150,10 +150,10 @@ def _is_michel(adj_time: float, pe: float, hits: int, cb: float) -> bool:
 
 # ── Per-file processing ───────────────────────────────────────────────────────
 
-def process_file(root_path: Path, tree_name: str) -> list[pd.DataFrame]:
+def process_file(root_path: Path, tree_name: str) -> tuple[list[pd.DataFrame], dict]:
     """Apply Michel selection to one ROOT file.
 
-    Returns a list of per-cluster hit DataFrames tagged with is_background=1.
+    Returns hit DataFrames and a cutflow dict for summary printing.
     Only Michel clusters passing the tight CB cut (< 0.18) are kept, matching
     the post-processing step in Michel_tuning.py.
     """
@@ -180,39 +180,52 @@ def process_file(root_path: Path, tree_name: str) -> list[pd.DataFrame]:
         hpe_arr  = tree["Cluster_HitPE"].array(library="ak")
         hid_arr  = tree["Cluster_HitChankey"].array(library="ak")
 
-    n_dirt = 0
+    # cutflow counters
+    cf = dict(total=n, clustered=0, no_mrd_veto=0, pe_range=0,
+              extended_secondary=0, bary=0, hits=0, cb_dirt=0,
+              michel_dt=0, michel_cb_tight=0)
+
     n_michel = 0
 
     for i in range(n):
-        # Event-level flag cuts (Michel_tuning.py: no MRD, no veto, extended,
-        # has secondary cluster)
-        if tmrd_arr[i] != 0:    continue  # TankMRDCoinc == 0
-        if noveto_arr[i] != 0:  continue  # NoVeto == 0
-        if extended_arr[i] != 1: continue  # Extended == 1
-        if noc_arr[i] <= 1:     continue  # must have secondary cluster
-
         ct  = ak.to_list(ct_arr[i])
         cpe = ak.to_list(cpe_arr[i])
         ch  = ak.to_list(ch_arr[i])
         ccb = ak.to_list(ccb_arr[i])
-        if not cpe:
-            continue
 
-        # isBrightest: pick highest-PE cluster as the muon candidate
-        # (in data this is the brightest within the 200–1800 ns spill window;
-        # in WCSim all prompt clusters are at ~10–40 ns so we drop the CT window
-        # and select the globally brightest cluster)
+        if not any(h >= 5 for h in ch):
+            continue
+        cf["clustered"] += 1
+
+        if tmrd_arr[i] != 0 or noveto_arr[i] != 0:
+            continue
+        cf["no_mrd_veto"] += 1
+
+        if not any(_DIRT_MIN_PE < p < _DIRT_MAX_PE for p in cpe):
+            continue
+        cf["pe_range"] += 1
+
+        if extended_arr[i] != 1 or noc_arr[i] <= 1:
+            continue
+        cf["extended_secondary"] += 1
+
         muon_idx = max(range(len(cpe)), key=lambda j: cpe[j])
-
-        if not _is_dirt_muon(
-            hits=ch[muon_idx],
-            pe=cpe[muon_idx],
-            cb=ccb[muon_idx],
-            hit_z=ak.to_list(hz_arr[i][muon_idx]),
-            hit_pe=ak.to_list(hpe_arr[i][muon_idx]),
-        ):
+        if not (_DIRT_MIN_PE < cpe[muon_idx] < _DIRT_MAX_PE):
             continue
-        n_dirt += 1
+
+        hz_list  = ak.to_list(hz_arr[i][muon_idx])
+        hpe_list = ak.to_list(hpe_arr[i][muon_idx])
+        if sum(float(z) * float(p) for z, p in zip(hz_list, hpe_list)) < 0:
+            continue
+        cf["bary"] += 1
+
+        if ch[muon_idx] <= _DIRT_MIN_HITS:
+            continue
+        cf["hits"] += 1
+
+        if ccb[muon_idx] > _DIRT_CB_MAX or ccb[muon_idx] < 0:
+            continue
+        cf["cb_dirt"] += 1  # dirt muon found
 
         muon_t = ct[muon_idx]
 
@@ -223,9 +236,11 @@ def process_file(root_path: Path, tree_name: str) -> list[pd.DataFrame]:
             adj_time = ct[k] - muon_t
             if not _is_michel(adj_time, cpe[k], ch[k], ccb[k]):
                 continue
-            # Post-selection tightening (Michel_tuning.py step 2)
+            cf["michel_dt"] += 1
+
             if ccb[k] >= _MICHEL_CB_TIGHT:
                 continue
+            cf["michel_cb_tight"] += 1
 
             hx  = np.asarray(ak.to_list(hx_arr[i][k]),  dtype=float)
             hy  = np.asarray(ak.to_list(hy_arr[i][k]),  dtype=float)
@@ -247,8 +262,45 @@ def process_file(root_path: Path, tree_name: str) -> list[pd.DataFrame]:
             hit_frames.append(df_cl)
             n_michel += 1
 
-    print(f"  {root_path.name}: {n} events → {n_dirt} dirt muons → {n_michel} Michel clusters")
-    return hit_frames
+    print(f"  {root_path.name}: {n} events → {cf['cb_dirt']} dirt muons → {n_michel} Michel clusters")
+    return hit_frames, cf
+
+
+def _print_cutflow(cutflow: dict) -> None:
+    total = cutflow["total"]
+    dirt  = cutflow["cb_dirt"]
+    rows = [
+        ("Selection cut",                                    "Events", "% of total", "% of prev"),
+        ("-" * 50,                                           "-" * 8,  "-" * 10,     "-" * 10),
+        ("Total",                                            total,    100.0,         100.0),
+        ("Clustered (≥5 PMT hits)",                          cutflow["clustered"],        None, None),
+        ("No MRD + FMV coincidence",                         cutflow["no_mrd_veto"],      None, None),
+        ("1000 < cluster charge < 4000 pe",                  cutflow["pe_range"],         None, None),
+        ("Prompt (brightest), extended, secondary cluster",   cutflow["extended_secondary"],None, None),
+        ("Charge barycenter downstream",                     cutflow["bary"],             None, None),
+        (f"> {_DIRT_MIN_HITS} PMT hits",                     cutflow["hits"],             None, None),
+        ("Charge balance < 0.2  →  dirt muon candidates",   cutflow["cb_dirt"],          None, None),
+        (f"0.2 µs < Δt < 5 µs  (Michel, CB<0.2, hits≥{_MICHEL_MIN_HITS})",
+                                                             cutflow["michel_dt"],        None, None),
+        ("Charge balance < 0.18  →  Michel candidates",     cutflow["michel_cb_tight"],  None, None),
+    ]
+
+    print(f"\n{'Selection cut':<52} {'Events':>7}  {'% total':>8}  {'% prev':>8}")
+    print("-" * 80)
+    prev = total
+    for i, row in enumerate(rows):
+        if i < 2:
+            continue
+        label, count = row[0], row[1]
+        pct_total = 100.0 * count / total if total > 0 else 0.0
+        pct_prev  = 100.0 * count / prev  if prev  > 0 else 0.0
+        # Michel rows: % of prev relative to dirt muons, not previous Michel step
+        if label.startswith("0.2 µs"):
+            pct_prev = 100.0 * count / dirt if dirt > 0 else 0.0
+        if label.startswith("Charge balance < 0.18"):
+            pct_prev = 100.0 * count / max(cutflow["michel_dt"], 1)
+        print(f"  {label:<50} {count:>7}  {pct_total:>7.1f}%  {pct_prev:>7.1f}%")
+        prev = count
 
 
 def main():
@@ -260,9 +312,13 @@ def main():
     print(f"Found {len(files)} file(s)")
 
     all_frames: list[pd.DataFrame] = []
+    total_cf: dict = {}
     for i, f in enumerate(files):
         print(f"[{i+1}/{len(files)}] {f.name}")
-        all_frames.extend(process_file(f, tree_name=args.tree))
+        frames, cf = process_file(f, tree_name=args.tree)
+        all_frames.extend(frames)
+        for k, v in cf.items():
+            total_cf[k] = total_cf.get(k, 0) + v
 
     col_order = ["run", "event_number", "muon_event_idx", "cluster_id",
                  "is_background", "x", "y", "z", "t", "pe", "pmtID"]
@@ -275,7 +331,12 @@ def main():
     n_clusters = int(df.groupby(["run", "event_number", "cluster_id"]).ngroups) if len(df) else 0
     out = output_dir / "michel_background_hits.parquet"
     df.to_parquet(out, index=False)
-    print(f"\nWrote {n_clusters} clusters ({len(df)} hits) → {out}")
+
+    print(f"\n{'='*80}")
+    print(f"  CUTFLOW SUMMARY  ({len(files)} file(s))")
+    print(f"{'='*80}")
+    _print_cutflow(total_cf)
+    print(f"\nWrote {n_clusters} Michel clusters ({len(df)} hits) → {out}")
 
 
 if __name__ == "__main__":
