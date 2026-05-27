@@ -134,12 +134,17 @@ COLORS = {"signal": "#0077BB", "background": "#BBBBBB", "prompt": "#EE7733"}
 _NAME  = {"rf": "Random Forest", "gbt": "GBT", "xgb": "XGBoost", "nn": "Neural Network"}
 _LS    = {"rf": "-",             "gbt": "--",   "xgb": "-.",       "nn": ":"}
 
+def _run_label(cfg: dict, run_name: str) -> str:
+    """Presentation-friendly title from cfg['display_label'], falling back to run_name."""
+    label = cfg.get("display_label") if isinstance(cfg, dict) else None
+    return label if label else run_name.upper()
+
 
 # ---------------------------------------------------------------------------
 # Config + path helpers
 # ---------------------------------------------------------------------------
 
-def load_paths(config_path: str) -> tuple[str, Path, Path, Path]:
+def load_paths(config_path: str) -> tuple[str, Path, Path, Path, str]:
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
     run_name    = cfg["run_name"]
@@ -149,7 +154,8 @@ def load_paths(config_path: str) -> tuple[str, Path, Path, Path]:
     csv_dir     = root / "csv"
     for d in (plots_dir, csv_dir):
         d.mkdir(parents=True, exist_ok=True)
-    return run_name, parquet_dir, plots_dir, csv_dir
+    display_label = _run_label(cfg, run_name)
+    return run_name, parquet_dir, plots_dir, csv_dir, display_label
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +314,7 @@ def event_train_test_split(
        real data with independent event numbering, so only signal events matter).
     2. For each event, determine its label: 1 if it contains ≥1 signal cluster,
        0 otherwise (pure-background events in internal MC mode).
-    3. Stratified split of events → assign all clusters of each event to the
+    3. Stratified split of events -> assign all clusters of each event to the
        same partition.
 
     Falls back to a standard cluster-level stratified split if sub has no
@@ -392,13 +398,13 @@ def cap_background(X: np.ndarray, y: np.ndarray,
         # More background than allowed — subsample background
         keep = rng.choice(bkg_idx, size=cap_bkg, replace=False)
         keep = np.sort(np.concatenate([sig_idx, keep]))
-        print(f"[cap] background capped: {n_bkg} → {cap_bkg}  "
+        print(f"[cap] background capped: {n_bkg} -> {cap_bkg}  "
               f"(ratio was 1:{n_bkg/n_sig:.1f}, now 1:{cap_bkg/n_sig:.1f})")
     elif n_sig > cap_sig:
         # More signal than allowed — subsample signal
         keep = rng.choice(sig_idx, size=cap_sig, replace=False)
         keep = np.sort(np.concatenate([keep, bkg_idx]))
-        print(f"[cap] signal capped: {n_sig} → {cap_sig}  "
+        print(f"[cap] signal capped: {n_sig} -> {cap_sig}  "
               f"(ratio was {n_sig/n_bkg:.1f}:1, now {cap_sig/n_bkg:.1f}:1)")
     else:
         print(f"[cap] ratio {n_sig}:{n_bkg} within max_ratio={max_ratio} — no capping")
@@ -415,14 +421,14 @@ def cv_roc_trees(
     """
     Stratified k-fold cross-validation on the training set for tree models.
 
-    Fits fresh RF, GBT (and XGBoost if available) on each fold's inner-train
+    Fits fresh RF, GBT and XGBoost on each fold's inner-train
     partition and evaluates on the inner-test partition.  Imputation medians and
     sample weights are computed inside each fold (no leakage).
 
     Returns
     -------
-    cv_aucs  : dict  key → list of per-fold AUC scores
-    cv_curves: dict  key → list of (fpr, tpr) per fold
+    cv_aucs  : dict  key -> list of per-fold AUC scores
+    cv_curves: dict  key -> list of (fpr, tpr) per fold
     """
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     cv_aucs   = {"rf": [], "gbt": []}
@@ -509,17 +515,17 @@ def train_trees(X_tr: np.ndarray, y_tr: np.ndarray) -> dict:
 # Neural network
 # ---------------------------------------------------------------------------
 
-NN_HIDDEN_UNITS  = 128    # 64 was underfitting 30 features with class imbalance
-NN_HIDDEN_LAYERS = 3      # third layer for nonlinear interactions between β-params and timing
+NN_HIDDEN_UNITS  = 128    
+NN_HIDDEN_LAYERS = 3      
 NN_DROPOUT       = 0.3
 NN_LR            = 1e-3   # initial Adam lr; ReduceLROnPlateau will lower it
-NN_EPOCHS        = 100    # was 20 — too restrictive; EarlyStopping handles overfitting
+NN_EPOCHS        = 100    
 NN_BATCH_SIZE    = 256
 NN_VERBOSE       = 1
 
 def _build_nn(n_features: int):
     """
-    input → [Dense(128) → BatchNorm → ReLU → Dropout(0.3)] × 3 → Dense(1, sigmoid)
+    input -> [Dense(128) -> BatchNorm -> ReLU -> Dropout(0.3)] × 3 -> Dense(1, sigmoid)
 
     BatchNorm before activation stabilises training across physics features with very
     different scales (ns timing, metres, PE counts, dimensionless β-parameters).
@@ -588,7 +594,7 @@ def _cv_roc_page(pdf, cv_aucs: dict, cv_curves: dict, run_name: str):
     """
     keys = list(cv_aucs.keys())
     fig, axes = plt.subplots(1, len(keys), figsize=(6 * len(keys), 5), squeeze=False)
-    fig.suptitle(f"{run_name.upper()}  —  Cross-validation ROC  ({len(list(cv_curves.values())[0])}-fold)",
+    fig.suptitle(f"{run_name}  —  Cross-validation ROC  ({len(list(cv_curves.values())[0])}-fold)",
                  fontsize=11)
 
     for ax, key in zip(axes[0], keys):
@@ -612,7 +618,7 @@ def _cv_roc_page(pdf, cv_aucs: dict, cv_curves: dict, run_name: str):
 def _roc_page(pdf, y_te: np.ndarray, model_scores: list, run_name: str, method: str):
     """model_scores: list of (display_name, test_scores, linestyle)."""
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    fig.suptitle(f"{run_name.upper()}  [{method}]  —  Cluster-level ROC", fontsize=11)
+    fig.suptitle(f"{run_name}  [{method}]  —  Cluster-level ROC", fontsize=11)
 
     ax = axes[0]
     for name, sc, ls in model_scores:
@@ -644,7 +650,7 @@ def _score_dist_page(pdf, y_te: np.ndarray, model_scores: list, run_name: str):
     ncols = min(n, 2)
     nrows = (n + 1) // 2
     fig, axes = plt.subplots(nrows, ncols, figsize=(13, 5 * nrows), squeeze=False)
-    fig.suptitle(f"{run_name.upper()}  —  Score distributions (test set)", fontsize=11)
+    fig.suptitle(f"{run_name}  —  Score distributions (test set)", fontsize=11)
     bins = np.linspace(0, 1, 40)
     for idx, (name, sc, _) in enumerate(model_scores):
         ax = axes[idx // ncols][idx % ncols]
@@ -671,7 +677,7 @@ def _importance_page(pdf, tree_models: dict, features: list, run_name: str):
     fig, axes = plt.subplots(1, len(has_imp), figsize=(7 * len(has_imp), 5))
     if len(has_imp) == 1:
         axes = [axes]
-    fig.suptitle(f"{run_name.upper()}  —  Feature importances", fontsize=11)
+    fig.suptitle(f"{run_name}  —  Feature importances", fontsize=11)
     for ax, (key, model) in zip(axes, has_imp):
         imp = model.feature_importances_
         idx = np.argsort(imp)[::-1]
@@ -689,7 +695,7 @@ def _importance_page(pdf, tree_models: dict, features: list, run_name: str):
 def _top_features_page(pdf, X_te, y_te, rf, features, run_name):
     top6 = np.argsort(rf.feature_importances_)[::-1][:6]
     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-    fig.suptitle(f"{run_name.upper()}  —  Top 6 features by RF importance", fontsize=11)
+    fig.suptitle(f"{run_name}  —  Top 6 features by RF importance", fontsize=11)
     for ax, fi in zip(axes.flat, top6):
         feat = features[fi]
         sig_v = X_te[y_te == 1, fi]
@@ -710,7 +716,7 @@ def _top_features_page(pdf, X_te, y_te, rf, features, run_name):
 def _nn_history_page(pdf, history, run_name: str):
     has_auc = "val_auc" in history.history
     fig, axes = plt.subplots(1, 2 if has_auc else 1, figsize=(14 if has_auc else 8, 5), squeeze=False)
-    fig.suptitle(f"{run_name.upper()}  —  Neural network training history", fontsize=11)
+    fig.suptitle(f"{run_name}  —  Neural network training history", fontsize=11)
 
     ax = axes[0, 0]
     ax.plot(history.history["loss"],     lw=2, label="Train loss")
@@ -754,7 +760,7 @@ def _event_level_page(pdf, sub, run_name, score_col="gbt_score"):
         bkg_eff.append(float((bkg["max_score"] >= t).mean()) if len(bkg) else np.nan)
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    fig.suptitle(f"{run_name.upper()}  —  Event-level  ({score_col})", fontsize=11)
+    fig.suptitle(f"{run_name}  —  Event-level  ({score_col})", fontsize=11)
 
     ax = axes[0]
     ax.plot(thresholds, sig_eff, lw=2, color=COLORS["signal"],
@@ -812,6 +818,9 @@ def main():
     p.add_argument("--background-label", default=None, metavar="LABEL",
                    help="Short label for the background source, used in output filenames "
                         "(e.g. 'offbeam', 'michel'). Auto-derived from named shorthands if omitted.")
+    p.add_argument("--max-ratio", type=float, default=3.0, metavar="R",
+                   help="Maximum signal:background (or background:signal) ratio after capping. "
+                        "Default 3.0. Use 1.0 for a physically balanced 1:1 dataset.")
     args = p.parse_args()
 
     if not _HAS_XGB:
@@ -819,12 +828,12 @@ def main():
     if not _HAS_KERAS:
         print("[mva] WARNING: tensorflow not installed — skipping NN.  pip install tensorflow")
     if _HAS_KERAS:
-        # TF auto-selects one GPU if CUDA is visible; no MirroredStrategy → single-device only.
+        # TF auto-selects one GPU if CUDA is visible; no MirroredStrategy -> single-device only.
         gpus = tf.config.list_physical_devices("GPU")
         print(f"[mva] TensorFlow: {len(gpus)} GPU(s) visible"
               + ("  (no MirroredStrategy — using GPU:0 only)" if len(gpus) > 1 else ""))
 
-    run_name, parquet_dir, plots_dir, csv_dir = load_paths(args.config)
+    run_name, parquet_dir, plots_dir, csv_dir, display_label = load_paths(args.config)
 
     feat_path = parquet_dir / f"{run_name}__cluster_features.parquet"
     if not feat_path.exists():
@@ -837,7 +846,7 @@ def main():
     # ── external real-data background mode ────────────────────────────────
     external_bkg = args.external_background
     if external_bkg is not None:
-        # Resolve named shorthands → Path
+        # Resolve named shorthands -> Path
         if external_bkg in _NAMED_BACKGROUNDS:
             bkg_path = _NAMED_BACKGROUNDS[external_bkg]
             bkg_tag  = args.background_label or external_bkg
@@ -856,7 +865,7 @@ def main():
         bkg_df = bkg_df.copy(); bkg_df["_label"] = 0
         sub = pd.concat([sig_df, bkg_df], ignore_index=True)
 
-        plot_run_name = f"{run_name} vs {bkg_tag}"
+        plot_run_name = f"{display_label} vs {bkg_tag}"
         # Output tag: <run_name>__mva__vs_<bkg_tag>  e.g. mc_lucho_full__mva__vs_offbeam
         mode_tag = f"__vs_{bkg_tag}"
         # Event-level page requires eventID; not meaningful with external background
@@ -872,7 +881,7 @@ def main():
                          "all":        "all non-neutron (excl. prompt)"}.get(bkg_mode, bkg_mode)
         print(f"[mva] bkg_mode={bkg_mode}  ({bkg_label_str})")
         mode_tag = "" if bkg_mode == "all" else f"__{bkg_mode}"
-        plot_run_name = f"{run_name} [{bkg_mode} bkg]" if bkg_mode != "all" else run_name
+        plot_run_name = f"{display_label} [{bkg_mode} bkg]" if bkg_mode != "all" else display_label
         skip_event_level = False
 
     n_sig = int(y.sum())
@@ -884,16 +893,16 @@ def main():
     if n_sig < 10 or n_bkg < 10:
         sys.exit("[mva] Too few samples to train — check features parquet.")
 
-    # ── Issue 2: cap imbalanced background before splitting ───────────────
-    # max_ratio=3 keeps training balanced: at most 3× background per signal
-    # (or 3× signal per background if the ratio is inverted, e.g. lucho vs michel).
-    X, y, _cap_keep = cap_background(X, y, max_ratio=3.0)
+    # Cap imbalanced background before splitting
+    # max_ratio=args.max_ratio keeps training balanced: at most args.max_ratio × background per signal
+    # (or args.max_ratio × signal per background if the ratio is inverted, e.g. lucho vs michel).
+    X, y, _cap_keep = cap_background(X, y, max_ratio=args.max_ratio)
     sub = sub.iloc[_cap_keep].reset_index(drop=True)
     n_sig = int(y.sum())
     n_bkg = int((y == 0).sum())
     print(f"[mva] after capping: signal={n_sig}  background={n_bkg}")
 
-    # ── Issue 1: event-level train/test split ────────────────────────────
+    # Event-level train/test split
     # Assigns whole events to train or test so no event leaks across the boundary.
     # Falls back to cluster-level for external background (no shared event structure).
     X_tr, X_te, y_tr, y_te, idx_tr, idx_te = event_train_test_split(
@@ -902,7 +911,7 @@ def main():
     )
     print(f"[mva] train={len(y_tr)}  test={len(y_te)}")
 
-    # ── Issue 3: stratified k-fold CV on training set ────────────────────
+    # Stratified k-fold CV on training set 
     if not args.no_cv:
         print(f"\n[mva] 5-fold cross-validation on training set …")
         cv_aucs, cv_curves = cv_roc_trees(X_tr, y_tr, n_splits=5)
@@ -959,7 +968,7 @@ def main():
     score_path = parquet_dir / f"{run_name}__mva_scores{mode_tag}.parquet"
     csv_path   = csv_dir     / f"{run_name}__mva_summary{mode_tag}.csv"
 
-    print(f"[mva] writing plots → {pdf_path}")
+    print(f"[mva] writing plots -> {pdf_path}")
     best_event_col = next(
         (c for c in ["xgb_score", "nn_score", "gbt_score"] if c in sub.columns),
         "gbt_score",
@@ -977,7 +986,7 @@ def main():
             _event_level_page(pdf, sub, plot_run_name, score_col=best_event_col)
 
     sub.to_parquet(score_path, index=False)
-    print(f"[mva] wrote scores → {score_path}")
+    print(f"[mva] wrote scores -> {score_path}")
 
     imp_df = pd.DataFrame({"feature": features})
     for key, model in tree_models.items():
@@ -1004,8 +1013,8 @@ def main():
                 tag = c.replace("_importance", "").upper()
                 parts.append(f"{tag}={row[c]:.4f}")
             print(f"    {int(row.get('rf_rank', 0)):2d}. {'  '.join(parts)}")
-    print(f"\n[mva] wrote summary → {csv_path}")
-    print(f"[mva] wrote plots   → {pdf_path}")
+    print(f"\n[mva] wrote summary -> {csv_path}")
+    print(f"[mva] wrote plots   -> {pdf_path}")
 
 
 if __name__ == "__main__":

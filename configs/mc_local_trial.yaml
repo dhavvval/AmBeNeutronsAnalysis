@@ -1,4 +1,5 @@
 run_name: mc_local_trial
+display_label: "Simulated AmBe Spectrum"
 campaign: "MC AmBe Local"
 description: "OPTICS training on local ANNIETree_MC.root file."
 

@@ -1,4 +1,5 @@
 run_name: mc_lucho_full
+display_label: "Simulated AmBe Spectrum"
 campaign: "MC AmBe Lucho Full"
 description: "Full 100k-event Lucho file"
 

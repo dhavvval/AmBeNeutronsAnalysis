@@ -1,0 +1,43 @@
+# mc_steven_multiport_mva.yaml
+#
+# Top-level config for mva_analysis.py using the merged multiport signal parquet.
+#
+# Signal  : pure neutron clusters from all 25 port+z-position combinations,
+#           merged by merge_multiport_signal.py
+# Background: pass --external-background offbeam  OR  --external-background michel
+#             (or both via two separate runs)
+#
+# Example usage:
+#   python mva_analysis.py --config configs/mc_steven_multiport_mva.yaml \
+#                          --external-background offbeam
+#   python mva_analysis.py --config configs/mc_steven_multiport_mva.yaml \
+#                          --external-background michel
+#
+# Note: run merge_multiport_signal.py BEFORE invoking mva_analysis.py.
+# The merged parquet must exist at:
+#   ambe_output/mc_exp_AmBe_spectrum_multiport/parquet/mc_exp_AmBe_spectrum_multiport__cluster_features.parquet
+
+run_name: mc_exp_AmBe_spectrum_multiport
+display_label: "Experimental AmBe Spectrum"
+campaign: "MC Experimental AmBe Spectrum— all 25 port+z positions combined"
+description: >
+  Merged pure-neutron signal from 25 source positions (5 ports × 5 z offsets).
+  ~50k events per position → up to 1.25M signal clusters total.
+  Use with --external-background offbeam or --external-background michel.
+
+output_root: /Users/dajana/Documents/AmBe/AmBeNeutronsAnalysis/ambe_output
+
+# inputs block is unused by mva_analysis.py (load_paths only reads run_name + output_root)
+# but included for documentation completeness.
+inputs:
+  root_files: []   # populated by run_steven_multiport.sh + merge_multiport_signal.py
+
+cuts:
+  min_pulses_per_event: 0
+
+fit_params: {}
+
+# features config used when load_paths() inspects geometry (kept for compatibility)
+geometry:
+  pmt_geometry:   /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/TankPMTTimingOffsets.csv
