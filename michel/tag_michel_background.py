@@ -92,6 +92,10 @@ def _parse_args():
                    help="Output directory (default: current dir)")
     p.add_argument("--tree",       default="Event;1",
                    help="ROOT tree name (default: Event;1)")
+    p.add_argument("--mode",       default="dirt", choices=["dirt", "electron"],
+                   help="dirt: full Michel_tuning.py selection (find muon, then Michel "
+                        "with Δt cut). electron: pure-electron MC — skip all muon cuts, "
+                        "apply only Michel cluster cuts (PE, hits, CB) to every cluster.")
     return p.parse_args()
 
 
@@ -266,6 +270,99 @@ def process_file(root_path: Path, tree_name: str) -> tuple[list[pd.DataFrame], d
     return hit_frames, cf
 
 
+def process_file_electron(root_path: Path, tree_name: str) -> tuple[list[pd.DataFrame], dict]:
+    """Apply Michel cluster cuts ONLY (no muon-finding) to a pure-electron MC file.
+
+    Every cluster in every event is treated as a Michel candidate. The dirt-muon
+    cuts and the Δt-relative-to-muon cut are skipped entirely. Cuts applied:
+        0 < clusterPE < 650
+        clusterHits >= 20
+        0 < clusterChargeBalance < 0.18
+    """
+    run = _run_number(root_path)
+    hit_frames = []
+
+    with uproot.open(str(root_path)) as f:
+        tree = f[tree_name]
+        n = tree.num_entries
+
+        cpe_arr  = tree["clusterPE"].array(library="ak")
+        ch_arr   = tree["clusterHits"].array(library="ak")
+        ccb_arr  = tree["clusterChargeBalance"].array(library="ak")
+        hx_arr   = tree["Cluster_HitX"].array(library="ak")
+        hy_arr   = tree["Cluster_HitY"].array(library="ak")
+        hz_arr   = tree["Cluster_HitZ"].array(library="ak")
+        ht_arr   = tree["Cluster_HitT"].array(library="ak")
+        hpe_arr  = tree["Cluster_HitPE"].array(library="ak")
+        hid_arr  = tree["Cluster_HitChankey"].array(library="ak")
+
+    cf = dict(total=n, any_cluster=0, pe_range=0, hits=0, cb_tight=0)
+    n_michel = 0
+
+    for i in range(n):
+        cpe = ak.to_list(cpe_arr[i])
+        ch  = ak.to_list(ch_arr[i])
+        ccb = ak.to_list(ccb_arr[i])
+
+        if len(cpe) == 0:
+            continue
+        cf["any_cluster"] += 1
+
+        for k in range(len(cpe)):
+            pe, hits, cb = float(cpe[k]), int(ch[k]), float(ccb[k])
+
+            if pe <= 0 or pe >= _MICHEL_MAX_PE:
+                continue
+            cf["pe_range"] += 1
+
+            if hits < _MICHEL_MIN_HITS:
+                continue
+            cf["hits"] += 1
+
+            if cb <= 0 or cb >= _MICHEL_CB_TIGHT:
+                continue
+            cf["cb_tight"] += 1
+
+            hx  = np.asarray(ak.to_list(hx_arr[i][k]),  dtype=float)
+            hy  = np.asarray(ak.to_list(hy_arr[i][k]),  dtype=float)
+            hz  = np.asarray(ak.to_list(hz_arr[i][k]),  dtype=float)
+            ht  = np.asarray(ak.to_list(ht_arr[i][k]),  dtype=float)
+            hpe = np.asarray(ak.to_list(hpe_arr[i][k]), dtype=float)
+            hid = np.asarray(ak.to_list(hid_arr[i][k]), dtype=int)
+
+            if len(ht) == 0:
+                continue
+
+            df_cl = pd.DataFrame({"x": hx, "y": hy, "z": hz,
+                                  "t": ht, "pe": hpe, "pmtID": hid})
+            df_cl["run"]            = run
+            df_cl["event_number"]   = int(i)
+            df_cl["muon_event_idx"] = -1            # no muon in electron-only sample
+            df_cl["cluster_id"]     = n_michel
+            df_cl["is_background"]  = 0             # signal Michels, not background
+            hit_frames.append(df_cl)
+            n_michel += 1
+
+    print(f"  {root_path.name}: {n} events → {n_michel} Michel clusters")
+    return hit_frames, cf
+
+
+def _print_cutflow_electron(cutflow: dict) -> None:
+    total = cutflow["total"]
+    print(f"\n{'Selection cut':<52} {'Clusters':>9}  {'% events':>9}")
+    print("-" * 80)
+    rows = [
+        ("Total events",                                     total),
+        ("Events with ≥1 cluster",                           cutflow["any_cluster"]),
+        (f"0 < clusterPE < {_MICHEL_MAX_PE:.0f}",            cutflow["pe_range"]),
+        (f"clusterHits >= {_MICHEL_MIN_HITS}",               cutflow["hits"]),
+        (f"0 < CB < {_MICHEL_CB_TIGHT}  → Michel candidates", cutflow["cb_tight"]),
+    ]
+    for label, count in rows:
+        pct = 100.0 * count / total if total > 0 else 0.0
+        print(f"  {label:<50} {count:>9}  {pct:>8.1f}%")
+
+
 def _print_cutflow(cutflow: dict) -> None:
     total = cutflow["total"]
     dirt  = cutflow["cb_dirt"]
@@ -311,11 +408,13 @@ def main():
     files = _resolve_files(args.input)
     print(f"Found {len(files)} file(s)")
 
+    proc_fn = process_file_electron if args.mode == "electron" else process_file
+
     all_frames: list[pd.DataFrame] = []
     total_cf: dict = {}
     for i, f in enumerate(files):
         print(f"[{i+1}/{len(files)}] {f.name}")
-        frames, cf = process_file(f, tree_name=args.tree)
+        frames, cf = proc_fn(f, tree_name=args.tree)
         all_frames.extend(frames)
         for k, v in cf.items():
             total_cf[k] = total_cf.get(k, 0) + v
@@ -329,13 +428,17 @@ def main():
         df = pd.DataFrame(columns=col_order)
 
     n_clusters = int(df.groupby(["run", "event_number", "cluster_id"]).ngroups) if len(df) else 0
-    out = output_dir / "michel_background_hits.parquet"
+    out_name = "michel_signal_hits.parquet" if args.mode == "electron" else "michel_background_hits.parquet"
+    out = output_dir / out_name
     df.to_parquet(out, index=False)
 
     print(f"\n{'='*80}")
-    print(f"  CUTFLOW SUMMARY  ({len(files)} file(s))")
+    print(f"  CUTFLOW SUMMARY  ({len(files)} file(s), mode={args.mode})")
     print(f"{'='*80}")
-    _print_cutflow(total_cf)
+    if args.mode == "electron":
+        _print_cutflow_electron(total_cf)
+    else:
+        _print_cutflow(total_cf)
     print(f"\nWrote {n_clusters} Michel clusters ({len(df)} hits) → {out}")
 
 

@@ -1,0 +1,53 @@
+run_name: cc_neutrino
+display_label: "CC Neutrino-Interaction Neutron Clusters"
+campaign: "MC CC Neutrino (tank-only, productionv1)"
+description: >
+  Tank-only GENIE neutrino-interaction WCSim (87 files), processed through the
+  CC_MC_RECO_ntuple_neutrino ToolAnalysis chain (ANNIEEventTreeMaker output with
+  DirectParent neutron-ancestor / dark-noise truth branches). CC selection is
+  applied offline (truth-based: trueCC, muon, CC0pi, single-ring, FV). Signal =
+  final-state-neutron hits; background = all remaining tank charge.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_tank/productionv1/ANNIEEvent_cc_neutrino_*.root
+
+cuts:
+  min_pulses_per_event: 0   # OPTICS min_samples handles thresholding — do not pre-filter events here
+  # max_events: 2000        # uncomment for a quick test run
+
+  # Offline CC event selection (truth-based; MRD-based cuts omitted — tank-only).
+  # See src/ambe/mc/cc_selection.py for definitions and the omitted-cut log.
+  cc_cuts:
+    require_cc: true            # trueCC == 1
+    require_muon: true          # |truePrimaryPdg| == 13 (CC muon)
+    require_cc0pi: true         # truePi0 == 0 and Pi0Count == 0
+    require_single_ring: true   # trueMultiRing == 0
+    require_fv: true            # true vertex inside tank FV (EventSelector convention)
+    fv_radius_cm: 121.9         # 0.8 * tank_radius (152.4 cm)
+    fv_y_max_cm: 50.0           # |Y| < 50 cm
+    fv_require_z_negative: true # EventSelector rejects Z > 0
+    nhit_min: 4
+    muon_energy_min_mev: 0.0
+
+fit_params: {}
+
+optics:
+  min_samples: [3, 5, 8]
+  xi: [0.10]
+  t_unit_ns: [10, 25]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 0.0
+
+features:
+  min_samples: 8
+  xi: 0.10
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0
+  truth_window_ns: 75.0
+
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv

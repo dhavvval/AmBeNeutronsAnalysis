@@ -666,14 +666,47 @@ def _unclaimed_meta_plots(unc_df: pd.DataFrame, ctx: RunContext):
 
 def run(ctx: RunContext, verbose: bool = True) -> Path:
     root_files = resolve_inputs(ctx.inputs["root_files"])
-    if len(root_files) != 1:
-        raise ValueError("ambe mc hitcomp expects exactly one root_files entry")
-    root_path = root_files[0]
+    if not root_files:
+        raise ValueError("ambe mc hitcomp: no root_files resolved")
 
     if verbose:
-        print(f"[hitcomp] reading {root_path.name}")
+        print(f"[hitcomp] reading {len(root_files)} file(s)")
 
-    ev_df, cl_df, unc_df, labeled_cf_pe = extract(root_path)
+    # Process each file; tag rows with _source_file (and keep local eventNumber
+    # as eventID) so a CC-pass flag can be joined per (file, event).
+    ev_parts, cl_parts, unc_parts, pe_parts = [], [], [], []
+    for rp in root_files:
+        if verbose and len(root_files) > 1:
+            print(f"[hitcomp]   {rp.name}")
+        e, c, u, pe = extract(rp)
+        for d in (e, c, u):
+            if len(d):
+                d["_source_file"] = rp.name
+        ev_parts.append(e); cl_parts.append(c); unc_parts.append(u)
+        pe_parts.append(pe)
+    ev_df  = pd.concat(ev_parts,  ignore_index=True) if ev_parts  else pd.DataFrame()
+    cl_df  = pd.concat(cl_parts,  ignore_index=True) if cl_parts  else pd.DataFrame()
+    unc_df = pd.concat(unc_parts, ignore_index=True) if unc_parts else pd.DataFrame()
+    labeled_cf_pe = np.concatenate([p for p in pe_parts if len(p)]) if any(len(p) for p in pe_parts) else np.array([])
+
+    # --- CC-pass join: report composition for ALL clusters and the CC subset --- #
+    # eventID in ev_df/cl_df is the per-file local eventNumber, so join the CC
+    # table on (_source_file, eventNumber). Truth-based CC selection lives in
+    # ambe.mc.cc_selection (FV mirrors EventSelector; MRD cuts logged as omitted).
+    try:
+        from . import cc_selection
+        cc_tbl = cc_selection.build_cc_table(ctx, tree_name="Event", verbose=verbose)
+    except Exception as exc:  # noqa: BLE001
+        cc_tbl = pd.DataFrame()
+        if verbose:
+            print(f"[hitcomp] WARN: CC table unavailable ({exc}); reporting all-cluster only")
+    if len(cc_tbl) and "cc_pass" in cc_tbl.columns:
+        cc_map = cc_tbl[["_source_file", "eventNumber", "cc_pass"]].rename(
+            columns={"eventNumber": "eventID"})
+        for d in (ev_df, cl_df):
+            if len(d):
+                d_merged = d.merge(cc_map, on=["_source_file", "eventID"], how="left")
+                d["cc_pass"] = d_merged["cc_pass"].fillna(False).to_numpy().astype(bool)
 
     ev_csv  = ctx.csv_path(f"{ctx.run_name}__hit_accounting")
     cl_csv  = ctx.csv_path(f"{ctx.run_name}__cluster_composition")
@@ -693,11 +726,31 @@ def run(ctx: RunContext, verbose: bool = True) -> Path:
               f"({100*ev_df['n_clustered'].mean()/ev_df['nhits'].mean():.1f}% of nhits)")
         print(f"  Unclustered:             {ev_df['n_unclustered'].mean():.1f}  "
               f"({100*ev_df['n_unclustered'].mean()/ev_df['nhits'].mean():.1f}% of nhits)")
-        print(f"\n--- Composition of CF cluster hits (all clusters pooled) ---")
-        for lbl in ("neutron", "background", "darknoise", "unclaimed"):
-            total = cl_df[lbl].sum()
-            grand = cl_df[["neutron", "background", "darknoise", "unclaimed"]].sum().sum()
-            print(f"  {lbl:<12s}: {total:7,}  ({100*total/grand:.1f}%)")
+        def _print_composition(df, header):
+            if not len(df):
+                print(f"\n--- {header} --- (no clusters)")
+                return
+            cols = ["neutron", "background", "darknoise", "unclaimed"]
+            grand = df[cols].sum().sum()
+            print(f"\n--- {header} ---  ({len(df):,} clusters, {int(grand):,} hits)")
+            for lbl in cols:
+                total = int(df[lbl].sum())
+                print(f"  {lbl:<12s}: {total:7,}  ({100*total/grand:.1f}%)" if grand else f"  {lbl:<12s}: 0")
+
+        _print_composition(cl_df, "Composition of CF cluster hits (ALL clusters pooled)")
+        if "cc_pass" in cl_df.columns:
+            _print_composition(cl_df[cl_df["cc_pass"]],
+                               "Composition of CF cluster hits (CC-PASSING events only)")
+            # Headline number the user asked for: neutron-hit fraction in surviving clusters
+            ccp = cl_df[cl_df["cc_pass"]]
+            if len(ccp):
+                cols = ["neutron", "background", "darknoise", "unclaimed"]
+                gr = ccp[cols].sum().sum()
+                nfrac = 100 * ccp["neutron"].sum() / gr if gr else 0.0
+                n_cc_events = int(ev_df["cc_pass"].sum()) if "cc_pass" in ev_df.columns else -1
+                print(f"\n  >>> HEADLINE: in CC-passing events, "
+                      f"{nfrac:.1f}% of CF-cluster hits are final-state neutrons "
+                      f"({n_cc_events} CC-passing events, {len(ccp):,} clusters) <<<")
         print(f"\n--- Neutron hit recovery ---")
         has_n = ev_df[ev_df["total_neutron"] > 0]
         rec = has_n["cf_neutron"] / has_n["total_neutron"]

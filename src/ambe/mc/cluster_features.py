@@ -899,10 +899,13 @@ def extract_all_features(ctx: RunContext,
     n_total     = len(event_ids)
     print_every = max(1, n_total // 20)   # ~20 progress lines over the full run
 
+    has_cc = "cc_pass" in pulses.columns
     for i_ev, evid in enumerate(event_ids):
         df_ev = pulses[pulses["eventID"] == evid].reset_index(drop=True)
         if len(df_ev) < min_pulses_per_event:
             continue
+        # cc_pass is constant within an event (merged per-event by mc.processor)
+        ev_cc_pass = bool(df_ev["cc_pass"].iloc[0]) if has_cc and len(df_ev) else True
 
         df_cl = (clusters[clusters["eventID"] == evid].reset_index(drop=True)
                  if clusters is not None else None)
@@ -969,6 +972,7 @@ def extract_all_features(ctx: RunContext,
                                                if cluster_offset == cluster_offset
                                                else float("nan"),
                     "is_prompt_cluster":       is_prompt,
+                    "cc_pass":                 int(ev_cc_pass),
                 }
                 row.update(feats)
                 row.update(comp)

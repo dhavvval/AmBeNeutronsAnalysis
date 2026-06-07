@@ -821,6 +821,11 @@ def main():
     p.add_argument("--max-ratio", type=float, default=3.0, metavar="R",
                    help="Maximum signal:background (or background:signal) ratio after capping. "
                         "Default 3.0. Use 1.0 for a physically balanced 1:1 dataset.")
+    p.add_argument("--cc-only", dest="cc_only", action="store_true", default=True,
+                   help="Train only on CC-passing clusters (cc_pass==1), if the column exists. "
+                        "Default: on.")
+    p.add_argument("--all-events", dest="cc_only", action="store_false",
+                   help="Disable the CC filter — train on every cluster regardless of cc_pass.")
     args = p.parse_args()
 
     if not _HAS_XGB:
@@ -842,6 +847,17 @@ def main():
 
     print(f"[mva] loading {feat_path}")
     df = pd.read_parquet(feat_path)
+
+    # CC selection: by default restrict to CC-passing clusters (cc_pass==1).
+    if args.cc_only and "cc_pass" in df.columns:
+        n_before = len(df)
+        df = df[df["cc_pass"] == 1].reset_index(drop=True)
+        print(f"[mva] CC filter (cc_pass==1): {len(df)}/{n_before} clusters kept")
+        if df.empty:
+            sys.exit("[mva] No CC-passing clusters — check the CC selection or pass --all-events.")
+    elif args.cc_only:
+        print("[mva] WARN: --cc-only requested but no 'cc_pass' column in features parquet; "
+              "training on all clusters.")
 
     # ── external real-data background mode ────────────────────────────────
     external_bkg = args.external_background

@@ -226,6 +226,7 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
 
             pulse_rows.append({
                 "eventID":              event_id,
+                "eventNumber":          event_id,   # local (per-file) event number, for CC-table join
                 "pmtID":                ck,
                 "t":                    t_hit,
                 "x":                    float(hit_x[j]),
@@ -296,6 +297,30 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
 
     pulses   = pd.concat(pulse_frames,   ignore_index=True) if pulse_frames   else pd.DataFrame()
     clusters = pd.concat(cluster_frames, ignore_index=True) if cluster_frames else pd.DataFrame()
+
+    # --- CC event selection: merge a per-event cc_pass flag onto every hit ---- #
+    # The CC mask is truth-based (trueCC / muon / CC0pi / single-ring / FV) for
+    # these tank-only neutrino files; MRD-based cuts are omitted and logged by
+    # the cc_selection module.  Joins on (_source_file, eventNumber) so the flag
+    # is robust to the eventID offsetting applied per file above.
+    if len(pulses):
+        from . import cc_selection
+        cc_tbl = cc_selection.build_cc_table(ctx, tree_name=tree_name,
+                                             max_events=max_events, verbose=verbose)
+        if len(cc_tbl) and "cc_pass" in cc_tbl.columns:
+            cc_cols = ["_source_file", "eventNumber", "cc_pass"]
+            extra = [c for c in ("trueCC", "truePrimaryPdg", "trueMultiRing",
+                                 "trueNeutrons", "trueMuonEnergy") if c in cc_tbl.columns]
+            cc_merge = cc_tbl[cc_cols + extra].rename(
+                columns={c: f"event_{c}" for c in extra})
+            pulses = pulses.merge(cc_merge, on=["_source_file", "eventNumber"], how="left")
+            pulses["cc_pass"] = pulses["cc_pass"].fillna(False).astype(bool)
+            if verbose:
+                npass_hits = int(pulses["cc_pass"].sum())
+                print(f"[mc.processor] cc_pass merged: {npass_hits}/{len(pulses)} hits "
+                      f"in CC-passing events ({100*npass_hits/len(pulses):.1f}%)")
+        elif verbose:
+            print("[mc.processor] WARN: CC table empty / no cc_pass — skipping cc_pass merge")
 
     pulses_path   = ctx.parquet_path(f"{ctx.run_name}__pulses")
     clusters_path = ctx.parquet_path(f"{ctx.run_name}__clusterfinder")
