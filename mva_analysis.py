@@ -38,6 +38,7 @@ import argparse
 import sys
 from pathlib import Path
 
+import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -799,6 +800,68 @@ def _event_level_page(pdf, sub, run_name, score_col="gbt_score"):
 
 
 # ---------------------------------------------------------------------------
+# Application mode — score new data with a frozen model (no training)
+# ---------------------------------------------------------------------------
+
+def score_data(model_path: Path, data_path: Path) -> Path:
+    """
+    Load a frozen MVA artifact (from --save-model) and score a data features
+    parquet. The data has NO truth labels — this is pure model application.
+
+    The feature matrix is built EXACTLY as in training: select the stored
+    feature columns in the stored order, NaN-impute with the stored (MC training)
+    medians. Any feature missing from the data parquet is filled entirely with
+    its training median (and reported), so the column vector the model expects is
+    always present.
+
+    Writes <data_stem>__scored.parquet (all original columns + rf_score/gbt_score)
+    and returns its path.
+    """
+    art = joblib.load(model_path)
+    features = art["features"]
+    medians  = np.asarray(art["medians"], dtype=float)
+    models   = art["models"]
+    meta     = art.get("meta", {})
+    print(f"[score] frozen model: {model_path.name}")
+    print(f"[score]   trained on run '{meta.get('run_name','?')}', "
+          f"bkg_mode={meta.get('bkg_mode','?')}, "
+          f"n_sig={meta.get('n_sig','?')} n_bkg={meta.get('n_bkg','?')}")
+    print(f"[score]   {len(features)} features, models={sorted(models.keys())}")
+
+    df = pd.read_parquet(data_path)
+    print(f"[score] data parquet: {data_path.name}  ({len(df)} clusters)")
+
+    # Build X in the trained feature order; fill missing features with training median.
+    X = np.empty((len(df), len(features)), dtype=float)
+    missing = []
+    for j, f in enumerate(features):
+        if f in df.columns:
+            col = df[f].to_numpy(dtype=float)
+        else:
+            col = np.full(len(df), np.nan)
+            missing.append(f)
+        nanm = np.isnan(col)
+        if nanm.any():
+            col = np.where(nanm, medians[j], col)
+        X[:, j] = col
+    if missing:
+        print(f"[score] WARN: {len(missing)} feature(s) absent in data parquet, "
+              f"filled with training median: {missing}")
+
+    out = df.copy()
+    for key, model in models.items():
+        out[f"{key}_score"] = model.predict_proba(X)[:, 1]
+        s = out[f"{key}_score"]
+        print(f"[score]   {key}_score: min={s.min():.3f} median={s.median():.3f} "
+              f"max={s.max():.3f}  (frac>0.5: {(s>0.5).mean():.3f})")
+
+    score_path = data_path.with_name(data_path.stem + "__scored.parquet")
+    out.to_parquet(score_path, index=False)
+    print(f"[score] wrote -> {score_path}")
+    return score_path
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -836,7 +899,37 @@ def main():
                         "Default: on.")
     p.add_argument("--all-events", dest="cc_only", action="store_false",
                    help="Disable the CC filter — train on every cluster regardless of cc_pass.")
+    p.add_argument("--save-model", nargs="?", const="__DEFAULT__", default=None,
+                   metavar="PATH",
+                   help="Freeze the fitted tree models to a joblib .pkl for later "
+                        "application to real data (e.g. AmBe). With no path, writes "
+                        "<parquet_dir>/<run_name>__mva_frozen{mode_tag}.pkl. The artifact "
+                        "stores the fitted RF/GBT(/XGB), the exact feature list, and the "
+                        "NaN-imputation medians, so the data-scoring step reproduces the inputs.")
+    p.add_argument("--score-data", default=None, metavar="DATA_PARQUET",
+                   help="APPLICATION mode: do NOT train. Load a frozen model (--model) and "
+                        "score this data features parquet (e.g. ambe_4499__data_features.parquet). "
+                        "Writes <stem>__scored.parquet with rf_score/gbt_score columns added. "
+                        "No truth needed — pure model application to real data.")
+    p.add_argument("--model", default=None, metavar="FROZEN_PKL",
+                   help="Frozen model .pkl (from --save-model) to use with --score-data. "
+                        "Defaults to <parquet_dir>/<run_name>__mva_frozen.pkl.")
     args = p.parse_args()
+
+    # ── Application mode: score data with a frozen model, then exit ──────────
+    if args.score_data is not None:
+        run_name, parquet_dir, _plots, _csv, _label = load_paths(args.config)
+        model_path = (Path(args.model) if args.model
+                      else parquet_dir / f"{run_name}__mva_frozen.pkl")
+        if not model_path.exists():
+            sys.exit(f"[score] Frozen model not found: {model_path}\n"
+                     f"        Create it first with: python mva_analysis.py "
+                     f"--config {args.config} --save-model")
+        data_path = Path(args.score_data)
+        if not data_path.exists():
+            sys.exit(f"[score] Data features parquet not found: {data_path}")
+        score_data(model_path, data_path)
+        return
 
     if not _HAS_XGB:
         print("[mva] WARNING: xgboost not installed — skipping XGBoost.  pip install xgboost")
@@ -949,6 +1042,38 @@ def main():
     tree_label = "RF, GBT" + (", XGBoost" if _HAS_XGB else "")
     print(f"[mva] training final models on full train set ({tree_label}) …")
     tree_models = train_trees(X_tr, y_tr)
+
+    # ── Freeze the fitted tree models for application to real data ────────
+    # We save the model trained on the TRAIN split (the one whose held-out AUC is
+    # reported below) plus the exact feature order and the per-feature imputation
+    # medians (from the train split), so the data-scoring step builds X identically.
+    if args.save_model is not None:
+        if args.save_model == "__DEFAULT__":
+            model_out = parquet_dir / f"{run_name}__mva_frozen{mode_tag}.pkl"
+        else:
+            model_out = Path(args.save_model)
+        train_medians = np.nanmedian(X_tr, axis=0)
+        artifact = {
+            "features": list(features),
+            "medians": np.asarray(train_medians, dtype=float),
+            "models": tree_models,
+            "meta": {
+                "run_name": run_name,
+                "display_label": display_label,
+                "method": args.method,
+                "bkg_mode": args.bkg_mode if external_bkg is None else f"external:{bkg_tag}",
+                "cc_only": args.cc_only,
+                "max_ratio": args.max_ratio,
+                "n_sig": int(y.sum()),
+                "n_bkg": int((y == 0).sum()),
+                "n_train": int(len(y_tr)),
+                "note": "Trees are scale-free (no StandardScaler). Impute NaNs with stored medians, "
+                        "order columns by 'features', then model.predict_proba(X)[:,1].",
+            },
+        }
+        joblib.dump(artifact, model_out)
+        print(f"[mva] froze fitted models -> {model_out}  "
+              f"({len(features)} features, models={sorted(tree_models.keys())})")
 
     nn_model, nn_scaler, nn_history = None, None, None
     if _HAS_KERAS and not args.no_nn:
