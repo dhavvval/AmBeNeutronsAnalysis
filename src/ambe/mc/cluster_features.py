@@ -886,6 +886,11 @@ def extract_all_features(ctx: RunContext,
         print("[cluster_features] WARN: 'pe' column missing — "
               "re-run `ambe mc process` to include hitPE.  Defaulting to 1.0.")
 
+    # Reduce to the delayed residual (CC-passing, prompt window removed) so the
+    # cluster features describe the post-muon hit population. Same cut as OPTICS.
+    from . import cc_selection
+    pulses = cc_selection.apply_residual_filter(pulses, ctx, verbose=True)
+
     rows = []
     event_ids = pulses["eventID"].unique()
     src_str = (f"({source_pos_m[0]:.2f}, {source_pos_m[1]:.2f}, "

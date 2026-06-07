@@ -247,6 +247,47 @@ def run(ctx: RunContext, tree_name: str = "Event",
     return out
 
 
+def apply_residual_filter(pulses: pd.DataFrame, ctx: RunContext,
+                          verbose: bool = True) -> pd.DataFrame:
+    """
+    Reduce the per-hit pulses DataFrame to the *delayed residual* used for the
+    neutron search: the hits left after the CC event selection and after the
+    prompt window (where the CC muon / prompt particles deposit their light) is
+    removed.
+
+    Controlled by an optional `residual:` block in the config:
+        residual:
+          cc_only: true            # keep only cc_pass==1 events (default true)
+          prompt_window_ns: 2000   # drop hits with t <= this (default 2000)
+
+    The prompt-window cut is purely time-based (no truth / BackTracker needed),
+    so it is directly applicable to real data. OPTICS and cluster_features call
+    this right after loading the pulses parquet.
+    """
+    block = (ctx.extra.get("residual", {}) if hasattr(ctx, "extra") else {}) or {}
+    cc_only       = bool(block.get("cc_only", True))
+    prompt_win_ns = float(block.get("prompt_window_ns", 2000.0))
+
+    n0 = len(pulses)
+    out = pulses
+    if cc_only and "cc_pass" in out.columns:
+        out = out[out["cc_pass"].astype(bool)]
+    n_cc = len(out)
+    if prompt_win_ns > 0 and "t" in out.columns:
+        out = out[out["t"] > prompt_win_ns]
+    n_res = len(out)
+
+    if verbose:
+        print(f"[residual] prompt_window_ns={prompt_win_ns:.0f}  cc_only={cc_only}")
+        print(f"[residual]   {n0:,} hits -> {n_cc:,} CC-passing -> "
+              f"{n_res:,} delayed residual (t>{prompt_win_ns:.0f} ns)")
+        if "truth_class" in out.columns and n_res:
+            neut = int(out["truth_class"].isin([1, 2, 3, 4]).sum())
+            print(f"[residual]   residual neutron-hit fraction (truth): "
+                  f"{100*neut/n_res:.1f}%  (diagnostic only)")
+    return out.reset_index(drop=True)
+
+
 def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     p = argparse.ArgumentParser(prog="ambe mc cc")
     p.add_argument("--tree", default="Event")

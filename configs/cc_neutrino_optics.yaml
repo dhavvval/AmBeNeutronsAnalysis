@@ -34,6 +34,14 @@ cuts:
 
 fit_params: {}
 
+# Delayed-residual definition for the neutron search. The CC muon (and prompt
+# pions/protons) deposit their light in the prompt window; we remove that window
+# and run OPTICS + features on the surviving delayed hits. Time-based only (no
+# truth) so it is directly applicable to real data.
+residual:
+  cc_only: true            # restrict to CC-passing events (cc_pass==1)
+  prompt_window_ns: 2000   # drop hits with t <= 2000 ns (prompt muon window)
+
 optics:
   min_samples: [3, 5, 8]
   xi: [0.10]

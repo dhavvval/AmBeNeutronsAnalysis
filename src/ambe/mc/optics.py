@@ -486,6 +486,11 @@ def train_and_evaluate(ctx: RunContext,
     pulses   = pd.read_parquet(pulses_path)
     clusters = pd.read_parquet(clusters_path) if clusters_path.exists() else None
 
+    # Reduce to the delayed residual (CC-passing events, prompt window removed)
+    # so OPTICS clusters the post-muon hit population. See cc_selection.
+    from . import cc_selection
+    pulses = cc_selection.apply_residual_filter(pulses, ctx, verbose=True)
+
     rows      = []
     event_ids = pulses["eventID"].unique()
     n_hits_after_filter = []
