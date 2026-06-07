@@ -177,45 +177,55 @@ def prepare_data(df: pd.DataFrame,
     """
     sub = df[df["method"] == method].copy().reset_index(drop=True)
 
-    is_sig = sub["is_truth_neutron"] == 1
+    # Signal = neutron-DOMINATED clusters (dominant_class in {1,2,3,4}). This is
+    # consistent with the dominant_class-based background below, which is critical:
+    # using is_truth_neutron==1 (a stricter trackID-purity match) for signal while
+    # putting is_truth_neutron==0 into background dumps neutron-dominated clusters
+    # that merely failed the trackID match INTO the background, contaminating it
+    # (~70% of the old "all" background was actually neutron-dominated) and
+    # collapsing the AUC to ~0.5. Composition-based labels for BOTH sides fixes it.
+    NEUTRON_CLASSES = [1, 2, 3, 4]
+    has_dc = "dominant_class" in sub.columns
+    if has_dc:
+        is_sig = sub["dominant_class"].isin(NEUTRON_CLASSES)
+    else:
+        # Fallback for parquets without dominant_class (older features runs)
+        is_sig = sub["is_truth_neutron"] == 1
 
     if bkg_mode in ("darknoise", "nonneutron", "pop2"):
-        if "dominant_class" not in sub.columns:
+        if not has_dc:
             raise ValueError(
                 f"--bkg-mode {bkg_mode} requires 'dominant_class' column in the features parquet. "
                 "Re-run: ambe mc features ..."
             )
         if bkg_mode == "darknoise":
             # Background = clusters dominated by class-0 dark noise (excludes class -5)
-            is_bkg = (sub["is_truth_neutron"] == 0) & (sub["dominant_class"] == 0)
+            is_bkg = sub["dominant_class"] == 0
         elif bkg_mode == "nonneutron":
-            # Background = clusters dominated by class -5 (both prompt gamma + near-capture)
-            is_bkg = (sub["is_truth_neutron"] == 0) & (sub["dominant_class"] == -5)
+            # Background = clusters dominated by class -5 (non-neutron physics)
+            is_bkg = sub["dominant_class"] == -5
         else:
-            # "pop2": Population 2 only — class-5 clusters that are NOT the prompt AmBe gamma.
-            # Population 1 (offset ~-17,846 ns) is already flagged as is_prompt_cluster=1.
-            # Population 2 (offset ~-1.4 ns) is the near-capture contamination that is
-            # indistinguishable by timing alone — the genuinely hard spurious problem.
+            # "pop2": class-5 clusters that are NOT the prompt gamma (is_prompt_cluster==0).
             if "is_prompt_cluster" not in sub.columns:
                 raise ValueError(
                     "--bkg-mode pop2 requires 'is_prompt_cluster' column in the features parquet. "
                     "Re-run: ambe mc features ..."
                 )
-            is_bkg = (
-                (sub["is_truth_neutron"] == 0) &
-                (sub["dominant_class"] == -5) &
-                (sub["is_prompt_cluster"] == 0)
-            )
+            is_bkg = (sub["dominant_class"] == -5) & (sub["is_prompt_cluster"] == 0)
     else:
-        # "all": exclude only the prompt AmBe gamma cluster (is_prompt_cluster) if flagged
-        if "is_prompt_cluster" in sub.columns:
-            is_bkg = (sub["is_truth_neutron"] == 0) & (sub["is_prompt_cluster"] == 0)
+        # "all": background = every NON-neutron-dominated cluster (class -5 physics +
+        # class 0 dark noise), excluding the prompt cluster if flagged. Symmetric with
+        # the neutron-dominated signal definition above — no neutron clusters leak in.
+        if has_dc:
+            is_bkg = ~sub["dominant_class"].isin(NEUTRON_CLASSES)
         else:
             is_bkg = sub["is_truth_neutron"] == 0
+        if "is_prompt_cluster" in sub.columns:
+            is_bkg = is_bkg & (sub["is_prompt_cluster"] == 0)
 
     mask = is_sig | is_bkg
     sub  = sub[mask].reset_index(drop=True)
-    y    = (sub["is_truth_neutron"] == 1).astype(int).to_numpy()
+    y    = is_sig[mask].astype(int).to_numpy()
 
     # Keep features present in the parquet with ≥50% non-NaN coverage.
     # Fitted-vertex features have ~65% convergence rate, so 80% would drop them;
