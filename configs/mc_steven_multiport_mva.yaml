@@ -15,9 +15,9 @@
 #
 # Note: run merge_multiport_signal.py BEFORE invoking mva_analysis.py.
 # The merged parquet must exist at:
-#   ambe_output/mc_exp_AmBe_spectrum_multiport/parquet/mc_exp_AmBe_spectrum_multiport__cluster_features.parquet
+#   ambe_output/mc_steven_multiport/parquet/mc_steven_multiport__cluster_features.parquet
 
-run_name: mc_exp_AmBe_spectrum_multiport
+run_name: mc_steven_multiport
 display_label: "Experimental AmBe Spectrum"
 campaign: "MC Experimental AmBe Spectrum— all 25 port+z positions combined"
 description: >

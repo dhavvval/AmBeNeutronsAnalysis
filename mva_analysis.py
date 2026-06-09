@@ -855,6 +855,22 @@ def score_data(model_path: Path, data_path: Path) -> Path:
         print(f"[score]   {key}_score: min={s.min():.3f} median={s.median():.3f} "
               f"max={s.max():.3f}  (frac>0.5: {(s>0.5).mean():.3f})")
 
+    # Apply NN if a companion Keras file is present.
+    nn_meta = art.get("nn")
+    if nn_meta is not None:
+        keras_file = model_path.with_name(nn_meta["keras_file"])
+        if not keras_file.exists():
+            print(f"[score]   WARN: NN companion file missing ({keras_file.name}) — skipping NN.")
+        elif not _HAS_KERAS:
+            print(f"[score]   WARN: tensorflow not installed — skipping NN. pip install tensorflow")
+        else:
+            nn_model = tf.keras.models.load_model(keras_file)
+            X_sc = nn_meta["scaler"].transform(X)
+            out["nn_score"] = nn_model.predict(X_sc, verbose=0).ravel()
+            s = out["nn_score"]
+            print(f"[score]   nn_score: min={s.min():.3f} median={s.median():.3f} "
+                  f"max={s.max():.3f}  (frac>0.5: {(s>0.5).mean():.3f})")
+
     score_path = data_path.with_name(data_path.stem + "__scored.parquet")
     out.to_parquet(score_path, index=False)
     print(f"[score] wrote -> {score_path}")
@@ -1043,10 +1059,23 @@ def main():
     print(f"[mva] training final models on full train set ({tree_label}) …")
     tree_models = train_trees(X_tr, y_tr)
 
-    # ── Freeze the fitted tree models for application to real data ────────
-    # We save the model trained on the TRAIN split (the one whose held-out AUC is
-    # reported below) plus the exact feature order and the per-feature imputation
-    # medians (from the train split), so the data-scoring step builds X identically.
+    nn_model, nn_scaler, nn_history = None, None, None
+    if _HAS_KERAS and not args.no_nn:
+        hidden = "-".join([str(NN_HIDDEN_UNITS)] * NN_HIDDEN_LAYERS)
+        arch = f"{len(features)}-{hidden}-1" if hidden else f"{len(features)}-1"
+        print(f"[mva] training NN  ({arch}, ReLU, dropout={NN_DROPOUT})"
+              f"  [{len(features)} features after NaN filter]")
+        nn_model, nn_scaler, nn_history = train_nn(X_tr, y_tr)
+        n_epochs = len(nn_history.history["loss"])
+        print(f"[mva] NN stopped at epoch {n_epochs} / {NN_EPOCHS}")
+    elif args.no_nn:
+        print("[mva] NN skipped (--no-nn)")
+
+    # ── Freeze fitted models for application to real data ─────────────────
+    # Trees go into a joblib .pkl alongside the exact feature order, the
+    # per-feature imputation medians, and (if trained) the NN StandardScaler.
+    # The Keras NN itself is saved as a companion .keras file next to the .pkl
+    # — score_data() picks it up automatically when present.
     if args.save_model is not None:
         if args.save_model == "__DEFAULT__":
             model_out = parquet_dir / f"{run_name}__mva_frozen{mode_tag}.pkl"
@@ -1068,24 +1097,22 @@ def main():
                 "n_bkg": int((y == 0).sum()),
                 "n_train": int(len(y_tr)),
                 "note": "Trees are scale-free (no StandardScaler). Impute NaNs with stored medians, "
-                        "order columns by 'features', then model.predict_proba(X)[:,1].",
+                        "order columns by 'features', then model.predict_proba(X)[:,1]. "
+                        "NN (if present) requires the companion .keras file + the stored scaler.",
             },
         }
+        nn_keras_path = None
+        if nn_model is not None and nn_scaler is not None:
+            nn_keras_path = model_out.with_name(model_out.stem + "__nn.keras")
+            nn_model.save(nn_keras_path)
+            artifact["nn"] = {
+                "scaler": nn_scaler,
+                "keras_file": nn_keras_path.name,  # relative to .pkl directory
+            }
         joblib.dump(artifact, model_out)
+        nn_msg = f" + NN -> {nn_keras_path.name}" if nn_keras_path else ""
         print(f"[mva] froze fitted models -> {model_out}  "
-              f"({len(features)} features, models={sorted(tree_models.keys())})")
-
-    nn_model, nn_scaler, nn_history = None, None, None
-    if _HAS_KERAS and not args.no_nn:
-        hidden = "-".join([str(NN_HIDDEN_UNITS)] * NN_HIDDEN_LAYERS)
-        arch = f"{len(features)}-{hidden}-1" if hidden else f"{len(features)}-1"
-        print(f"[mva] training NN  ({arch}, ReLU, dropout={NN_DROPOUT})"
-              f"  [{len(features)} features after NaN filter]")
-        nn_model, nn_scaler, nn_history = train_nn(X_tr, y_tr)
-        n_epochs = len(nn_history.history["loss"])
-        print(f"[mva] NN stopped at epoch {n_epochs} / {NN_EPOCHS}")
-    elif args.no_nn:
-        print("[mva] NN skipped (--no-nn)")
+              f"({len(features)} features, models={sorted(tree_models.keys())}{nn_msg})")
 
     model_scores  = []   # (display_name, test_scores, linestyle) — for plots
     all_score_cols = {}  # col_name -> scores on full X, for parquet
