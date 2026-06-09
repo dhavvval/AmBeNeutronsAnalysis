@@ -305,8 +305,12 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
     # is robust to the eventID offsetting applied per file above.
     if len(pulses):
         from . import cc_selection
+        cc_stream = (ctx.cuts or {}).get("cc_stream", "cc0pi_legacy")
+        if verbose:
+            print(f"[mc.processor] CC stream: {cc_stream!r}")
         cc_tbl = cc_selection.build_cc_table(ctx, tree_name=tree_name,
-                                             max_events=max_events, verbose=verbose)
+                                             max_events=max_events, verbose=verbose,
+                                             stream=cc_stream)
         if len(cc_tbl) and "cc_pass" in cc_tbl.columns:
             cc_cols = ["_source_file", "eventNumber", "cc_pass"]
             extra = [c for c in ("trueCC", "truePrimaryPdg", "trueMultiRing",
