@@ -864,16 +864,20 @@ def apply_residual_filter(pulses: pd.DataFrame, ctx: RunContext,
 
     Controlled by an optional `residual:` block in the config:
         residual:
-          cc_only: true            # keep only cc_pass==1 events (default true)
-          prompt_window_ns: 2000   # drop hits with t <= this (default 2000)
+          cc_only: false           # keep only cc_pass==1 events (default false)
+          prompt_window_ns: 0      # drop hits with t <= this (default 0 = no cut)
+
+    Defaults are off because AmBe calibration (the primary use of this codebase)
+    has no CC events and no prompt-muon window to remove. The CC-neutrino neutron
+    search config opts in by setting both values in `configs/cc_neutrino_optics.yaml`.
 
     The prompt-window cut is purely time-based (no truth / BackTracker needed),
     so it is directly applicable to real data. OPTICS and cluster_features call
     this right after loading the pulses parquet.
     """
     block = (ctx.extra.get("residual", {}) if hasattr(ctx, "extra") else {}) or {}
-    cc_only       = bool(block.get("cc_only", True))
-    prompt_win_ns = float(block.get("prompt_window_ns", PROMPT_WINDOW_NS))
+    cc_only       = bool(block.get("cc_only", False))
+    prompt_win_ns = float(block.get("prompt_window_ns", 0.0))
 
     n0 = len(pulses)
     out = pulses

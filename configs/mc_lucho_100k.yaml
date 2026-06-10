@@ -1,0 +1,39 @@
+run_name: mc_lucho_100k
+display_label: "Simulated AmBe Spectrum (100k)"
+campaign: "MC AmBe Lucho — 10 files × 10k events"
+description: >
+  Full 100k-event Lucho run (10 ROOT files, 10k events each).
+  Pipeline: process → features → MVA freeze. No grid-sweep optics step.
+
+output_root: /Users/dajana/Documents/AmBe/AmBeNeutronsAnalysis/ambe_output
+
+inputs:
+  root_files:
+    - /Users/dajana/Documents/ANNIEEvent/Lucho_ANNIEEvent/ANNIEEvent_MC_wcsimlucho_*.root
+
+cuts:
+  min_pulses_per_event: 0   # OPTICS min_samples handles thresholding internally
+
+fit_params: {}
+
+# OPTICS grid-sweep block is unused here (no `ambe mc optics` step in the runner)
+# but kept in case downstream tooling expects it.
+optics:
+  min_samples: [8]
+  xi: [0.10]
+  t_unit_ns: [25]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 0.0
+  source_position_m: [0, -0.1446, 1.681]   # WCSim Port-5 source position (metres)
+
+features:
+  min_samples: 8
+  xi: 0.10
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0
+  truth_window_ns: 75.0
+  source_position_m: [0, -0.1446, 1.681]
+
+geometry:
+  pmt_geometry:   /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/TankPMTTimingOffsets.csv
