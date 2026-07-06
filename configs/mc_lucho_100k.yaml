@@ -5,11 +5,11 @@ description: >
   Full 100k-event Lucho run (10 ROOT files, 10k events each).
   Pipeline: process → features → MVA freeze. No grid-sweep optics step.
 
-output_root: /Users/dajana/Documents/AmBe/AmBeNeutronsAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:
-    - /Users/dajana/Documents/ANNIEEvent/Lucho_ANNIEEvent/ANNIEEvent_MC_wcsimlucho_*.root
+    - /exp/annie/app/users/dajana/EB_BC_TA/ANNIEEvent_MC_wcsimlucho_*.root
 
 cuts:
   min_pulses_per_event: 0   # OPTICS min_samples handles thresholding internally
@@ -35,5 +35,5 @@ features:
   source_position_m: [0, -0.1446, 1.681]
 
 geometry:
-  pmt_geometry:   /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/FullTankPMTGeometry.csv
-  timing_offsets: /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/TankPMTTimingOffsets.csv
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv

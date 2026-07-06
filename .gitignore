@@ -21,6 +21,12 @@ verbose/
 OutputPlots/
 mc_results/
 mc_parquet/
+ambe_output/
+beamoff/
+mc_steven/
+optics_beamcluster_benchmark_smoke/
+logs/
+*.log
 *.pdf
 *.png
 *.parquet

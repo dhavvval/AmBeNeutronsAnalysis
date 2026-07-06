@@ -12,7 +12,7 @@ output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
 
 inputs:
   root_files:
-    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_tank/productionv1/ANNIEEvent_cc_neutrino_*.root
+    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_tank/productionv1/fmvmrd/ANNIEEvent_cc_neutrino_*.root
 
 cuts:
   min_pulses_per_event: 0   # OPTICS min_samples handles thresholding — do not pre-filter events here
@@ -22,13 +22,13 @@ cuts:
   # See src/ambe/mc/cc_selection.py for definitions and the omitted-cut log.
   cc_cuts:
     require_cc: true            # trueCC == 1
-    require_muon: true          # |truePrimaryPdg| == 13 (CC muon)
-    require_cc0pi: true         # truePi0 == 0 and Pi0Count == 0
+    require_fsl_muon: true      # trueFSLPdg == 13 (final-state lepton is muon)
+    require_cc0pi: true         # no π± in final state (truePiPlus==0, truePiMinus==0)
     require_single_ring: true   # trueMultiRing == 0
-    require_fv: true            # true vertex inside tank FV (EventSelector convention)
-    fv_radius_cm: 121.9         # 0.8 * tank_radius (152.4 cm)
-    fv_y_max_cm: 50.0           # |Y| < 50 cm
-    fv_require_z_negative: true # EventSelector rejects Z > 0
+    require_fv: true            # true vertex inside tank FV (James's CCPR reference)
+    fv_radius_cm: 100.0         # 1 m radius
+    fv_y_max_cm: 100.0          # |Y| < 100 cm (2 m height)
+    fv_require_z_negative: false
     nhit_min: 4
     muon_energy_min_mev: 0.0
 

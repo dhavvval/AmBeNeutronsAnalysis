@@ -1,0 +1,60 @@
+run_name: cc_neutrino_xi02_compcut_cftrain
+display_label: "CC Neutrino — xi=0.02 + compcut — TWO-STREAMLINE MVA (OPTICS + CF trained separately)"
+campaign: "MC CC Neutrino (gridtest, productionv2 mid-level test, 376 files)"
+description: >
+  ISOLATED SANDBOX VARIANT of cc_neutrino_xi02_compcut. Identical physics, but
+  trains a SEPARATE MVA per clustering streamline (OPTICS model AND ClusterFinder
+  model) instead of scoring CF with the OPTICS model. Reuses the Stage-0/1 outputs
+  of cc_neutrino_xi02_compcut by symlink (no recompute) and writes every Stage-2+
+  output under its OWN run_name so the fully-fledged cc_neutrino_xi02_compcut
+  analysis is never touched. Signal = final-state-neutron hits in delayed residual
+  (t > 2000 ns, CC-passing events only). OPTICS: ms=8, xi=0.02, t_unit=25 ns.
+  Composition cut before MVA scoring: reject if n_neutron <= 10 AND
+  frac_nonneutron >= 0.40.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_tank/gridtest/ANNIEEvent_cc_neutrino_*.root
+
+cuts:
+  min_pulses_per_event: 0
+
+  cc_stream: ccinc_truth
+
+  cc_cuts:
+    require_cc: true
+    require_fsl_muon: true
+    mu_p_min_mev: 600.0
+    mu_p_max_mev: 1200.0
+    cos_theta_min: 0.8
+    require_fv: true
+    fv_radius_cm: 100.0
+    fv_y_max_cm: 100.0
+    fv_require_z_negative: false
+    nhit_min: 4
+
+fit_params: {}
+
+residual:
+  cc_only: true
+  prompt_window_ns: 2000
+
+optics:
+  min_samples: [8]
+  xi: [0.02]
+  t_unit_ns: [25]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 0.0
+
+features:
+  min_samples: 8
+  xi: 0.02
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0
+  truth_window_ns: 75.0
+
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv
