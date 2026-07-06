@@ -17,8 +17,8 @@ REPO="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO"
 
 CFG="configs/mc_lucho_100k.yaml"
-VENV_PIPE="$HOME/venvs/annie/bin/activate"
-VENV_MVA="$HOME/venvs/annie311/bin/activate"
+VENV_PIPE="/exp/annie/app/users/dajana/myboy/bin/activate"
+VENV_MVA="/exp/annie/app/users/dajana/myboy/bin/activate"
 T0=$SECONDS
 
 echo "=================================================="
@@ -56,6 +56,7 @@ echo "=================================================="
         --config "$CFG" \
         --method "$METHOD" \
         --bkg-mode all \
+        --all-events \
         --save-model "$OUT"
   done
 )
