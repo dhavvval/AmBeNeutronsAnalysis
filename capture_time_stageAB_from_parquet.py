@@ -79,11 +79,8 @@ def main():
     analyzer = AmBeNeutronAnalyzer(
         data_directory="./EventAmBeNeutronCandidatesData/",
         output_pdf=str(out / "stageAB_capture.pdf"))
-    # Per user request: lower the tau PARAMETER bound to (2, 70) us to match the
-    # fit data window (fit_min_time=2, fit_max_time=67). Note: this lets the
-    # capture-time parameter range down into the thermalization region, where tau
-    # and therm can become degenerate on thin per-position stats.
-    analyzer.update_fitting_config(capture_bounds=(2.0, 70.0))
+    # capture_bounds uses class default (10.0, 70.0) — fit starts at 10 µs,
+    # thermalization region excluded.
 
     # lmfit_analysis hardcodes method="basinhopping", which does NOT populate
     # parameter stderr -> Tau_err/Thermal_err come back None. Force leastsq (via a

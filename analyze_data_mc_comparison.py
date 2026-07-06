@@ -329,15 +329,15 @@ def make_comparison_plots(df_data: pd.DataFrame,
         # Summary page
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.axis("off")
-        title_text = (f"Data / MC Comparison — {run_name}\n"
-                      f"Data clusters: {len(df_data)}  |  MC clusters: {len(df_mc)}")
+        title_text = (f"AmBe Data / CC-ν MC Feature Comparison\n"
+                      f"Data: {len(df_data)} clusters   MC: {len(df_mc)} clusters")
         ax.text(0.5, 0.9, title_text, ha="center", va="top",
                 fontsize=12, fontweight="bold", transform=ax.transAxes)
         if len(ks_df):
             n_ok   = (ks_df["flag"] == "OK").sum()
             n_bad  = (ks_df["flag"] == "MIS-MODELLED").sum()
-            summary = (f"KS test summary: {n_ok} features OK  |  "
-                       f"{n_bad} features mis-modelled (p < {KS_THRESHOLD})\n\n")
+            summary = (f"KS test: {n_ok} features consistent  |  "
+                       f"{n_bad} features differ (p < {KS_THRESHOLD})\n\n")
             summary += ks_df[["feature","ks_stat","p_value","flag",
                                "mean_data","mean_mc","mean_shift"]].to_string(index=False)
             ax.text(0.05, 0.75, summary, ha="left", va="top",
@@ -370,17 +370,17 @@ def make_comparison_plots(df_data: pd.DataFrame,
             fig, ax = plt.subplots(figsize=(8, 4))
 
             ax.hist(d_vals,  bins=bins, density=True, histtype="step",
-                    color="black",    linewidth=1.8, label=f"Data  (n={len(d_vals)})")
+                    color="black",    linewidth=1.8, label=f"AmBe data  (n = {len(d_vals)})")
             if len(mc_sig) > 0:
                 ax.hist(mc_sig,  bins=bins, density=True, alpha=0.5,
-                        color="tomato",   label=f"MC signal  (n={len(mc_sig)})")
+                        color="tomato",   label=f"MC neutron  (n = {len(mc_sig)})")
             if len(mc_bkg) > 0:
                 ax.hist(mc_bkg,  bins=bins, density=True, alpha=0.4,
-                        color="steelblue",label=f"MC bkg  (n={len(mc_bkg)})")
+                        color="steelblue",label=f"MC background  (n = {len(mc_bkg)})")
 
             ax.set_xlabel(feat_label, fontsize=9)
-            ax.set_ylabel("Density", fontsize=9)
-            ax.set_title(f"{feat}", fontsize=10)
+            ax.set_ylabel("Normalised Counts", fontsize=9)
+            ax.set_title(feat_label if feat_label != feat else feat, fontsize=10)
             ax.legend(fontsize=8)
 
             # KS annotation
@@ -388,7 +388,7 @@ def make_comparison_plots(df_data: pd.DataFrame,
                 ks_row = ks_lookup.loc[feat]
                 color = "red" if ks_row["flag"] == "MIS-MODELLED" else "darkgreen"
                 ax.text(0.97, 0.95,
-                        f"KS={ks_row['ks_stat']:.3f}  p={ks_row['p_value']:.4f}",
+                        f"KS = {ks_row['ks_stat']:.3f},  p = {ks_row['p_value']:.4f}",
                         transform=ax.transAxes, ha="right", va="top",
                         fontsize=8, color=color,
                         bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.7))

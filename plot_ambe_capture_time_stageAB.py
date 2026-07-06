@@ -104,7 +104,7 @@ def main():
                    help="MVA cut (default rf @ 80%% MC sig eff = 0.643)")
     p.add_argument("--selection", choices=["mva", "legacy"], default="mva",
                    help="'mva' = Stage-B MVA cut (Selection 1); 'legacy' = "
-                        "passes_stage1 PE<60/CB<0.5/nHits>10 (Selection 2) for the "
+                        "passes_stage1 PE<80/CB<0.45/nHits>9 (Selection 2) for the "
                         "capture-time comparison.")
     p.add_argument("--by", choices=["position", "port"], default="position",
                    help="'position' = one page per distinct (x,y,z) source position "
@@ -114,7 +114,7 @@ def main():
 
     d = pd.read_parquet(args.scored)
     # Selection 1 (mva): Stage-B MVA cut on the OPTICS clusters.
-    # Selection 2 (legacy): OPTICS clusters passing PE<60/CB<0.5/nHits>10.
+    # Selection 2 (legacy): OPTICS clusters passing PE<80/CB<0.45/nHits>9.
     if args.selection == "mva":
         sel = d[d[args.score_col] >= args.score_cut].copy()
         sel_tag = f"Selection 1 — OPTICS + MVA ({args.score_col}≥{args.score_cut:.2f})"
@@ -122,7 +122,7 @@ def main():
         if "passes_stage1" not in d.columns:
             raise SystemExit("--selection legacy needs a 'passes_stage1' column")
         sel = d[d["passes_stage1"]].copy()
-        sel_tag = "Selection 2 — OPTICS + legacy cut (PE<60/CB<0.5/nHits>10)"
+        sel_tag = "Selection 2 — OPTICS + legacy cut (PE<80/CB<0.45/nHits>9)"
     sel["t_us"] = sel["t_mean"] / 1000.0     # ns -> us, same convention as combined.py
 
     # Attach the source (x,y,z) per cluster via run -> source_positions, and the

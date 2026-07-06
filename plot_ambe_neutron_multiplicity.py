@@ -4,8 +4,8 @@ plot_ambe_neutron_multiplicity.py
 Neutron-like-cluster multiplicity on AmBe DATA along the analysis pipeline:
 
   Stage A  pre-selection multiplicity per event
-             - OPTICS pre-selection (our Stage-1 clusters; passes_stage1 flag)
-             - ClusterFinder + (PE<60, CB<0.5, hits>10)   [from the counting CSV]
+             - OPTICS pre-selection: ALL OPTICS clusters (no box cuts)
+             - ClusterFinder + (PE<80, CB<0.45, hits>=10)  [from the counting CSV]
            overlaid, log-y — the analogue of the legacy CF neutron-multiplicity plot.
 
   Stage B  neutron multiplicity per event AFTER the frozen-MVA cut on top of the
@@ -19,7 +19,7 @@ Plus transfer diagnostics:
 Inputs
 ------
   --scored     <run>__data_features__scored.parquet  (from mva_analysis.py --score-data)
-               must carry run/event_tank_time + gbt_score/rf_score + passes_stage1.
+               must carry run/event_tank_time + gbt_score/rf_score + pe_total/charge_bal_legacy/n_hits.
   --stats-csv  optics_beamcluster_stats.csv (optional) for the CF Stage-A comparison
                (columns n_cf_presel / n_optics_presel per event).
   --mc-features <cc_neutrino__cluster_features.parquet> (optional) for feature overlap.
@@ -46,6 +46,20 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 EVENT_KEYS = ["run", "event_tank_time"]   # unique per AmBe event
 
+# Legacy box-cut reference values (applied to OPTICS clusters for comparison only)
+LEGACY_PE_MAX   = 80.0
+LEGACY_CB_MAX   = 0.45
+LEGACY_HITS_MIN = 9         # n_hits > 9  →  n_hits >= 10
+
+
+def _passes_legacy(df: pd.DataFrame) -> pd.Series:
+    """Recompute legacy box-cut flag from raw feature columns (not passes_stage1)."""
+    return (
+        (df["pe_total"] < LEGACY_PE_MAX) &
+        (df["charge_bal_legacy"] < LEGACY_CB_MAX) &
+        (df["n_hits"] > LEGACY_HITS_MIN)
+    )
+
 
 def _multiplicity_hist(counts: np.ndarray, max_n: int = 8):
     """Return (bin_centers 1..max_n, counts-per-multiplicity) for a log-y bar plot."""
@@ -61,9 +75,8 @@ def stage_a_page(pdf, scored: pd.DataFrame, stats_csv: Path | None,
     cluster counts (no PE / charge-balance / nHits cut applied). Multiplicity =
     number of OPTICS clusters per event.
 
-    The ClusterFinder + (PE<60, CB<0.5, hits>10) bars are shown ONLY as the legacy
-    reference method for comparison; they are NOT our selection. The passes_stage1
-    column in the parquet is a stored side flag and is deliberately NOT used here.
+    The ClusterFinder + (PE<80, CB<0.45, hits>=10) bars are shown ONLY as the legacy
+    reference method for comparison; they are NOT our selection.
     """
     # OPTICS pre-selection multiplicity = # OPTICS clusters per event (ALL clusters).
     opt_counts = scored.groupby(EVENT_KEYS).size().to_numpy()
@@ -72,7 +85,7 @@ def stage_a_page(pdf, scored: pd.DataFrame, stats_csv: Path | None,
     fig, ax = plt.subplots(figsize=(7, 5))
     w = 0.4
     ax.bar(centers - w/2, opt_h, width=w, color="#7fc7ff", edgecolor="navy",
-           label=f"OPTICS pre-selection — all OPTICS clusters (Σ={int(opt_h.sum())} ev)")
+           label=f"OPTICS clusters  (N = {int(opt_h.sum())} events)")
 
     if stats_csv and Path(stats_csv).exists():
         st = pd.read_csv(stats_csv)
@@ -80,30 +93,28 @@ def stage_a_page(pdf, scored: pd.DataFrame, stats_csv: Path | None,
             cf_counts = st["n_cf_presel"].dropna().to_numpy()
             _, cf_h = _multiplicity_hist(cf_counts, max_n)
             ax.bar(centers + w/2, cf_h, width=w, color="#ffb27f", edgecolor="darkred",
-                   label=f"[ref] ClusterFinder PE<60/CB<0.5/hits>10 (Σ={int(cf_h.sum())} ev)")
+                   label=f"ClusterFinder + selection cuts  (N = {int(cf_h.sum())} events)")
 
     ax.set_yscale("log")
-    ax.set_xlabel("Cluster multiplicity / event")
-    ax.set_ylabel("Counts")
-    ax.set_title(f"Stage A — OPTICS Pre-Selection\n{run_label}",
-                 fontsize=13, fontweight="bold")
+    ax.set_xlabel("Reconstructed Clusters per Event", fontsize=10)
+    ax.set_ylabel("Number of Events", fontsize=10)
+    ax.set_title("OPTICS Cluster Multiplicity — All Runs", fontsize=12, fontweight="bold")
     ax.set_xticks(centers)
     ax.legend(fontsize=8)
-    fig.text(0.5, 0.005, "Pure OPTICS clustering, no PE/CB/nHits cuts applied",
-             ha="center", fontsize=8, color="0.4")
-    pdf.savefig(fig); plt.close(fig)
+    pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
 
 
 def optics_pecbhits_page(pdf, scored: pd.DataFrame, run_label: str, max_n: int):
     """
     Comparison: what do the legacy PE/CB/nHits cuts do to the OPTICS clusters?
     Two histograms — all OPTICS clusters/event vs OPTICS clusters that ALSO pass
-    PE<60/CB<0.5/hits>10 (the passes_stage1 flag). This is the alternative to the
-    MVA: applying the old cuts directly to OPTICS clusters instead of a model.
+    PE<80/CB<0.45/hits>=10. This is the box-cut alternative to the MVA.
+    Flag is recomputed from raw feature columns so it is independent of the
+    passes_stage1 column (which may have been baked with different cut values).
     """
     all_keys = scored.groupby(EVENT_KEYS).size().index
     all_mult = scored.groupby(EVENT_KEYS).size().reindex(all_keys, fill_value=0).to_numpy()
-    pass_mult = (scored[scored["passes_stage1"]].groupby(EVENT_KEYS).size()
+    pass_mult = (scored[_passes_legacy(scored)].groupby(EVENT_KEYS).size()
                  .reindex(all_keys, fill_value=0)).to_numpy()
     centers, h_all = _multiplicity_hist(all_mult, max_n)
     _, h_pass = _multiplicity_hist(pass_mult, max_n)
@@ -111,23 +122,23 @@ def optics_pecbhits_page(pdf, scored: pd.DataFrame, run_label: str, max_n: int):
     fig, ax = plt.subplots(figsize=(7, 5))
     w = 0.4
     ax.bar(centers - w/2, h_all, width=w, color="#7fc7ff", edgecolor="navy",
-           label=f"all OPTICS clusters (Σ={int(h_all.sum())} ev)")
+           label=f"All OPTICS clusters  (N = {int(h_all.sum())} events)")
     ax.bar(centers + w/2, h_pass, width=w, color="#1f6fb2", edgecolor="black",
-           label=f"OPTICS + PE<60/CB<0.5/hits>10 (Σ={int(h_pass.sum())} ev)")
+           label=f"OPTICS + box cuts  (N = {int(h_pass.sum())} events)")
     ax.set_yscale("log"); ax.set_xticks(centers)
-    ax.set_xlabel("Cluster multiplicity / event"); ax.set_ylabel("Counts")
-    ax.set_title(f"OPTICS Clusters — Effect of Legacy Cuts\n{run_label}",
-                 fontsize=13, fontweight="bold")
+    ax.set_xlabel("Reconstructed Clusters per Event", fontsize=10)
+    ax.set_ylabel("Number of Events", fontsize=10)
+    ax.set_title("OPTICS Clusters: Effect of Box Cuts", fontsize=12, fontweight="bold")
     ax.legend(fontsize=8)
-    fig.text(0.5, 0.005, "Reference only: legacy PE<60 / CB<0.5 / nHits>10 applied to OPTICS clusters (the MVA replaces these)",
+    fig.text(0.5, 0.005, "Box cuts: PE < 80, charge balance < 0.45, hits > 9",
              ha="center", fontsize=8, color="0.4")
-    pdf.savefig(fig); plt.close(fig)
+    pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
 
 
 def cf_pecbhits_page(pdf, stats_csv: Path | None, run_label: str, max_n: int):
     """
     Comparison: what do PE/CB/nHits cuts do to ClusterFinder clusters?
-    Raw CF multiplicity vs CF + (PE<60/CB<0.5/hits>10), from the counting CSV
+    Raw CF multiplicity vs CF + (PE<80/CB<0.45/hits>=10), from the counting CSV
     (n_cf_raw, n_cf_presel per event).
     """
     if not (stats_csv and Path(stats_csv).exists()):
@@ -141,19 +152,19 @@ def cf_pecbhits_page(pdf, stats_csv: Path | None, run_label: str, max_n: int):
     if "n_cf_raw" in st.columns:
         _, h_raw = _multiplicity_hist(st["n_cf_raw"].dropna().to_numpy(), max_n)
         ax.bar(np.arange(1, max_n+1) - w/2, h_raw, width=w, color="#ffd9a0",
-               edgecolor="peru", label=f"all CF clusters (Σ={int(h_raw.sum())} ev)")
+               edgecolor="peru", label=f"All CF clusters  (N = {int(h_raw.sum())} events)")
     if "n_cf_presel" in st.columns:
         _, h_pre = _multiplicity_hist(st["n_cf_presel"].dropna().to_numpy(), max_n)
         ax.bar(np.arange(1, max_n+1) + w/2, h_pre, width=w, color="#d2691e",
-               edgecolor="black", label=f"CF + PE<60/CB<0.5/hits>10 (Σ={int(h_pre.sum())} ev)")
+               edgecolor="black", label=f"ClusterFinder + box cuts  (N = {int(h_pre.sum())} events)")
     ax.set_yscale("log"); ax.set_xticks(np.arange(1, max_n+1))
-    ax.set_xlabel("Cluster multiplicity / event"); ax.set_ylabel("Counts")
-    ax.set_title(f"ClusterFinder Clusters — Effect of Legacy Cuts\n{run_label}",
-                 fontsize=13, fontweight="bold")
+    ax.set_xlabel("Reconstructed Clusters per Event", fontsize=10)
+    ax.set_ylabel("Number of Events", fontsize=10)
+    ax.set_title("ClusterFinder Clusters: Effect of Box Cuts", fontsize=12, fontweight="bold")
     ax.legend(fontsize=8)
-    fig.text(0.5, 0.005, "Reference only: legacy PE<60 / CB<0.5 / nHits>10 applied to ClusterFinder clusters",
+    fig.text(0.5, 0.005, "Box cuts: PE < 80, charge balance < 0.45, hits > 9",
              ha="center", fontsize=8, color="0.4")
-    pdf.savefig(fig); plt.close(fig)
+    pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
 
 
 def stage_b_page(pdf, scored: pd.DataFrame, score_col: str, score_cut: float,
@@ -167,32 +178,31 @@ def stage_b_page(pdf, scored: pd.DataFrame, score_col: str, score_cut: float,
     fig, ax = plt.subplots(figsize=(7, 5))
     ax.bar(centers, h, width=0.7, color="#9be8a0", edgecolor="darkgreen")
     ax.set_yscale("log")
-    ax.set_xlabel("Neutron multiplicity / event  (MVA-selected)")
-    ax.set_ylabel("Counts")
-    ax.set_title(f"Stage B — Neutron Multiplicity after MVA\n{run_label}",
-                 fontsize=13, fontweight="bold")
+    ax.set_xlabel("Neutron Candidates per Event", fontsize=10)
+    ax.set_ylabel("Number of Events", fontsize=10)
+    ax.set_title("Neutron Multiplicity after MVA Selection", fontsize=12, fontweight="bold")
     ax.set_xticks(centers)
     n_ev = int((mult >= 1).sum())
-    ax.text(0.97, 0.95, f"events with ≥1 neutron: {n_ev}\n"
-                        f"clusters selected: {len(sel)}/{len(scored)}",
+    ax.text(0.97, 0.95, f"Events with $\\geq$1 neutron: {n_ev}\nClusters selected: {len(sel)} / {len(scored)}",
             transform=ax.transAxes, ha="right", va="top", fontsize=8,
             bbox=dict(boxstyle="round", fc="white", alpha=0.8))
-    fig.text(0.5, 0.005, f"Frozen MC-trained MVA · {score_col} ≥ {score_cut:.2f}",
+    fig.text(0.5, 0.005, f"MVA score threshold = {score_cut:.2f}  (80% neutron efficiency from CC-$\\nu$ MC)",
              ha="center", fontsize=8, color="0.4")
-    pdf.savefig(fig); plt.close(fig)
+    pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
 
 
 def score_dist_page(pdf, scored: pd.DataFrame, run_label: str):
     cols = [c for c in ["rf_score", "gbt_score"] if c in scored.columns]
     fig, ax = plt.subplots(figsize=(7, 5))
+    MODEL_LABELS = {"rf_score": "Random Forest", "gbt_score": "GBT"}
     for c in cols:
         ax.hist(scored[c], bins=50, range=(0, 1), histtype="step", linewidth=1.6,
-                label=f"{c} (median {scored[c].median():.2f})")
-    ax.set_xlabel("MVA neutron score"); ax.set_ylabel("Clusters")
-    ax.set_title(f"Data MVA Score Distribution\n{run_label}",
-                 fontsize=13, fontweight="bold")
+                label=f"{MODEL_LABELS.get(c, c)}  (median = {scored[c].median():.2f})")
+    ax.set_xlabel("Neutron MVA Score", fontsize=10)
+    ax.set_ylabel("Clusters", fontsize=10)
+    ax.set_title("MVA Score Distribution — AmBe Data", fontsize=12, fontweight="bold")
     ax.legend(fontsize=8)
-    pdf.savefig(fig); plt.close(fig)
+    pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
 
 
 def score_vs_dsource_page(pdf, scored: pd.DataFrame, score_col: str, run_label: str):
@@ -209,12 +219,13 @@ def score_vs_dsource_page(pdf, scored: pd.DataFrame, score_col: str, run_label: 
     if n_clip:
         ax.text(0.97, 0.03, f"{n_clip} outlier(s) >{dmax:.1f} m clipped",
                 transform=ax.transAxes, ha="right", va="bottom", fontsize=7, color="gray")
-    fig.colorbar(hb, ax=ax, label="clusters")
-    ax.set_xlabel("Distance from cluster vertex to AmBe source (m)")
-    ax.set_ylabel(f"{score_col}")
-    ax.set_title(f"MVA Score vs Distance to Source\n{run_label}",
-                 fontsize=13, fontweight="bold")
-    pdf.savefig(fig); plt.close(fig)
+    MODEL_LABELS = {"rf_score": "Random Forest", "gbt_score": "GBT",
+                    "xgb_score": "XGBoost", "nn_score": "Neural Network"}
+    fig.colorbar(hb, ax=ax, label="Clusters")
+    ax.set_xlabel("Distance from Cluster Vertex to AmBe Source (m)", fontsize=10)
+    ax.set_ylabel(f"{MODEL_LABELS.get(score_col, score_col)} Score", fontsize=10)
+    ax.set_title("MVA Score vs. Distance to Source", fontsize=12, fontweight="bold")
+    pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
 
 
 def feature_overlap_page(pdf, scored: pd.DataFrame, mc_path: Path, run_label: str):
@@ -233,18 +244,17 @@ def feature_overlap_page(pdf, scored: pd.DataFrame, mc_path: Path, run_label: st
         hi = np.nanpercentile(np.concatenate([d, m]), 99)
         rng = (lo, hi) if hi > lo else None
         ax.hist(m, bins=40, range=rng, density=True, histtype="step",
-                color="navy", label="MC (train)")
+                color="navy", label="CC-$\\nu$ MC")
         ax.hist(d, bins=40, range=rng, density=True, histtype="step",
                 color="crimson", label="AmBe data")
         ax.set_title(f, fontsize=9); ax.tick_params(labelsize=7)
         if i == 0:
-            ax.legend(fontsize=7)
+            ax.legend(fontsize=8)
     for j in range(len(feats), len(axes)):
         axes[j].axis("off")
-    fig.suptitle(f"MC-vs-Data Feature Overlap (Domain Check)\n{run_label}",
-                 fontsize=13, fontweight="bold")
+    fig.suptitle("MC–Data Feature Comparison", fontsize=12, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.93])
-    pdf.savefig(fig); plt.close(fig)
+    pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
 
 
 def main():
@@ -252,7 +262,8 @@ def main():
     p.add_argument("--scored", required=True, help="scored data features parquet")
     p.add_argument("--stats-csv", default=None, help="optics_beamcluster_stats.csv (CF comparison)")
     p.add_argument("--mc-features", default=None, help="MC cluster_features parquet (overlap)")
-    p.add_argument("--score-col", default="gbt_score", choices=["gbt_score", "rf_score"])
+    p.add_argument("--score-col", default="gbt_score",
+                   choices=["gbt_score", "rf_score", "nn_score", "xgb_score"])
     p.add_argument("--score-cut", type=float, default=0.5)
     p.add_argument("--max-n", type=int, default=8, help="max multiplicity bin")
     p.add_argument("--out", required=True, help="output PDF")

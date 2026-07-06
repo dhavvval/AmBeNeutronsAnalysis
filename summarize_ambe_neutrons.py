@@ -88,6 +88,8 @@ def main():
     print(tab.to_string(index=False))
 
     with PdfPages(out / "ambe_all__neutron_summary.pdf") as pdf:
+        MODEL_LABELS = {"rf_score": "Random Forest", "gbt_score": "GBT", "xgb_score": "XGBoost"}
+
         # p1: neutron-event fraction vs run
         fig, ax = plt.subplots(figsize=(9, 5))
         ports = tab["port"].unique()
@@ -95,29 +97,29 @@ def main():
         for c, port in zip(cmap, ports):
             s = tab[tab["port"] == port]
             ax.scatter(s["run"], s["frac_events_with_neutron"], color=c, label=port, s=40)
-        ax.set_xlabel("Run number"); ax.set_ylabel("Fraction of events with ≥1 neutron")
-        ax.set_title("AmBe Neutron-Event Fraction by Run", fontsize=13, fontweight="bold")
-        ax.legend(fontsize=7, ncol=2); ax.grid(alpha=0.3)
-        fig.text(0.5, 0.005, f"OPTICS + MVA selection · {args.score_col} at {args.sig_eff:.0%} MC signal efficiency (cut = {thr:.2f})",
+        ax.set_xlabel("Run Number", fontsize=10)
+        ax.set_ylabel("Fraction of Events with $\\geq$1 Neutron", fontsize=10)
+        ax.set_title("AmBe Neutron Detection Rate by Run", fontsize=12, fontweight="bold")
+        ax.legend(fontsize=8, ncol=2, title="Source port"); ax.grid(alpha=0.3)
+        fig.text(0.5, 0.005,
+                 f"MVA score cut at {args.sig_eff:.0%} neutron efficiency  (threshold = {thr:.2f})",
                  ha="center", fontsize=8, color="0.4")
-        pdf.savefig(fig); plt.close(fig)
+        pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
 
-        # p2: mean multiplicity vs source distance from tank center (position-dependence control)
+        # p2: mean multiplicity vs source distance from tank center
         fig, ax = plt.subplots(figsize=(8, 5))
         rcm = np.sqrt(tab["x_cm"]**2 + tab["y_cm"]**2 + tab["z_cm"]**2)
         sc = ax.scatter(rcm, tab["mean_mult"], c=tab["frac_events_with_neutron"],
                         cmap="viridis", s=50)
-        fig.colorbar(sc, ax=ax, label="frac events w/ neutron")
+        fig.colorbar(sc, ax=ax, label="Fraction of events with $\\geq$1 neutron")
         for _, r in tab.iterrows():
             ax.annotate(int(r["run"]), (np.sqrt(r["x_cm"]**2+r["y_cm"]**2+r["z_cm"]**2), r["mean_mult"]),
                         fontsize=6, alpha=0.6)
-        ax.set_xlabel("Source distance from tank center (cm)")
-        ax.set_ylabel("Mean neutron multiplicity per event")
-        ax.set_title("Neutron Yield vs Source Position", fontsize=13, fontweight="bold")
+        ax.set_xlabel("Source Distance from Tank Centre (cm)", fontsize=10)
+        ax.set_ylabel("Mean Neutron Multiplicity per Event", fontsize=10)
+        ax.set_title("Neutron Yield vs. Source Position", fontsize=12, fontweight="bold")
         ax.grid(alpha=0.3)
-        fig.text(0.5, 0.005, "Physics control: yield should track source location · point labels = run number",
-                 ha="center", fontsize=8, color="0.4")
-        pdf.savefig(fig); plt.close(fig)
+        pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
 
         # p3: combined multiplicity distribution
         fig, ax = plt.subplots(figsize=(7, 5))
@@ -126,22 +128,28 @@ def main():
         h = np.array([(allmult == n).sum() for n in centers], float)
         ax.bar(centers, h, color="#9be8a0", edgecolor="darkgreen")
         ax.set_yscale("log"); ax.set_xticks(centers)
-        ax.set_xlabel("Neutron multiplicity per event"); ax.set_ylabel("Counts")
-        ax.set_title("AmBe Neutron Multiplicity — All Runs", fontsize=13, fontweight="bold")
-        fig.text(0.5, 0.005, f"OPTICS + MVA selection · {args.score_col} at {args.sig_eff:.0%} MC signal efficiency (cut = {thr:.2f})",
+        ax.set_xlabel("Neutron Multiplicity per Event", fontsize=10)
+        ax.set_ylabel("Number of Events", fontsize=10)
+        ax.set_title("AmBe Neutron Multiplicity", fontsize=12, fontweight="bold")
+        fig.text(0.5, 0.005,
+                 f"MVA score cut at {args.sig_eff:.0%} neutron efficiency  (threshold = {thr:.2f})",
                  ha="center", fontsize=8, color="0.4")
-        pdf.savefig(fig); plt.close(fig)
+        pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
 
         # p4: score distribution
         fig, ax = plt.subplots(figsize=(7, 5))
         for col in [c for c in ["rf_score", "gbt_score", "xgb_score"] if c in df]:
-            ax.hist(df[col], bins=50, range=(0, 1), histtype="step", linewidth=1.4, label=col)
-        ax.axvline(thr, color="red", ls="--", label=f"{args.score_col} cut {thr:.2f}")
-        ax.set_xlabel("MVA score"); ax.set_ylabel("Clusters"); ax.legend(fontsize=8)
-        ax.set_title("MVA Score Distribution — All Runs", fontsize=13, fontweight="bold")
-        fig.text(0.5, 0.005, f"Frozen MC-trained model applied to data · dashed line = {args.score_col} cut at {args.sig_eff:.0%} MC signal efficiency",
+            ax.hist(df[col], bins=50, range=(0, 1), histtype="step", linewidth=1.4,
+                    label=MODEL_LABELS.get(col, col))
+        ax.axvline(thr, color="red", ls="--", lw=1.5, label=f"Selection threshold ({thr:.2f})")
+        ax.set_xlabel("Neutron MVA Score", fontsize=10)
+        ax.set_ylabel("Clusters", fontsize=10)
+        ax.legend(fontsize=8)
+        ax.set_title("MVA Score Distribution — AmBe Data", fontsize=12, fontweight="bold")
+        fig.text(0.5, 0.005,
+                 f"Dashed line: {args.sig_eff:.0%} neutron efficiency threshold from CC-$\\nu$ MC",
                  ha="center", fontsize=8, color="0.4")
-        pdf.savefig(fig); plt.close(fig)
+        pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
     print(f"[summary] wrote {out / 'ambe_all__neutron_summary.pdf'}")
 
 

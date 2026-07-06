@@ -14,8 +14,8 @@ It mirrors analyze_optics_data_rate.py (per-event OPTICS, CF comparison, plots,
 CSV outputs) but:
   * reads the BeamCluster_<run>.root schema (TTree "Event") instead of the
     off-beam ntuple schema (TTree "data"), and
-  * applies the Stage-1 pre-selection cuts (clusterPE<60, clusterChargeBalance<0.5,
-    clusterHits>10) used in src/ambe/clustering/optics_analysis.py, reporting BOTH
+  * applies the Stage-1 pre-selection cuts (clusterPE<80, clusterChargeBalance<0.45,
+    clusterHits>9) used in src/ambe/clustering/optics_analysis.py, reporting BOTH
     raw cluster counts and post-pre-selection ("neutron-like") cluster counts.
 
 Per-event procedure
@@ -26,7 +26,7 @@ Per-event procedure
                     t_unit=25 ns).  Each label >=0 is one OPTICS cluster.
   * CF clusters   : taken directly from the file's per-cluster branches
                     (clusterPE / clusterChargeBalance / clusterHits).
-  * Pre-selection : PE<60 & CB<0.5 & hits>10, applied to BOTH methods.
+  * Pre-selection : PE<80 & CB<0.45 & hits>=10, applied to BOTH methods.
       - CF      : uses the ready-made cluster branches.
       - OPTICS  : per cluster, PE  = sum of member hitPE,
                               hits = number of member hits,
@@ -83,10 +83,10 @@ MIN_SAMPLES = 8
 XI          = 0.10
 T_UNIT_NS   = 25.0
 
-# ── Stage-1 pre-selection cuts (from optics_analysis.py:69) ───────────────────
-PRESEL_PE_MAX   = 60.0
-PRESEL_CB_MAX   = 0.5
-PRESEL_HITS_MIN = 10        # clusterHits > 10  → at least 11 hits
+# ── Stage-1 pre-selection cuts (legacy box-cut reference) ─────────────────────
+PRESEL_PE_MAX   = 80.0
+PRESEL_CB_MAX   = 0.45
+PRESEL_HITS_MIN = 9         # clusterHits > 9  → clusterHits >= 10
 
 # ── Cosmic veto — MUST match AmBeNeutronProcessing.cosmic_cut ─────────────────
 # (src/ambe/data/processor.py: cosmic_cut → ct < 2000 ns OR cpe > 100 PE; in

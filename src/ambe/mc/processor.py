@@ -270,7 +270,15 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
     Writes two Parquet files:
         <parquet_dir>/<run_name>__pulses.parquet
         <parquet_dir>/<run_name>__clusterfinder.parquet
+
+    Streaming write: each file's hits are merged with its CC-pass flags and
+    appended to the output parquet immediately, so peak RAM is bounded to one
+    file at a time (~90 hits/event × 4000 events × 200 B ≈ 70 MB per file)
+    rather than the full dataset (~15 GB for 400 files).
     """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
     root_files = resolve_inputs(ctx.inputs["root_files"])
     if max_events is None:
         max_events = ctx.cuts.get("max_events") if ctx.cuts else None
@@ -278,12 +286,39 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
         print(f"[mc.processor] processing {len(root_files)} file(s)"
               + (f"  (max_events={max_events})" if max_events else ""))
 
-    pulse_frames, cluster_frames = [], []
+    # Build CC table once upfront (scalar branches only — fits in RAM easily).
+    from . import cc_selection
+    cc_stream = (ctx.cuts or {}).get("cc_stream", "cc0pi_legacy")
+    if verbose:
+        print(f"[mc.processor] CC stream: {cc_stream!r}")
+    cc_tbl = cc_selection.build_cc_table(ctx, tree_name=tree_name,
+                                         max_events=max_events, verbose=verbose,
+                                         stream=cc_stream)
+    cc_merge = None
+    if len(cc_tbl) and "cc_pass" in cc_tbl.columns:
+        cc_cols = ["_source_file", "eventNumber", "cc_pass"]
+        extra = [c for c in ("trueCC", "truePrimaryPdg", "trueMultiRing",
+                             "trueNeutrons", "trueMuonEnergy") if c in cc_tbl.columns]
+        cc_merge = cc_tbl[cc_cols + extra].rename(
+            columns={c: f"event_{c}" for c in extra})
+
+    pulses_path   = ctx.parquet_path(f"{ctx.run_name}__pulses")
+    clusters_path = ctx.parquet_path(f"{ctx.run_name}__clusterfinder")
+
+    pulse_writer   = None
+    cluster_writer = None
     event_id_offset = 0
-    for rp in root_files:
+    total_hits = 0
+    total_clusters = 0
+    # Accumulators for the end-of-run summary histogram (scalars only — tiny).
+    tc_counts: dict = {}
+    n_untraced = n_no_entry = n_time_mm = 0
+
+    for k, rp in enumerate(root_files):
         pf, cf = _process_single_file(rp, tree_name, verbose, max_events=max_events)
         pf["_source_file"] = rp.name
         cf["_source_file"] = rp.name
+
         if event_id_offset > 0:
             pf["eventID"] = pf["eventID"] + event_id_offset
             if len(cf):
@@ -292,62 +327,58 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
                 print(f"[mc.processor]   eventID offset +{event_id_offset} applied to {rp.name}")
         if len(pf):
             event_id_offset = int(pf["eventID"].max()) + 1
-        pulse_frames.append(pf)
-        cluster_frames.append(cf)
 
-    pulses   = pd.concat(pulse_frames,   ignore_index=True) if pulse_frames   else pd.DataFrame()
-    clusters = pd.concat(cluster_frames, ignore_index=True) if cluster_frames else pd.DataFrame()
+        # Merge CC flags for this file's hits.
+        if cc_merge is not None:
+            file_cc = cc_merge[cc_merge["_source_file"] == rp.name]
+            pf = pf.merge(file_cc, on=["_source_file", "eventNumber"], how="left")
+            pf["cc_pass"] = pf["cc_pass"].fillna(False).astype(bool)
 
-    # --- CC event selection: merge a per-event cc_pass flag onto every hit ---- #
-    # The CC mask is truth-based (trueCC / muon / CC0pi / single-ring / FV) for
-    # these tank-only neutrino files; MRD-based cuts are omitted and logged by
-    # the cc_selection module.  Joins on (_source_file, eventNumber) so the flag
-    # is robust to the eventID offsetting applied per file above.
-    if len(pulses):
-        from . import cc_selection
-        cc_stream = (ctx.cuts or {}).get("cc_stream", "cc0pi_legacy")
-        if verbose:
-            print(f"[mc.processor] CC stream: {cc_stream!r}")
-        cc_tbl = cc_selection.build_cc_table(ctx, tree_name=tree_name,
-                                             max_events=max_events, verbose=verbose,
-                                             stream=cc_stream)
-        if len(cc_tbl) and "cc_pass" in cc_tbl.columns:
-            cc_cols = ["_source_file", "eventNumber", "cc_pass"]
-            extra = [c for c in ("trueCC", "truePrimaryPdg", "trueMultiRing",
-                                 "trueNeutrons", "trueMuonEnergy") if c in cc_tbl.columns]
-            cc_merge = cc_tbl[cc_cols + extra].rename(
-                columns={c: f"event_{c}" for c in extra})
-            pulses = pulses.merge(cc_merge, on=["_source_file", "eventNumber"], how="left")
-            pulses["cc_pass"] = pulses["cc_pass"].fillna(False).astype(bool)
-            if verbose:
-                npass_hits = int(pulses["cc_pass"].sum())
-                print(f"[mc.processor] cc_pass merged: {npass_hits}/{len(pulses)} hits "
-                      f"in CC-passing events ({100*npass_hits/len(pulses):.1f}%)")
-        elif verbose:
-            print("[mc.processor] WARN: CC table empty / no cc_pass — skipping cc_pass merge")
+        # Accumulate summary stats (scalars — negligible memory).
+        for cls, cnt in pf["truth_class"].value_counts().items():
+            tc_counts[cls] = tc_counts.get(cls, 0) + int(cnt)
+        n_untraced  += int(pf["is_untraced"].sum())
+        n_no_entry  += int((pf["match_failure_reason"] == "no_entry").sum())
+        n_time_mm   += int((pf["match_failure_reason"] == "time_mismatch").sum())
+        total_hits  += len(pf)
+        total_clusters += len(cf)
 
-    pulses_path   = ctx.parquet_path(f"{ctx.run_name}__pulses")
-    clusters_path = ctx.parquet_path(f"{ctx.run_name}__clusterfinder")
-    pulses.to_parquet(pulses_path,   index=False)
-    clusters.to_parquet(clusters_path, index=False)
+        # Append to parquet — schema inferred from first batch, enforced after.
+        pulse_tbl = pa.Table.from_pandas(pf, preserve_index=False)
+        if pulse_writer is None:
+            pulse_writer = pq.ParquetWriter(pulses_path, pulse_tbl.schema)
+        pulse_writer.write_table(pulse_tbl)
+
+        if len(cf):
+            cf_tbl = pa.Table.from_pandas(cf, preserve_index=False)
+            if cluster_writer is None:
+                cluster_writer = pq.ParquetWriter(clusters_path, cf_tbl.schema)
+            cluster_writer.write_table(cf_tbl)
+
+    if pulse_writer:
+        pulse_writer.close()
+    if cluster_writer:
+        cluster_writer.close()
+    # Ensure empty output files exist even when no data was written.
+    if not pulses_path.exists():
+        pd.DataFrame().to_parquet(pulses_path, index=False)
+    if not clusters_path.exists():
+        pd.DataFrame().to_parquet(clusters_path, index=False)
 
     if verbose:
-        print(f"[mc.processor] wrote {len(pulses):>8d} hits     -> {pulses_path}")
-        print(f"[mc.processor] wrote {len(clusters):>8d} clusters -> {clusters_path}")
-        if len(pulses):
-            counts = pulses["truth_class"].value_counts().sort_index()
-            untraced = int(pulses["is_untraced"].sum())
-            no_entry = int((pulses["match_failure_reason"] == "no_entry").sum())
-            time_mm  = int((pulses["match_failure_reason"] == "time_mismatch").sum())
+        print(f"[mc.processor] wrote {total_hits:>8d} hits     -> {pulses_path}")
+        print(f"[mc.processor] wrote {total_clusters:>8d} clusters -> {clusters_path}")
+        if total_hits:
             print("[mc.processor] truth_class histogram (all detector hits):")
-            print(counts.to_string())
+            for cls in sorted(tc_counts):
+                print(f"  {cls:>3d}    {tc_counts[cls]:>8d}")
             print(f"[mc.processor] untraced total : "
-                  f"{untraced} ({100*untraced/len(pulses):.1f}%)")
+                  f"{n_untraced} ({100*n_untraced/total_hits:.1f}%)")
             print(f"[mc.processor]   no_entry     : "
-                  f"{no_entry} ({100*no_entry/len(pulses):.1f}%)  "
+                  f"{n_no_entry} ({100*n_no_entry/total_hits:.1f}%)  "
                   f"[sub-threshold / masked PMT]")
             print(f"[mc.processor]   time_mismatch: "
-                  f"{time_mm} ({100*time_mm/len(pulses):.1f}%)  "
+                  f"{n_time_mm} ({100*n_time_mm/total_hits:.1f}%)  "
                   f"[merged-pulse / offset error]")
 
     return pulses_path, clusters_path

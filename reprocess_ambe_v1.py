@@ -14,7 +14,7 @@ NO ambe_single_cut. NO PE/CB/nHits/clusterNumber cut. EVERY surviving ClusterFin
 cluster from every gated, non-cosmic event is written. The two selections are then
 applied strictly downstream, separately:
   Selection 1 : OPTICS re-cluster -> frozen MVA
-  Selection 2 : these ClusterFinder clusters -> legacy box-cut (PE<60/CB<0.5/nHits>10)
+  Selection 2 : these ClusterFinder clusters -> legacy box-cut (PE<80/CB<0.45/nHits>9)
 
 Output: one parquet per run + a combined parquet, columns:
   run, eventID, eventTankTime, sourceX/Y/Z, cluster_idx,

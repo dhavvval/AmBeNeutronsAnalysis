@@ -42,7 +42,7 @@ class AmBeNeutronAnalyzer:
         self.fitting_config = {
             'time_bins': 70,
             'time_range': (0, 70),
-            'fit_min_time': 2.0,
+            'fit_min_time': 10.0,
             'fit_max_time': 67.0,
             'initial_amplitude': 200.0,
             'initial_thermal_time': 5.0,

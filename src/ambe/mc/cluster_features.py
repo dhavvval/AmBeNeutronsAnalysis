@@ -877,120 +877,146 @@ def extract_all_features(ctx: RunContext,
     if not pulses_path.exists():
         raise FileNotFoundError(f"{pulses_path} not found — run `ambe mc process` first")
 
-    pulses   = pd.read_parquet(pulses_path)
+    # --- chunked read: process one _source_file at a time ---------------------
+    # Loading the whole pulses parquet at once (e.g. 78M rows / 1.4 GB on disk)
+    # explodes to ~12-15 GB in RAM and OOMs on small nodes. Instead read it in
+    # file-sized chunks: the per-event loop below is row-wise (OPTICS clusters
+    # within a single event; the residual filter is a per-hit cut), so chunking
+    # by _source_file is behaviour-preserving — identical feature rows, bounded
+    # peak RAM (~one file's hits). Only the columns the loop actually touches are
+    # read, halving memory again.
+    import pyarrow.parquet as pq
+    from . import cc_selection
+
+    PULSE_COLS = ["eventID", "pmtID", "t", "x", "y", "z", "pe",
+                  "truth_class", "is_neutron", "is_untraced",
+                  "ancestor_trackID", "ancestor_pdg", "cc_pass"]
+    pf = pq.ParquetFile(str(pulses_path))
+    avail_cols = set(pf.schema_arrow.names)
+    read_cols  = [c for c in PULSE_COLS if c in avail_cols]
+    has_source = "_source_file" in avail_cols
+    if has_source and "_source_file" not in read_cols:
+        read_cols = read_cols + ["_source_file"]
+
+    # Cluster sidecar is small (one row per CF cluster) — safe to hold fully, but
+    # read only what assign_clusterfinder_labels needs.
     clusters = pd.read_parquet(clusters_path) if clusters_path.exists() else None
 
-    # Ensure pe column exists (fallback to 1.0 if processor pre-dates this change)
-    if "pe" not in pulses.columns:
-        pulses["pe"] = 1.0
-        print("[cluster_features] WARN: 'pe' column missing — "
-              "re-run `ambe mc process` to include hitPE.  Defaulting to 1.0.")
-
-    # Reduce to the delayed residual (CC-passing, prompt window removed) so the
-    # cluster features describe the post-muon hit population. Same cut as OPTICS.
-    from . import cc_selection
-    pulses = cc_selection.apply_residual_filter(pulses, ctx, verbose=True)
-
-    rows = []
-    event_ids = pulses["eventID"].unique()
     src_str = (f"({source_pos_m[0]:.2f}, {source_pos_m[1]:.2f}, "
                f"{source_pos_m[2]:.2f}) m"
                if source_pos_m is not None else "none")
-    print(f"[cluster_features] {len(event_ids)} events  |  "
+    print(f"[cluster_features] chunked read ({pf.num_row_groups} row groups, "
+          f"{pf.metadata.num_rows:,} hits)  |  "
           f"OPTICS config: ms={min_samples} xi={xi} t_unit={t_unit_ns}ns  "
           f"prefilter={hit_prefilter_ns}ns  source_tof={src_str}")
 
-    t_start     = time.time()
-    n_total     = len(event_ids)
-    print_every = max(1, n_total // 20)   # ~20 progress lines over the full run
+    rows = []
+    t_start = time.time()
+    n_groups = pf.num_row_groups
 
-    has_cc = "cc_pass" in pulses.columns
-    for i_ev, evid in enumerate(event_ids):
-        df_ev = pulses[pulses["eventID"] == evid].reset_index(drop=True)
-        if len(df_ev) < min_pulses_per_event:
+    # Iterate row groups (one per source file in productionv2 output). If a future
+    # writer packs multiple files per group, the per-event loop still works — the
+    # only invariant we need is that all hits of one event sit in the same chunk,
+    # which holds because mc.processor writes each file's events contiguously.
+    for i_grp in range(n_groups):
+        chunk = pf.read_row_group(i_grp, columns=read_cols).to_pandas()
+        if "pe" not in chunk.columns:
+            chunk["pe"] = 1.0
+
+        # Reduce to the delayed residual (CC-passing, prompt window removed) for
+        # THIS chunk — same per-hit cut as the whole-table path.
+        chunk = cc_selection.apply_residual_filter(chunk, ctx, verbose=False)
+        if not len(chunk):
             continue
-        # cc_pass is constant within an event (merged per-event by mc.processor)
-        ev_cc_pass = bool(df_ev["cc_pass"].iloc[0]) if has_cc and len(df_ev) else True
 
-        df_cl = (clusters[clusters["eventID"] == evid].reset_index(drop=True)
-                 if clusters is not None else None)
+        event_ids = chunk["eventID"].unique()
+        has_cc = "cc_pass" in chunk.columns
+        for evid in event_ids:
+            df_ev = chunk[chunk["eventID"] == evid].reset_index(drop=True)
+            if len(df_ev) < min_pulses_per_event:
+                continue
+            # cc_pass is constant within an event (merged per-event by mc.processor)
+            ev_cc_pass = bool(df_ev["cc_pass"].iloc[0]) if has_cc and len(df_ev) else True
 
-        # Pre-filter and truth mask (same logic as optics.py)
-        if hit_prefilter_ns > 0:
-            df_optics = _prefilter_hits(df_ev, df_cl, hit_prefilter_ns)
-        else:
-            df_optics = df_ev
+            df_cl = (clusters[clusters["eventID"] == evid].reset_index(drop=True)
+                     if clusters is not None else None)
 
-        truth_mask = _apply_truth_window(df_ev, truth_window_ns)
+            # Pre-filter and truth mask (same logic as optics.py)
+            if hit_prefilter_ns > 0:
+                df_optics = _prefilter_hits(df_ev, df_cl, hit_prefilter_ns)
+            else:
+                df_optics = df_ev
 
-        # Run OPTICS (with source ToF correction if source_pos_m provided)
-        labels_optics = run_optics_on_event(df_optics, min_samples=min_samples,
-                                            xi=xi, t_unit_ns=t_unit_ns,
-                                            source_pos_m=source_pos_m)
+            truth_mask = _apply_truth_window(df_ev, truth_window_ns)
 
-        # Re-align to full event
-        if len(df_optics) < len(df_ev):
-            labels_full = np.full(len(df_ev), -1, dtype=int)
-            labels_full[df_optics.index] = labels_optics
-        else:
-            labels_full = labels_optics
-
-        # Also get CF labels for comparison
-        cf_labels = (assign_clusterfinder_labels(df_ev, df_cl)
-                     if df_cl is not None else np.full(len(df_ev), -1, dtype=int))
-
-        # Per-event neutron capture reference time (for gamma-cluster tagging)
-        neu_hits_t = df_ev.loc[df_ev["truth_class"].isin(NEUTRON_CLASSES), "t"]
-        neu_ref_t  = float(neu_hits_t.median()) if len(neu_hits_t) >= 1 else float("nan")
-
-        # Extract features per cluster — both OPTICS and CF
-        for method, lbls in [("optics", labels_full), ("clusterfinder", cf_labels)]:
-            unique_clusters = [c for c in np.unique(lbls) if c >= 0]
-            for cid in unique_clusters:
-                mask = (lbls == cid)
-                df_clust = df_ev[mask].reset_index(drop=True)
-                feats = compute_cluster_features(df_clust, geo,
+            # Run OPTICS (with source ToF correction if source_pos_m provided)
+            labels_optics = run_optics_on_event(df_optics, min_samples=min_samples,
+                                                xi=xi, t_unit_ns=t_unit_ns,
                                                 source_pos_m=source_pos_m)
-                if not feats:
-                    continue
-                is_n, dom_tid = _truth_label_cluster(mask, df_ev, truth_mask)
-                comp = _hit_composition(mask, df_ev)
 
-                # Prompt-signal flag: cluster is prompt AmBe gamma, muon light, etc.
-                # Tagged by timing (early arrival) OR composition (class-5 dominant
-                # with only stray neutron contamination ≤ PROMPT_SIGNAL_MAX_NEUTRON_HITS).
-                cluster_offset = (feats["t_mean"] - neu_ref_t
-                                  if not (neu_ref_t != neu_ref_t) else float("nan"))
-                timing_prompt = (cluster_offset < PROMPT_SIGNAL_THRESHOLD_NS
-                                 if cluster_offset == cluster_offset else False)
-                comp_prompt   = (comp["frac_nonneutron"] > 0.5 and
-                                 comp["n_neutron"] <= PROMPT_SIGNAL_MAX_NEUTRON_HITS)
-                is_prompt = int(timing_prompt or comp_prompt)
+            # Re-align to full event
+            if len(df_optics) < len(df_ev):
+                labels_full = np.full(len(df_ev), -1, dtype=int)
+                labels_full[df_optics.index] = labels_optics
+            else:
+                labels_full = labels_optics
 
-                row = {
-                    "eventID":                 int(evid),
-                    "method":                  method,
-                    "cluster_id":              int(cid),
-                    "is_truth_neutron":        is_n,
-                    "dominant_trackID":        dom_tid,
-                    "cluster_time_offset_ns":  round(cluster_offset, 1)
-                                               if cluster_offset == cluster_offset
-                                               else float("nan"),
-                    "is_prompt_cluster":       is_prompt,
-                    "cc_pass":                 int(ev_cc_pass),
-                }
-                row.update(feats)
-                row.update(comp)
-                rows.append(row)
+            # Also get CF labels for comparison
+            cf_labels = (assign_clusterfinder_labels(df_ev, df_cl)
+                         if df_cl is not None else np.full(len(df_ev), -1, dtype=int))
 
-        if (i_ev + 1) % print_every == 0 or (i_ev + 1) == n_total:
-            elapsed   = time.time() - t_start
-            rate      = (i_ev + 1) / elapsed
-            remaining = (n_total - i_ev - 1) / rate if rate > 0 else 0
-            print(f"[cluster_features]  {i_ev+1:5d}/{n_total}  "
-                  f"({100*(i_ev+1)/n_total:.0f}%)  "
-                  f"elapsed={elapsed:.0f}s  rate={rate:.1f} ev/s  "
-                  f"ETA={remaining:.0f}s  clusters={len(rows)}", flush=True)
+            # Per-event neutron capture reference time (for gamma-cluster tagging)
+            neu_hits_t = df_ev.loc[df_ev["truth_class"].isin(NEUTRON_CLASSES), "t"]
+            neu_ref_t  = float(neu_hits_t.median()) if len(neu_hits_t) >= 1 else float("nan")
+
+            # Extract features per cluster — both OPTICS and CF
+            for method, lbls in [("optics", labels_full), ("clusterfinder", cf_labels)]:
+                unique_clusters = [c for c in np.unique(lbls) if c >= 0]
+                for cid in unique_clusters:
+                    mask = (lbls == cid)
+                    df_clust = df_ev[mask].reset_index(drop=True)
+                    feats = compute_cluster_features(df_clust, geo,
+                                                    source_pos_m=source_pos_m)
+                    if not feats:
+                        continue
+                    is_n, dom_tid = _truth_label_cluster(mask, df_ev, truth_mask)
+                    comp = _hit_composition(mask, df_ev)
+
+                    # Prompt-signal flag: cluster is prompt AmBe gamma, muon light, etc.
+                    # Tagged by timing (early arrival) OR composition (class-5 dominant
+                    # with only stray neutron contamination ≤ PROMPT_SIGNAL_MAX_NEUTRON_HITS).
+                    cluster_offset = (feats["t_mean"] - neu_ref_t
+                                      if not (neu_ref_t != neu_ref_t) else float("nan"))
+                    timing_prompt = (cluster_offset < PROMPT_SIGNAL_THRESHOLD_NS
+                                     if cluster_offset == cluster_offset else False)
+                    comp_prompt   = (comp["frac_nonneutron"] > 0.5 and
+                                     comp["n_neutron"] <= PROMPT_SIGNAL_MAX_NEUTRON_HITS)
+                    is_prompt = int(timing_prompt or comp_prompt)
+
+                    row = {
+                        "eventID":                 int(evid),
+                        "method":                  method,
+                        "cluster_id":              int(cid),
+                        "is_truth_neutron":        is_n,
+                        "dominant_trackID":        dom_tid,
+                        "cluster_time_offset_ns":  round(cluster_offset, 1)
+                                                   if cluster_offset == cluster_offset
+                                                   else float("nan"),
+                        "is_prompt_cluster":       is_prompt,
+                        "cc_pass":                 int(ev_cc_pass),
+                    }
+                    row.update(feats)
+                    row.update(comp)
+                    rows.append(row)
+
+        # Per-chunk progress (one line per source file / row group).
+        elapsed = time.time() - t_start
+        rate    = (i_grp + 1) / elapsed if elapsed > 0 else 0
+        eta     = (n_groups - i_grp - 1) / rate if rate > 0 else 0
+        print(f"[cluster_features]  chunk {i_grp+1:4d}/{n_groups}  "
+              f"({100*(i_grp+1)/n_groups:.0f}%)  "
+              f"elapsed={elapsed:.0f}s  ETA={eta:.0f}s  "
+              f"clusters={len(rows)}", flush=True)
 
     df = pd.DataFrame(rows)
     print(f"[cluster_features] extracted {len(df)} cluster records  "
@@ -1003,46 +1029,46 @@ def extract_all_features(ctx: RunContext,
 # --------------------------------------------------------------------------- #
 
 FEATURE_LABELS = {
-    # Core timing — std-based (kept for comparison)
-    "n_hits":              "Number of PMT hits",
-    "sigma_t":             "Hit time RMS — raw (ns)",
-    "sigma_t_corr":        "Hit time RMS — offset-corrected (ns)",
-    "sigma_t_tof":         "Hit time RMS — ToF-corrected (ns)",
-    # MAD-based timing (preferred for MVA — robust to thermalization outliers)
-    "sigma_t_mad":         "Hit time MAD — raw (ns)  [robust]",
-    "sigma_t_mad_corr":    "Hit time MAD — offset-corrected (ns)  [robust]",
-    "sigma_t_mad_tof":     "Hit time MAD — ToF-corrected (ns)  [robust]",
+    # Timing — RMS-based
+    "n_hits":              "Number of PMT Hits",
+    "sigma_t":             "Hit Time RMS, raw (ns)",
+    "sigma_t_corr":        "Hit Time RMS, offset-corrected (ns)",
+    "sigma_t_tof":         "Hit Time RMS, ToF-corrected (ns)",
+    # Timing — MAD-based (robust to outliers)
+    "sigma_t_mad":         "Hit Time Spread, raw (ns)",
+    "sigma_t_mad_corr":    "Hit Time Spread, offset-corrected (ns)",
+    "sigma_t_mad_tof":     "Hit Time Spread, ToF-corrected (ns)",
     # Direct-light window
-    "n_hits_early":        "Hits within ±10 ns of cluster median (direct light)",
-    "sigma_t_early_mad":   "Hit time MAD — direct-light window only (ns)",
-    "t_window_80pct":      "Narrowest window containing 80% of hits (ns)",
+    "n_hits_early":        "Direct-Light Hits (within ±10 ns of median)",
+    "sigma_t_early_mad":   "Hit Time Spread, direct-light window (ns)",
+    "t_window_80pct":      "Time Window Containing 80% of Hits (ns)",
     # Charge / spatial
-    "pe_total":            "Total PE",
-    "pe_balance":          "Charge balance  (max−min)/total  [quadrant]",
-    "charge_bal_legacy":   "Legacy charge balance  sqrt(ΣQ²/ΣQ² − 1/121)  [per-PMT]",
-    "spatial_rms":         "Spatial RMS of hit PMTs  (m)",
-    "d_wall":              "Distance to nearest wall  (m)",
-    "d_source":            "Distance from vertex to AmBe source  (m)",
+    "pe_total":            "Total Charge (PE)",
+    "pe_balance":          "Charge Asymmetry (quadrant balance)",
+    "charge_bal_legacy":   "Charge Balance",
+    "spatial_rms":         "Spatial RMS of Hit PMTs (m)",
+    "d_wall":              "Distance to Nearest Wall (m)",
+    "d_source":            "Distance from Vertex to Source (m)",
     # Isotropy β1–β5 (SK convention, PE-weighted centroid vertex)
-    "beta1":               "Isotropy β₁  (Legendre P₁, SK)",
-    "beta2":               "Isotropy β₂  (Legendre P₂, SK)",
-    "beta3":               "Isotropy β₃  (Legendre P₃, SK)",
-    "beta4":               "Isotropy β₄  (Legendre P₄, SK)",
-    "beta5":               "Isotropy β₅  (Legendre P₅, SK)",
+    "beta1":               r"Isotropy $\beta_1$",
+    "beta2":               r"Isotropy $\beta_2$",
+    "beta3":               r"Isotropy $\beta_3$",
+    "beta4":               r"Isotropy $\beta_4$",
+    "beta5":               r"Isotropy $\beta_5$",
     # Gauss-Newton fitted vertex
-    "fit_rms_ns":          "Vertex fit timing RMS (ns)",
-    "fit_converged":       "Vertex fit converged  (0/1)",
-    "n_fit_hits":          "N hits used in vertex fit",
-    "d_wall_fit":          "Distance to wall — fitted vertex  (m)",
-    "d_source_fit":        "Distance to AmBe source — fitted vertex  (m)",
-    "beta1_fit":           "Isotropy β₁ — fitted vertex",
-    "beta2_fit":           "Isotropy β₂ — fitted vertex",
-    "beta3_fit":           "Isotropy β₃ — fitted vertex",
-    "beta4_fit":           "Isotropy β₄ — fitted vertex",
-    "beta5_fit":           "Isotropy β₅ — fitted vertex",
-    "sigma_t_mad_tof_fit": "σ_t MAD — ToF-corrected (fitted vertex)  (ns)",
-    "fit_goodness_init":   "SK FitGoodness — centroid vertex  (0–1)",
-    "fit_goodness_reco":   "SK FitGoodness — fitted vertex  (0–1)",
+    "fit_rms_ns":          "Vertex Fit Timing RMS (ns)",
+    "fit_converged":       "Vertex Fit Converged",
+    "n_fit_hits":          "Hits Used in Vertex Fit",
+    "d_wall_fit":          "Distance to Wall, fitted vertex (m)",
+    "d_source_fit":        "Distance to Source, fitted vertex (m)",
+    "beta1_fit":           r"Isotropy $\beta_1$, fitted vertex",
+    "beta2_fit":           r"Isotropy $\beta_2$, fitted vertex",
+    "beta3_fit":           r"Isotropy $\beta_3$, fitted vertex",
+    "beta4_fit":           r"Isotropy $\beta_4$, fitted vertex",
+    "beta5_fit":           r"Isotropy $\beta_5$, fitted vertex",
+    "sigma_t_mad_tof_fit": "Hit Time Spread, ToF-corrected, fitted vertex (ns)",
+    "fit_goodness_init":   "Fit Goodness, centroid vertex",
+    "fit_goodness_reco":   "Fit Goodness, fitted vertex",
 }
 
 

@@ -7,7 +7,7 @@ SAME observable (earliest-hit cluster time) per source position:
 
   Selection 1 — OPTICS + frozen MVA   : scored OPTICS parquet, rf_score>=cut,
                                          clusterTime = clusterTime_earliest [ns]
-  Selection 2 — ClusterFinder + cut   : raw CF parquet, PE<60/CB<0.5/nHits>10,
+  Selection 2 — ClusterFinder + cut   : raw CF parquet, PE<80/CB<0.45/nHits>9,
                                          clusterTime = native CF clusterTime [ns]
 
 Both fit neut_capture (thermalisation x exp decay + bg), 70 bins over [0,70] us,
@@ -40,7 +40,7 @@ from ambe.plots.combined import neut_capture              # noqa: E402  A*(1-e^-
 from ambe.data.processor import AmBeNeutronProcessing      # noqa: E402
 
 SOURCE_POSITIONS = AmBeNeutronProcessing().source_positions
-PRESEL_PE_MAX, PRESEL_CB_MAX, PRESEL_HITS_MIN = 60.0, 0.5, 10
+PRESEL_PE_MAX, PRESEL_CB_MAX, PRESEL_HITS_MIN = 80.0, 0.45, 9
 BINS, TRANGE, FIT_LO, FIT_HI = 70, (0.0, 70.0), 2.0, 65.0
 SEL1_C, SEL2_C = "#0077BB", "#EE7733"
 

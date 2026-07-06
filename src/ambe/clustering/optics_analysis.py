@@ -66,8 +66,8 @@ with PdfPages('output.pdf') as pdf:
         df_optics_columns.columns = ['cluster_category', 'total_hits_in_row', 'noise_hits_in_row','signal_hits_in_row']
         df_optics = pd.concat([df_optics, df_optics_columns], axis=1)
 
-        df_optics_filtered = df_optics[(df_optics["clusterPE"] < 60) & (df_optics["clusterChargeBalance"] < 0.5) & (df_optics["clusterHits"] > 10)]
-        df_traditional_filtered = df_traditional[(df_traditional["clusterPE"] < 60) & (df_traditional["clusterChargeBalance"] < 0.5) & (df_traditional["clusterHits"] > 10)]
+        df_optics_filtered = df_optics[(df_optics["clusterPE"] < 80) & (df_optics["clusterChargeBalance"] < 0.45) & (df_optics["clusterHits"] > 9)]
+        df_traditional_filtered = df_traditional[(df_traditional["clusterPE"] < 80) & (df_traditional["clusterChargeBalance"] < 0.45) & (df_traditional["clusterHits"] > 9)]
 
         optics_good_events = set(df_optics_filtered[df_optics_filtered['cluster_category'] == 1]['eventTankTime'].unique())
         print(f"total OPTICS events: {len(optics_good_events)} ")
@@ -168,7 +168,7 @@ with PdfPages('output.pdf') as pdf:
                     color="lightblue", linewidth=0.5, align='left', density=False)
             plt.xlabel('Neutron multiplicity for Events')
             plt.ylabel('Counts')
-            plt.title(f'AmBe Neutron multiplicity distribution for run {run} (PE < 60, CCB < 0.5, CH < 10) - AGREED EVENTS')
+            plt.title(f'AmBe Neutron multiplicity distribution for run {run} (PE < 80, CCB < 0.45, CH > 9) - AGREED EVENTS')
             plt.tight_layout()
             pdf.savefig()
             plt.close()

@@ -4,7 +4,7 @@ Selection-1-vs-Selection-2 benchmark — the clean 2x2 the earlier comparison
 conflated.  Two axes, evaluated independently on the SAME MC truth:
 
     clustering axis :  OPTICS        vs  ClusterFinder
-    discriminant axis: legacy box-cut (PE<60, CB<0.5, nHits>10)  vs  frozen MVA
+    discriminant axis: legacy box-cut (PE<80, CB<0.45, nHits>9)  vs  frozen MVA
 
 The earlier report applied the legacy cut to OPTICS clusters and CALLED it the
 "ClusterFinder" baseline — so it measured MVA-vs-cut on identical OPTICS inputs,
@@ -40,8 +40,9 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from ambe.plotting import set_style  # noqa: E402
 
 # Legacy box-cut (Selection-2 discriminant) — single source of truth.
-# Matches analyze_optics_beamcluster_data.py:87-89 and optics_analysis.py:69.
-PRESEL_PE_MAX, PRESEL_CB_MAX, PRESEL_HITS_MIN = 60.0, 0.5, 10
+# Unified across all stages to analyze_optics_beamcluster_data.py:87-89 and
+# plot_ambe_neutron_multiplicity.py:50-52  (PE<80, CB<0.45, nHits>9).
+PRESEL_PE_MAX, PRESEL_CB_MAX, PRESEL_HITS_MIN = 80.0, 0.45, 9
 NEUTRON_CLASSES = (1, 2, 3, 4)
 COLORS = {"optics": "#0077BB", "clusterfinder": "#EE7733"}
 
@@ -124,7 +125,7 @@ def main() -> None:
         # discriminant KEY is shared across methods (so the grouped bar plot can
         # pair OPTICS vs CF); the per-method threshold value lives in `note`.
         for disc, sel, note in [
-            ("legacy box-cut", legacy_cut(sub), "PE<60,CB<0.5,nHits>10"),
+            ("legacy box-cut", legacy_cut(sub), "PE<80,CB<0.45,nHits>9"),
             (f"MVA frozen @{args.score_cut:.3f}", sub[sc] >= args.score_cut, "frozen rf cut"),
             (f"MVA self {int(args.sig_eff*100)}% eff", sub[sc] >= thr_self,
              f"rf>={thr_self:.3f}"),

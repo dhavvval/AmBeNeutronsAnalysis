@@ -6,7 +6,7 @@ Neutron-cluster multiplicity per AmBe event, for the two selections, drawn on
 SEPARATE pages (not overlaid):
 
   Selection 1 : OPTICS + frozen MVA            (rf_score >= --score-cut)
-  Selection 2 : OPTICS + legacy box-cut        (passes_stage1: PE<60/CB<0.5/nHits>10)
+  Selection 2 : OPTICS + legacy box-cut        (passes_stage1: PE<80/CB<0.45/nHits>9)
 
 Design follows the established toolkit style (set_style; integer-CENTERED bars via
 np.arange + ax.bar — NOT bins=range(...)+align='left', which mis-aligns integer
@@ -155,7 +155,7 @@ def main() -> None:
                             f"{run_label} · {args.score_col} ≥ {args.score_cut:.2f}",
                             args.max_n)
         s2 = selection_page(pdf, m2, SEL2_COLOR, "Selection 2 — OPTICS + legacy cut",
-                            f"{run_label} · PE<60 / CB<0.5 / nHits>10",
+                            f"{run_label} · PE<80 / CB<0.45 / nHits>9",
                             args.max_n)
         overlay_page(pdf, m1, m2, args.max_n, run_label)
 

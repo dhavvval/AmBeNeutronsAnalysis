@@ -127,7 +127,7 @@ _EXTERNAL_BKG_EXCLUDE = {
 
 # Background parquet paths for named shorthand options
 _NAMED_BACKGROUNDS = {
-    "offbeam": Path("/Users/dajana/Documents/AmBe/off-beam/off-beam_background_features.parquet"),
+    "offbeam": Path("/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/beamoff/background_optics_cluster_features.parquet"),
     "michel":  Path("/Users/dajana/Documents/AmBe/michel-electron/michel_background_features.parquet"),
 }
 
@@ -165,7 +165,8 @@ def load_paths(config_path: str) -> tuple[str, Path, Path, Path, str]:
 
 def prepare_data(df: pd.DataFrame,
                  method: str = "optics",
-                 bkg_mode: str = "all") -> tuple[np.ndarray, np.ndarray, list[str], pd.DataFrame]:
+                 bkg_mode: str = "all",
+                 keep_prompt_bkg: bool = False) -> tuple[np.ndarray, np.ndarray, list[str], pd.DataFrame]:
     """
     Filter to one clustering method, build feature matrix and binary labels.
 
@@ -173,6 +174,14 @@ def prepare_data(df: pd.DataFrame,
       "all"       — signal vs all non-neutron non-prompt clusters (default)
       "darknoise" — signal vs clusters where dark noise (class 0) is the dominant component;
                     excludes class-5 (non-physics) dominated clusters from the background sample
+
+    keep_prompt_bkg:
+      If True, do NOT drop is_prompt_cluster==1 clusters from the background. The
+      prompt-cluster exclusion was inherited from AmBe calibration (where the prompt
+      gamma is a signal-side concern). In the CC-neutrino context those early-timing
+      non-neutron-physics clusters ARE legitimate background, and excluding them
+      shrinks the MC background pool ~3x (e.g. optics 5300 -> 1773), starving the
+      1:1-capped training set. Set True to use the full non-neutron-dominated pool.
 
     Returns X, y, feature_names, filtered_sub_df.
     """
@@ -221,7 +230,10 @@ def prepare_data(df: pd.DataFrame,
             is_bkg = ~sub["dominant_class"].isin(NEUTRON_CLASSES)
         else:
             is_bkg = sub["is_truth_neutron"] == 0
-        if "is_prompt_cluster" in sub.columns:
+        # Prompt-cluster exclusion (default). With keep_prompt_bkg=True we KEEP the
+        # early-timing non-neutron-physics clusters as background — ~3x more bkg
+        # stats, which the 1:1 cap badly needs in the CC-neutrino context.
+        if "is_prompt_cluster" in sub.columns and not keep_prompt_bkg:
             is_bkg = is_bkg & (sub["is_prompt_cluster"] == 0)
 
     mask = is_sig | is_bkg
@@ -568,6 +580,13 @@ def train_nn(X_tr: np.ndarray, y_tr: np.ndarray):
     if not _HAS_KERAS:
         return None, None, None
 
+    # Seed ALL of TF/Keras RNG (weight init, dropout masks, validation-split
+    # shuffle) so the NN is bit-reproducible run-to-run — matching the
+    # random_state=42 used for the data split and the tree models. Without this
+    # the NN weight init is random each run, so retraining gives a slightly
+    # different network (the 30.3<->33.0 us OPTICS+NN drift). Seeding fixes that.
+    tf.keras.utils.set_random_seed(42)
+
     scaler = StandardScaler()
     X_sc = scaler.fit_transform(X_tr)
     sw = compute_sample_weight("balanced", y_tr)
@@ -605,21 +624,21 @@ def _cv_roc_page(pdf, cv_aucs: dict, cv_curves: dict, run_name: str):
     """
     keys = list(cv_aucs.keys())
     fig, axes = plt.subplots(1, len(keys), figsize=(6 * len(keys), 5), squeeze=False)
-    fig.suptitle(f"{run_name}  —  Cross-validation ROC  ({len(list(cv_curves.values())[0])}-fold)",
-                 fontsize=11)
+    nfold = len(list(cv_curves.values())[0])
+    fig.suptitle(f"Cross-Validation ROC  ({nfold}-fold)", fontsize=12)
 
     for ax, key in zip(axes[0], keys):
         colors = plt.cm.Blues(np.linspace(0.35, 0.85, len(cv_curves[key])))
         for i, (fpr, tpr) in enumerate(cv_curves[key]):
             ax.plot(fpr, tpr, color=colors[i], lw=1.2, alpha=0.8,
-                    label=f"fold {i+1}  AUC={cv_aucs[key][i]:.3f}" if i == 0 else
-                          f"fold {i+1}  AUC={cv_aucs[key][i]:.3f}")
+                    label=f"Fold {i+1}  (AUC = {cv_aucs[key][i]:.3f})")
         ax.plot([0, 1], [0, 1], "k:", lw=1)
         mean_auc = float(np.mean(cv_aucs[key]))
         std_auc  = float(np.std(cv_aucs[key]))
-        ax.set_title(f"{_NAME[key]}\nAUC = {mean_auc:.4f} ± {std_auc:.4f}", fontsize=10)
-        ax.set_xlabel("False positive rate"); ax.set_ylabel("True positive rate")
-        ax.legend(fontsize=7, loc="lower right"); ax.grid(alpha=0.3)
+        ax.set_title(f"{_NAME[key]}\nAUC = {mean_auc:.3f} ± {std_auc:.3f}", fontsize=11)
+        ax.set_xlabel("False Positive Rate", fontsize=10)
+        ax.set_ylabel("True Positive Rate", fontsize=10)
+        ax.legend(fontsize=8, loc="lower right"); ax.grid(alpha=0.3)
         ax.set_xlim(0, 1); ax.set_ylim(0, 1.02)
 
     plt.tight_layout()
@@ -629,16 +648,16 @@ def _cv_roc_page(pdf, cv_aucs: dict, cv_curves: dict, run_name: str):
 def _roc_page(pdf, y_te: np.ndarray, model_scores: list, run_name: str, method: str):
     """model_scores: list of (display_name, test_scores, linestyle)."""
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    fig.suptitle(f"{run_name}  [{method}]  —  Cluster-level ROC", fontsize=11)
+    fig.suptitle("Neutron Classifier — ROC Curves (test set)", fontsize=12)
 
     ax = axes[0]
     for name, sc, ls in model_scores:
         fpr, tpr, _ = roc_curve(y_te, sc)
         auc = roc_auc_score(y_te, sc)
-        ax.plot(fpr, tpr, lw=2, ls=ls, label=f"{name}  AUC = {auc:.3f}")
+        ax.plot(fpr, tpr, lw=2, ls=ls, label=f"{name}  (AUC = {auc:.3f})")
     ax.plot([0, 1], [0, 1], "k:", lw=1)
-    ax.set_xlabel("False positive rate  (background efficiency)")
-    ax.set_ylabel("True positive rate  (signal efficiency)")
+    ax.set_xlabel("Background Efficiency (False Positive Rate)", fontsize=10)
+    ax.set_ylabel("Neutron Efficiency (True Positive Rate)", fontsize=10)
     ax.legend(fontsize=9); ax.grid(alpha=0.3)
     ax.set_xlim(0, 1); ax.set_ylim(0, 1.02)
 
@@ -646,8 +665,8 @@ def _roc_page(pdf, y_te: np.ndarray, model_scores: list, run_name: str, method: 
     for name, sc, ls in model_scores:
         fpr, tpr, _ = roc_curve(y_te, sc)
         ax.plot(tpr, 1 - fpr, lw=2, ls=ls, label=name)
-    ax.set_xlabel("Signal efficiency")
-    ax.set_ylabel("Background rejection  (1 − FPR)")
+    ax.set_xlabel("Neutron Efficiency", fontsize=10)
+    ax.set_ylabel("Background Rejection", fontsize=10)
     ax.legend(fontsize=9); ax.grid(alpha=0.3)
     ax.set_xlim(0, 1); ax.set_ylim(0, 1.02)
 
@@ -661,18 +680,19 @@ def _score_dist_page(pdf, y_te: np.ndarray, model_scores: list, run_name: str):
     ncols = min(n, 2)
     nrows = (n + 1) // 2
     fig, axes = plt.subplots(nrows, ncols, figsize=(13, 5 * nrows), squeeze=False)
-    fig.suptitle(f"{run_name}  —  Score distributions (test set)", fontsize=11)
+    fig.suptitle("Classifier Score Distributions (test set)", fontsize=12)
     bins = np.linspace(0, 1, 40)
     for idx, (name, sc, _) in enumerate(model_scores):
         ax = axes[idx // ncols][idx % ncols]
         auc = roc_auc_score(y_te, sc)
         kw = dict(bins=bins, density=True, alpha=0.6, edgecolor="none")
         ax.hist(sc[y_te == 1], color=COLORS["signal"],
-                label=f"Signal  n={int((y_te==1).sum())}", **kw)
+                label=f"Neutron  (n = {int((y_te==1).sum())})", **kw)
         ax.hist(sc[y_te == 0], color=COLORS["background"],
-                label=f"Background  n={int((y_te==0).sum())}", **kw)
-        ax.set_xlabel(f"{name} score"); ax.set_ylabel("Density")
-        ax.set_title(f"{name}  AUC = {auc:.3f}")
+                label=f"Background  (n = {int((y_te==0).sum())})", **kw)
+        ax.set_xlabel(f"{name} Score", fontsize=10)
+        ax.set_ylabel("Normalised Counts", fontsize=10)
+        ax.set_title(f"{name}  —  AUC = {auc:.3f}", fontsize=11)
         ax.legend(fontsize=8); ax.grid(alpha=0.3)
     for idx in range(len(model_scores), nrows * ncols):
         axes[idx // ncols][idx % ncols].set_visible(False)
@@ -688,7 +708,7 @@ def _importance_page(pdf, tree_models: dict, features: list, run_name: str):
     fig, axes = plt.subplots(1, len(has_imp), figsize=(7 * len(has_imp), 5))
     if len(has_imp) == 1:
         axes = [axes]
-    fig.suptitle(f"{run_name}  —  Feature importances", fontsize=11)
+    fig.suptitle("Feature Importances", fontsize=12)
     for ax, (key, model) in zip(axes, has_imp):
         imp = model.feature_importances_
         idx = np.argsort(imp)[::-1]
@@ -696,8 +716,8 @@ def _importance_page(pdf, tree_models: dict, features: list, run_name: str):
         ax.set_xticks(range(len(imp)))
         ax.set_xticklabels([features[i] for i in idx],
                            rotation=45, ha="right", fontsize=8)
-        ax.set_ylabel("Importance")
-        ax.set_title(_NAME[key])
+        ax.set_ylabel("Relative Importance", fontsize=10)
+        ax.set_title(_NAME[key], fontsize=11)
         ax.grid(axis="y", alpha=0.3)
     plt.tight_layout()
     pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
@@ -706,7 +726,7 @@ def _importance_page(pdf, tree_models: dict, features: list, run_name: str):
 def _top_features_page(pdf, X_te, y_te, rf, features, run_name):
     top6 = np.argsort(rf.feature_importances_)[::-1][:6]
     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-    fig.suptitle(f"{run_name}  —  Top 6 features by RF importance", fontsize=11)
+    fig.suptitle("Top 6 Discriminating Features (Random Forest)", fontsize=12)
     for ax, fi in zip(axes.flat, top6):
         feat = features[fi]
         sig_v = X_te[y_te == 1, fi]
@@ -715,11 +735,11 @@ def _top_features_page(pdf, X_te, y_te, rf, features, run_name):
         lo, hi = float(np.nanpercentile(all_v, 1)), float(np.nanpercentile(all_v, 99))
         bins = np.linspace(lo, hi, 35)
         kw = dict(bins=bins, density=True, alpha=0.6, edgecolor="none")
-        ax.hist(sig_v, color=COLORS["signal"],     label="Signal", **kw)
+        ax.hist(sig_v, color=COLORS["signal"],     label="Neutron", **kw)
         ax.hist(bkg_v, color=COLORS["background"], label="Background", **kw)
         imp = rf.feature_importances_[fi]
-        ax.set_title(f"{feat}  (importance = {imp:.3f})", fontsize=9)
-        ax.set_xlabel(feat, fontsize=8); ax.legend(fontsize=7); ax.grid(alpha=0.3)
+        ax.set_title(f"{feat}  (importance = {imp:.3f})", fontsize=10)
+        ax.set_xlabel(feat, fontsize=9); ax.legend(fontsize=8); ax.grid(alpha=0.3)
     plt.tight_layout()
     pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
 
@@ -727,24 +747,24 @@ def _top_features_page(pdf, X_te, y_te, rf, features, run_name):
 def _nn_history_page(pdf, history, run_name: str):
     has_auc = "val_auc" in history.history
     fig, axes = plt.subplots(1, 2 if has_auc else 1, figsize=(14 if has_auc else 8, 5), squeeze=False)
-    fig.suptitle(f"{run_name}  —  Neural network training history", fontsize=11)
+    fig.suptitle("Neural Network Training History", fontsize=12)
 
     ax = axes[0, 0]
-    ax.plot(history.history["loss"],     lw=2, label="Train loss")
-    ax.plot(history.history["val_loss"], lw=2, ls="--", label="Val loss")
+    ax.plot(history.history["loss"],     lw=2, label="Training")
+    ax.plot(history.history["val_loss"], lw=2, ls="--", label="Validation")
     best_epoch = int(np.argmin(history.history["val_loss"])) + 1
-    ax.axvline(best_epoch, color="gray", ls=":", lw=1, label=f"Best loss epoch {best_epoch}")
-    ax.set_xlabel("Epoch"); ax.set_ylabel("Binary cross-entropy")
-    ax.set_title("Loss"); ax.legend(); ax.grid(alpha=0.3)
+    ax.axvline(best_epoch, color="gray", ls=":", lw=1, label=f"Best epoch ({best_epoch})")
+    ax.set_xlabel("Epoch", fontsize=10); ax.set_ylabel("Binary Cross-Entropy", fontsize=10)
+    ax.set_title("Loss", fontsize=11); ax.legend(fontsize=9); ax.grid(alpha=0.3)
 
     if has_auc:
         ax = axes[0, 1]
-        ax.plot(history.history["auc"],     lw=2, label="Train AUC")
-        ax.plot(history.history["val_auc"], lw=2, ls="--", label="Val AUC")
+        ax.plot(history.history["auc"],     lw=2, label="Training")
+        ax.plot(history.history["val_auc"], lw=2, ls="--", label="Validation")
         best_auc_epoch = int(np.argmax(history.history["val_auc"])) + 1
-        ax.axvline(best_auc_epoch, color="gray", ls=":", lw=1, label=f"Best AUC epoch {best_auc_epoch}")
-        ax.set_xlabel("Epoch"); ax.set_ylabel("AUC")
-        ax.set_title("AUC (early-stopping monitor)"); ax.legend(); ax.grid(alpha=0.3)
+        ax.axvline(best_auc_epoch, color="gray", ls=":", lw=1, label=f"Best epoch ({best_auc_epoch})")
+        ax.set_xlabel("Epoch", fontsize=10); ax.set_ylabel("AUC", fontsize=10)
+        ax.set_title("AUC", fontsize=11); ax.legend(fontsize=9); ax.grid(alpha=0.3)
 
     plt.tight_layout()
     pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
@@ -771,17 +791,17 @@ def _event_level_page(pdf, sub, run_name, score_col="gbt_score"):
         bkg_eff.append(float((bkg["max_score"] >= t).mean()) if len(bkg) else np.nan)
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    fig.suptitle(f"{run_name}  —  Event-level  ({score_col})", fontsize=11)
+    fig.suptitle("Event-Level Neutron Selection Efficiency", fontsize=12)
 
     ax = axes[0]
     ax.plot(thresholds, sig_eff, lw=2, color=COLORS["signal"],
-            label="Signal events (has truth neutron)")
+            label="Neutron events")
     ax.plot(thresholds, bkg_eff, lw=2, color=COLORS["background"],
-            label="Background events (no truth neutron)")
+            label="Background events")
     ax.axvline(0.5, color="gray", ls="--", lw=1, label="Score = 0.5")
-    ax.set_xlabel(f"Score threshold  (max {score_col} per event)")
-    ax.set_ylabel("Fraction of events passing threshold")
-    ax.set_title("Event-level efficiency vs threshold")
+    ax.set_xlabel("Score Threshold (per-event maximum)", fontsize=10)
+    ax.set_ylabel("Fraction of Events Selected", fontsize=10)
+    ax.set_title("Efficiency vs. Score Threshold", fontsize=11)
     ax.legend(fontsize=8); ax.grid(alpha=0.3)
     ax.set_xlim(0, 1); ax.set_ylim(0, 1.02)
 
@@ -790,9 +810,9 @@ def _event_level_page(pdf, sub, run_name, score_col="gbt_score"):
     bkg_arr = np.array(bkg_eff)
     valid   = ~(np.isnan(sig_arr) | np.isnan(bkg_arr))
     ax.plot(sig_arr[valid], 1 - bkg_arr[valid], lw=2, color="darkorchid")
-    ax.set_xlabel("Signal efficiency (event level)")
-    ax.set_ylabel("Background rejection (event level)")
-    ax.set_title("Event-level ROC")
+    ax.set_xlabel("Neutron Efficiency", fontsize=10)
+    ax.set_ylabel("Background Rejection", fontsize=10)
+    ax.set_title("Event-Level ROC", fontsize=11)
     ax.grid(alpha=0.3); ax.set_xlim(0, 1); ax.set_ylim(0, 1.02)
 
     plt.tight_layout()
@@ -831,6 +851,19 @@ def score_data(model_path: Path, data_path: Path) -> Path:
     df = pd.read_parquet(data_path)
     print(f"[score] data parquet: {data_path.name}  ({len(df)} clusters)")
 
+    # Empty input (e.g. a method split with no rows — real data has no
+    # ClusterFinder clusters). sklearn predict_proba rejects a 0-row array, so
+    # write through the (empty) frame with empty score columns and return rather
+    # than crashing the wrapper that scores both OPTICS and CF splits.
+    if len(df) == 0:
+        out = df.copy()
+        for key in models.keys():
+            out[f"{key}_score"] = pd.Series(dtype=float)
+        score_path = data_path.with_name(data_path.stem + "__scored.parquet")
+        out.to_parquet(score_path, index=False)
+        print(f"[score] 0 clusters — wrote empty scored parquet -> {score_path}")
+        return score_path
+
     # Build X in the trained feature order; fill missing features with training median.
     X = np.empty((len(df), len(features)), dtype=float)
     missing = []
@@ -864,12 +897,21 @@ def score_data(model_path: Path, data_path: Path) -> Path:
         elif not _HAS_KERAS:
             print(f"[score]   WARN: tensorflow not installed — skipping NN. pip install tensorflow")
         else:
-            nn_model = tf.keras.models.load_model(keras_file)
-            X_sc = nn_meta["scaler"].transform(X)
-            out["nn_score"] = nn_model.predict(X_sc, verbose=0).ravel()
-            s = out["nn_score"]
-            print(f"[score]   nn_score: min={s.min():.3f} median={s.median():.3f} "
-                  f"max={s.max():.3f}  (frac>0.5: {(s>0.5).mean():.3f})")
+            try:
+                nn_model = tf.keras.models.load_model(keras_file)
+                X_sc = nn_meta["scaler"].transform(X)
+                out["nn_score"] = nn_model.predict(X_sc, verbose=0).ravel()
+                s = out["nn_score"]
+                print(f"[score]   nn_score: min={s.min():.3f} median={s.median():.3f} "
+                      f"max={s.max():.3f}  (frac>0.5: {(s>0.5).mean():.3f})")
+            except Exception as exc:
+                # Most common cause: the .keras file was saved by a newer Keras
+                # than the scoring env (e.g. 3.14.1 writes 'quantization_config'
+                # into Dense configs that older Keras rejects). Do NOT take down
+                # the run — the tree scores above are already computed; just skip
+                # nn_score so out.to_parquet() still persists them.
+                print(f"[score]   WARN: NN load/predict failed — skipping nn_score. "
+                      f"({type(exc).__name__}: {exc})")
 
     score_path = data_path.with_name(data_path.stem + "__scored.parquet")
     out.to_parquet(score_path, index=False)
@@ -883,7 +925,9 @@ def score_data(model_path: Path, data_path: Path) -> Path:
 
 def main():
     p = argparse.ArgumentParser(prog="mva_analysis")
-    p.add_argument("--config",    required=True,  help="Pipeline YAML config")
+    p.add_argument("--config",    default=None,
+                   help="Pipeline YAML config (required for training; for "
+                        "--score-data only needed when --model is omitted)")
     p.add_argument("--method",    default="optics",
                    choices=["optics", "clusterfinder"])
     p.add_argument("--test-size", type=float, default=0.2,
@@ -899,6 +943,12 @@ def main():
                         "'nonneutron' = class-5 dominated; "
                         "'pop2' = Population 2 near-capture clusters only. "
                         "Ignored when --external-background is set.")
+    p.add_argument("--keep-prompt-bkg", action="store_true",
+                   help="Do NOT exclude is_prompt_cluster==1 clusters from the background "
+                        "(only affects --bkg-mode all). In the CC-neutrino context the prompt "
+                        "non-neutron-physics clusters are legitimate background; keeping them "
+                        "~3x's the bkg pool so the 1:1 cap retains far more signal. Tagged "
+                        "'__keepprompt' in output filenames + model meta.")
     p.add_argument("--external-background", default=None, metavar="PATH_OR_NAME",
                    help="Use real-data background instead of MC internal background. "
                         "Pass a parquet file path, or one of the named shorthands: "
@@ -934,18 +984,31 @@ def main():
 
     # ── Application mode: score data with a frozen model, then exit ──────────
     if args.score_data is not None:
-        run_name, parquet_dir, _plots, _csv, _label = load_paths(args.config)
-        model_path = (Path(args.model) if args.model
-                      else parquet_dir / f"{run_name}__mva_frozen.pkl")
+        # --config is only needed here to DERIVE the default model path when
+        # --model is omitted. The streamlines always pass --model explicitly, so
+        # don't force --config (and don't call load_paths(None)).
+        if args.model:
+            model_path = Path(args.model)
+        else:
+            if not args.config:
+                sys.exit("[score] --score-data needs either --model <pkl> or "
+                         "--config <yaml> (to find the default frozen model).")
+            run_name, parquet_dir, _plots, _csv, _label = load_paths(args.config)
+            model_path = parquet_dir / f"{run_name}__mva_frozen.pkl"
         if not model_path.exists():
             sys.exit(f"[score] Frozen model not found: {model_path}\n"
                      f"        Create it first with: python mva_analysis.py "
-                     f"--config {args.config} --save-model")
+                     f"--config <yaml> --save-model")
         data_path = Path(args.score_data)
         if not data_path.exists():
             sys.exit(f"[score] Data features parquet not found: {data_path}")
         score_data(model_path, data_path)
         return
+
+    # ── Training mode below: --config is required here. ──────────────────────
+    if not args.config:
+        sys.exit("[mva] --config is required for training mode "
+                 "(only --score-data with --model can omit it).")
 
     if not _HAS_XGB:
         print("[mva] WARNING: xgboost not installed — skipping XGBoost.  pip install xgboost")
@@ -1009,14 +1072,19 @@ def main():
     # ── internal MC background mode (default) ────────────────────────────
     else:
         bkg_mode = args.bkg_mode
-        X, y, features, sub = prepare_data(df, method=args.method, bkg_mode=bkg_mode)
+        keep_prompt = bool(args.keep_prompt_bkg)
+        X, y, features, sub = prepare_data(df, method=args.method, bkg_mode=bkg_mode,
+                                           keep_prompt_bkg=keep_prompt)
+        excl_str = "incl. prompt" if keep_prompt else "excl. prompt"
         bkg_label_str = {"darknoise":  "dark noise only (class 0)",
                          "nonneutron": "class-5 spurious (prompt gamma + near-capture)",
                          "pop2":       "Population 2 only (near-capture, offset ~-1 ns)",
-                         "all":        "all non-neutron (excl. prompt)"}.get(bkg_mode, bkg_mode)
+                         "all":        f"all non-neutron ({excl_str})"}.get(bkg_mode, bkg_mode)
         print(f"[mva] bkg_mode={bkg_mode}  ({bkg_label_str})")
-        mode_tag = "" if bkg_mode == "all" else f"__{bkg_mode}"
-        plot_run_name = f"{display_label} [{bkg_mode} bkg]" if bkg_mode != "all" else display_label
+        kp_tag = "__keepprompt" if (keep_prompt and bkg_mode == "all") else ""
+        mode_tag = ("" if bkg_mode == "all" else f"__{bkg_mode}") + kp_tag
+        plot_run_name = (f"{display_label} [{bkg_mode} bkg{', +prompt' if kp_tag else ''}]"
+                         if (bkg_mode != "all" or kp_tag) else display_label)
         skip_event_level = False
 
     n_sig = int(y.sum())
@@ -1091,6 +1159,7 @@ def main():
                 "display_label": display_label,
                 "method": args.method,
                 "bkg_mode": args.bkg_mode if external_bkg is None else f"external:{bkg_tag}",
+                "keep_prompt_bkg": bool(args.keep_prompt_bkg) if external_bkg is None else False,
                 "cc_only": args.cc_only,
                 "max_ratio": args.max_ratio,
                 "n_sig": int(y.sum()),
