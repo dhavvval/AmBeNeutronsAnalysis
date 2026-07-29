@@ -758,6 +758,24 @@ def compute_cluster_features(df_cluster: pd.DataFrame,
     }
 
 
+# bg_class species keys (see processor.py BG_CLASS_LABELS) used for the
+# per-cluster species-composition features below. Class 1 (neutron) and 0
+# (dark noise) are excluded here since they're already covered by
+# n_neutron/n_darknoise above — this block is specifically about what's
+# behind the *non-neutron* background.
+_BG_SPECIES = {2: "muon", 3: "chgpion", 4: "proton", 5: "photon",
+               6: "kaon", 7: "epm", 8: "other"}
+
+# Root-ancestor species for the full-chain lineage features, keyed by PDG (not by
+# BackTracker class). These are the generator-level primaries actually observed to sit
+# at the top of class--5 background chains, measured on the productionv3 pilot:
+# mu- 57.9%, pi0 14.0%, pi+ 13.8%, gamma 6.9%, p 4.4%, pi- 2.0%, mu+ 0.7%.
+# pi0 matters because it is invisible as a *root* on pre-save-on-demand MC.
+_ROOT_SPECIES = {13: "muminus", -13: "muplus", 211: "piplus", -211: "piminus",
+                 111: "pizero", 22: "gamma", 2212: "proton", 2112: "neutron",
+                 11: "eminus", -11: "eplus"}
+
+
 def _hit_composition(mask: np.ndarray, df_event: pd.DataFrame) -> dict:
     """
     For one cluster defined by boolean mask, count hits by truth_class and
@@ -775,15 +793,56 @@ def _hit_composition(mask: np.ndarray, df_event: pd.DataFrame) -> dict:
         frac_nonneutron n_nonneutron / total
         frac_untraced   n_untraced / total
         dominant_class  class id of the most common component
+        n_bg_<species>      hits whose species-general immediate ancestor
+                             (bg_class, any particle) is <species> — muon,
+                             chgpion, proton, photon, kaon, epm, other
+        frac_bg_<species>   n_bg_<species> / total hits in cluster
+        n_bg_<species>_bkg  as n_bg_<species> but counting ONLY background hits
+                             (truth_class == -5)
+        frac_bg_<species>_of_bg  n_bg_<species>_bkg / n_nonneutron — what fraction
+                             OF THE NON-NEUTRON BACKGROUND itself is this species
+                             (0 if cluster has no bg hits). Uses the background-only
+                             numerator; using the all-hits one gives values > 1
+                             because capture gammas dominate bg_class==photon.
+        bg_dominant_species  most common bg_class species among this cluster's
+                             non-neutron-background hits only, or None
+
+    Full-chain lineage keys, emitted only when root_pdg is present (WCSim >= ac64522),
+    all restricted to background hits with a COMPLETE chain (lineage_status == 1):
+        n_lineage_complete / frac_lineage_complete
+        lineage_depth_mean / lineage_depth_max
+        n_bg_gamma_mediated / frac_bg_gamma_mediated   gamma anywhere in the chain
+        n_bg_carrier_mediated / frac_bg_carrier_mediated  emitted via an e+- carrier
+        n_root_<species> / frac_root_<species>_of_bg   generator-level primary at the
+                             top of the chain, e.g. root_piminus, root_pizero
+        root_dominant_species
     """
     cls       = df_event["truth_class"].to_numpy(int)[mask]
     untraced  = df_event["is_untraced"].to_numpy(int)[mask] \
                 if "is_untraced" in df_event.columns else np.zeros(mask.sum(), int)
+    bg_cls    = df_event["bg_class"].to_numpy(int)[mask] \
+                if "bg_class" in df_event.columns else np.full(mask.sum(), -5, int)
     n = int(mask.sum())
+    empty = {k: 0 for k in ["n_neutron","n_darknoise","n_nonneutron","n_untraced",
+                            "frac_neutron","frac_darknoise","frac_nonneutron",
+                            "frac_untraced","dominant_class"]}
+    empty.update({f"n_bg_{s}": 0 for s in _BG_SPECIES.values()})
+    empty.update({f"frac_bg_{s}": 0.0 for s in _BG_SPECIES.values()})
+    empty.update({f"n_bg_{s}_bkg": 0 for s in _BG_SPECIES.values()})
+    empty.update({f"frac_bg_{s}_of_bg": 0.0 for s in _BG_SPECIES.values()})
+    empty["bg_dominant_species"] = None
+    # Lineage keys are only emitted when root_pdg is present upstream, but the empty
+    # dict must carry them regardless so the parquet schema stays stable across files.
+    if "root_pdg" in df_event.columns:
+        empty.update({"n_lineage_complete": 0, "frac_lineage_complete": 0.0,
+                      "lineage_depth_mean": 0.0, "lineage_depth_max": 0,
+                      "n_bg_gamma_mediated": 0, "frac_bg_gamma_mediated": 0.0,
+                      "n_bg_carrier_mediated": 0, "frac_bg_carrier_mediated": 0.0})
+        empty.update({f"n_root_{s}": 0 for s in _ROOT_SPECIES.values()})
+        empty.update({f"frac_root_{s}_of_bg": 0.0 for s in _ROOT_SPECIES.values()})
+        empty["root_dominant_species"] = None
     if n == 0:
-        return {k: 0 for k in ["n_neutron","n_darknoise","n_nonneutron","n_untraced",
-                                "frac_neutron","frac_darknoise","frac_nonneutron",
-                                "frac_untraced","dominant_class"]}
+        return empty
 
     n_neutron    = int(np.isin(cls, [1, 2, 3, 4]).sum())
     n_darknoise  = int((cls == 0).sum())
@@ -793,7 +852,7 @@ def _hit_composition(mask: np.ndarray, df_event: pd.DataFrame) -> dict:
     counts = {c: int((cls == c).sum()) for c in np.unique(cls)}
     dominant_class = int(max(counts, key=counts.get))
 
-    return {
+    result = {
         "n_neutron":     n_neutron,
         "n_darknoise":   n_darknoise,
         "n_nonneutron":  n_nonneutron,
@@ -804,6 +863,68 @@ def _hit_composition(mask: np.ndarray, df_event: pd.DataFrame) -> dict:
         "frac_untraced":  round(n_untraced   / n, 4),
         "dominant_class": dominant_class,
     }
+
+    # n_bg_<species> / frac_bg_<species> count over ALL hits in the cluster -- that is
+    # their documented meaning ("share of cluster hits whose immediate ancestor is X")
+    # and they stay <= 1. They are left exactly as they were.
+    #
+    # The *_of_bg ratios and bg_dominant_species must NOT use that numerator. 99.4% of
+    # neutron-lineage SIGNAL hits report bg_class == photon, because the capture chain
+    # is (optical photon <- e+- <- capture gamma <- neutron) and the e+- skip stops at
+    # the gamma. Dividing an all-hits numerator by the background-only denominator
+    # therefore produced "fractions" above 1 (measured: >1 in 75% of clusters, max 25.0)
+    # and made bg_dominant_species read "photon" for 97% of clusters -- an artifact of
+    # neutron capture, not background. This was invisible before the save-on-demand
+    # regeneration because the photon class was then exactly zero.
+    # Both are now restricted to the actual background hits (truth_class == -5).
+    is_bkg_hit = (cls == -5)
+    bg_species_counts = {}       # background-only, drives *_of_bg and the dominant tag
+    for code, name in _BG_SPECIES.items():
+        n_sp     = int((bg_cls == code).sum())              # all hits (unchanged)
+        n_sp_bkg = int((bg_cls[is_bkg_hit] == code).sum())   # background hits only
+        bg_species_counts[name] = n_sp_bkg
+        result[f"n_bg_{name}"]     = n_sp
+        result[f"frac_bg_{name}"]  = round(n_sp / n, 4)
+        result[f"n_bg_{name}_bkg"] = n_sp_bkg
+        result[f"frac_bg_{name}_of_bg"] = (round(n_sp_bkg / n_nonneutron, 4)
+                                          if n_nonneutron else 0.0)
+    result["bg_dominant_species"] = (
+        max(bg_species_counts, key=bg_species_counts.get)
+        if any(bg_species_counts.values()) else None
+    )
+
+    # ---- full-chain lineage features, background hits only ----
+    # root_pdg is the top of the chain and is meaningful only where lineage_status == 1.
+    if "root_pdg" in df_event.columns:
+        root  = df_event["root_pdg"].to_numpy(int)[mask]
+        lstat = (df_event["lineage_status"].to_numpy(int)[mask]
+                 if "lineage_status" in df_event.columns else np.ones(n, int))
+        ldep  = (df_event["lineage_depth"].to_numpy(int)[mask]
+                 if "lineage_depth" in df_event.columns else np.zeros(n, int))
+        gmed  = (df_event["is_gamma_mediated"].to_numpy(int)[mask]
+                 if "is_gamma_mediated" in df_event.columns else np.zeros(n, int))
+        cmed  = (df_event["is_carrier_mediated"].to_numpy(int)[mask]
+                 if "is_carrier_mediated" in df_event.columns else np.zeros(n, int))
+
+        good = is_bkg_hit & (lstat == 1)          # only complete chains are trustworthy
+        n_good = int(good.sum())
+        result["n_lineage_complete"]  = int((lstat == 1).sum())
+        result["frac_lineage_complete"] = round(int((lstat == 1).sum()) / n, 4)
+        result["lineage_depth_mean"] = round(float(ldep[good].mean()), 3) if n_good else 0.0
+        result["lineage_depth_max"]  = int(ldep[good].max()) if n_good else 0
+        result["n_bg_gamma_mediated"]    = int(gmed[is_bkg_hit].sum())
+        result["frac_bg_gamma_mediated"] = (round(int(gmed[is_bkg_hit].sum()) / n_nonneutron, 4)
+                                           if n_nonneutron else 0.0)
+        result["n_bg_carrier_mediated"]    = int(cmed[is_bkg_hit].sum())
+        result["frac_bg_carrier_mediated"] = (round(int(cmed[is_bkg_hit].sum()) / n_nonneutron, 4)
+                                             if n_nonneutron else 0.0)
+        for code, name in _ROOT_SPECIES.items():
+            n_r = int((root[good] == code).sum())
+            result[f"n_root_{name}"]       = n_r
+            result[f"frac_root_{name}_of_bg"] = round(n_r / n_good, 4) if n_good else 0.0
+        rc = {name: int((root[good] == code).sum()) for code, name in _ROOT_SPECIES.items()}
+        result["root_dominant_species"] = (max(rc, key=rc.get) if any(rc.values()) else None)
+    return result
 
 
 def _truth_label_cluster(mask: np.ndarray,
@@ -888,9 +1009,15 @@ def extract_all_features(ctx: RunContext,
     import pyarrow.parquet as pq
     from . import cc_selection
 
+    # NOTE: this allowlist is independent of what processor.py writes. A column added
+    # upstream and NOT listed here is silently dropped, and consumers fall back to their
+    # "column absent" default -- which looks like a real physics result, not a bug.
     PULSE_COLS = ["eventID", "pmtID", "t", "x", "y", "z", "pe",
                   "truth_class", "is_neutron", "is_untraced",
-                  "ancestor_trackID", "ancestor_pdg", "cc_pass"]
+                  "ancestor_trackID", "ancestor_pdg", "cc_pass",
+                  "bg_class", "bg_pdg", "bg_trackID",
+                  "root_pdg", "lineage_status", "lineage_depth",
+                  "is_gamma_mediated", "is_carrier_mediated"]
     pf = pq.ParquetFile(str(pulses_path))
     avail_cols = set(pf.schema_arrow.names)
     read_cols  = [c for c in PULSE_COLS if c in avail_cols]

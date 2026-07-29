@@ -56,7 +56,72 @@ DP_BRANCHES = [
     "DirectParent_PMTID", "DirectParent_HitTime",
     "DirectParent_NeutronAncestorClass", "DirectParent_IsDarknoise",
     "DirectParent_NeutronAncestorTrackID", "DirectParent_NeutronAncestorPDG",
+    "DirectParent_ImmediateAncestorClass", "DirectParent_ImmediateAncestorPDG",
+    "DirectParent_ImmediateAncestorTrackID",
+    # Full ancestry chain per hit. Flattened CSR-style on purpose (a
+    # vector<vector<int>> would need a custom ROOT dictionary):
+    #   hit j's chain = LineagePDG[sum(Depth[:j]) : +Depth[j]], nearest-ancestor first.
+    # Only present in MC generated with WCSim >= ac64522 (/WCSimIO/SaveTracksOnDemand);
+    # every branch below is optional and falls back to a sentinel if absent, so old
+    # productionv1/v2 ntuples still process.
+    "DirectParent_LineagePDG", "DirectParent_LineageDepth",
+    "DirectParent_LineageStatus", "DirectParent_RootAncestorPDG",
 ]
+
+# LineageStatus codes (BackTracker): 1 reached a generator primary ·
+# 0 truncated at an unsaved track · -1 cycle or depth cap · -5 dark noise.
+LINEAGE_STATUS_LABELS = {
+    1: "complete", 0: "truncated", -1: "cycle_or_cap", -5: "dark_noise",
+}
+
+# PDG -> short name, for the human-readable lineage_chain column.
+PDG_SHORT = {
+    11: "e-", -11: "e+", 22: "gamma", 13: "mu-", -13: "mu+",
+    111: "pi0", 211: "pi+", -211: "pi-", 2112: "n", 2212: "p", -2212: "pbar",
+    321: "K+", -321: "K-", 130: "K0L", 310: "K0S", 311: "K0", -311: "K0bar",
+    12: "nu_e", -12: "nubar_e", 14: "nu_mu", -14: "nubar_mu",
+    3122: "Lambda", 3222: "Sigma+", 3112: "Sigma-", 221: "eta", 113: "rho0",
+    1000010020: "d", 1000010030: "t", 1000020030: "He3", 1000020040: "alpha",
+    1000060120: "C12", 1000070140: "N14", 1000080160: "O16",
+}
+
+# The e+- carrier-skip set. Cherenkov/ionisation electrons are ubiquitous and
+# uninformative on their own, so ImmediateAncestor skips through them. PDG 22 is
+# deliberately NOT in this set -- "a gamma did this" is real information.
+CARRIER_PDGS = frozenset({11, -11})
+
+MAX_CHAIN_LABEL = 6   # truncate lineage_chain beyond this many generations
+
+
+def pdg_short(pdg: int) -> str:
+    """Short particle name for a PDG code; nuclear codes render as nuc(Z,A)."""
+    pdg = int(pdg)
+    if pdg in PDG_SHORT:
+        return PDG_SHORT[pdg]
+    if pdg > 1000000000:                      # nuclear code 10LZZZAAAI
+        return f"nuc({(pdg // 10000) % 1000},{(pdg // 10) % 1000})"
+    return str(pdg)
+
+
+def lineage_chain_str(pdgs, maxlen: int = MAX_CHAIN_LABEL) -> str:
+    """
+    Render a chain as 'e- <- gamma <- pi0' (nearest ancestor first).
+
+    A string column keeps __pulses.parquet free of nested types while still
+    allowing a direct value_counts() over chain patterns.
+    """
+    if len(pdgs) == 0:
+        return ""
+    s = " <- ".join(pdg_short(p) for p in pdgs[:maxlen])
+    return s + " <- ..." if len(pdgs) > maxlen else s
+
+# ImmediateAncestorClass codes (from BackTracker.cpp ClassifyBackgroundPDG):
+#   0 dark noise · 1 neutron · 2 muon · 3 charged pion · 4 proton ·
+#   5 photon · 6 kaon · 7 electron/positron · 8 other · -5 untraced
+BG_CLASS_LABELS = {
+    -5: "untraced", 0: "dark_noise", 1: "neutron", 2: "muon", 3: "charged_pion",
+    4: "proton", 5: "photon", 6: "kaon", 7: "electron_positron", 8: "other",
+}
 
 CLUSTER_BRANCHES = [
     "eventNumber",
@@ -98,18 +163,62 @@ def _compute_offset(hit_ck, hit_t, dp_ck, dp_t) -> float:
     return med if 10.0 <= med <= 25.0 else DEFAULT_DP_OFFSET
 
 
-def _build_dp_lookup(dp_ck, dp_t, dp_class, dp_dn, dp_tid, dp_pdg) -> dict:
+def _build_dp_lookup(dp_ck, dp_t, dp_class, dp_dn, dp_tid, dp_pdg,
+                      dp_bg_cls, dp_bg_pdg, dp_bg_tid,
+                      dp_root_pdg=None, dp_lin_status=None, dp_lin_chain=None) -> dict:
     """
     Index DirectParent entries by chankey for O(1) per-hit lookup.
-    Returns dict: chankey -> list of (dp_time, class, is_darknoise, trackID, pdg)
+    Returns dict: chankey -> list of
+        (dp_time, class, is_darknoise, trackID, pdg, bg_class, bg_pdg, bg_trackID,
+         root_pdg, lineage_status, lineage_chain)
+    bg_class/bg_pdg/bg_trackID come from DirectParent_ImmediateAncestor* — the
+    species-general one-step-skip ancestor (any particle, not just neutrons).
+
+    root_pdg / lineage_status / lineage_chain come from the full-chain branches and
+    are optional: pass None for any of them (old ntuples) and a sentinel is stored.
+    lineage_chain is the already-decoded list of PDG codes for that entry, nearest
+    ancestor first -- decoding happens once per event in the caller, not per hit.
     """
+    n = len(dp_ck)
+    if dp_root_pdg is None:
+        dp_root_pdg = np.full(n, -5, dtype=int)
+    if dp_lin_status is None:
+        dp_lin_status = np.full(n, -5, dtype=int)
+    if dp_lin_chain is None:
+        dp_lin_chain = [()] * n
+
     lookup: dict[int, list] = {}
-    for ck, t, cls, dn, tid, pdg in zip(dp_ck, dp_t, dp_class, dp_dn, dp_tid, dp_pdg):
+    for ck, t, cls, dn, tid, pdg, bg_cls, bg_pdg, bg_tid, rpdg, lstat, lchain in zip(
+        dp_ck, dp_t, dp_class, dp_dn, dp_tid, dp_pdg, dp_bg_cls, dp_bg_pdg, dp_bg_tid,
+        dp_root_pdg, dp_lin_status, dp_lin_chain
+    ):
         ck_i = int(ck)
         lookup.setdefault(ck_i, []).append(
-            (float(t), int(cls), int(dn), int(tid), int(pdg))
+            (float(t), int(cls), int(dn), int(tid), int(pdg),
+             int(bg_cls), int(bg_pdg), int(bg_tid),
+             int(rpdg), int(lstat), lchain)
         )
     return lookup
+
+
+def _decode_lineage_chains(dp_lin_pdg, dp_lin_depth, n_entries):
+    """
+    Decode the flattened CSR lineage arrays into one tuple of PDG codes per DP entry.
+
+    hit j's chain = LineagePDG[sum(Depth[:j]) : +Depth[j]], nearest ancestor first.
+    Returns None if the arrays are absent or the invariant len(PDG) == sum(Depth)
+    does not hold -- a silent misdecode here would mis-attribute every hit's
+    ancestry, so it is better to drop the columns than to guess.
+    """
+    if dp_lin_pdg is None or dp_lin_depth is None:
+        return None
+    if len(dp_lin_depth) != n_entries:
+        return None
+    if int(np.sum(dp_lin_depth)) != len(dp_lin_pdg):
+        return None
+    offs = np.concatenate([[0], np.cumsum(dp_lin_depth)])
+    return [tuple(int(p) for p in dp_lin_pdg[offs[j]:offs[j + 1]])
+            for j in range(n_entries)]
 
 
 def _match_hit(ck: int, t: float, dp_lookup: dict, offset: float,
@@ -118,7 +227,8 @@ def _match_hit(ck: int, t: float, dp_lookup: dict, offset: float,
     Match one hit (chankey, hitT) to its DirectParent truth entry.
 
     Returns (truth_class, is_darknoise, ancestor_trackID, ancestor_pdg,
-             is_untraced, match_failure_reason).
+             is_untraced, match_failure_reason, bg_class, bg_pdg, bg_trackID,
+             root_pdg, lineage_status, lineage_chain).
 
     match_failure_reason values:
       None            – successful match
@@ -127,10 +237,16 @@ def _match_hit(ck: int, t: float, dp_lookup: dict, offset: float,
       "time_mismatch" – entry exists but best |dt| > tol; is_darknoise is
                         carried from the nearest DP entry rather than assumed
                         (merged-pulse physics hits fall here)
+
+    bg_class/bg_pdg/bg_trackID are withheld (-5, matching the ROOT branch's own
+    "untraced" sentinel) whenever the match itself is unreliable or absent —
+    same conservative rule already applied to the neutron-scheme fields. The
+    lineage fields (root_pdg, lineage_status, lineage_chain) are withheld under
+    exactly the same rule, so a hit never carries a chain the match cannot support.
     """
     entries = dp_lookup.get(ck)
     if not entries:
-        return 0, 1, -1, -1, True, "no_entry"
+        return 0, 1, -1, -1, True, "no_entry", -5, -5, -5, -5, -5, ()
 
     t_shifted = t + offset
     best_dt, best = min(
@@ -139,11 +255,13 @@ def _match_hit(ck: int, t: float, dp_lookup: dict, offset: float,
     )
     if best_dt > tol:
         # Carry is_darknoise from the nearest DP entry instead of assuming 1
-        _, _cls, nearest_dn, _tid, _pdg = best
-        return 0, nearest_dn, -1, -1, True, "time_mismatch"
+        nearest_dn = best[2]
+        return 0, nearest_dn, -1, -1, True, "time_mismatch", -5, -5, -5, -5, -5, ()
 
-    _, cls, dn, tid, pdg = best
-    return cls, dn, tid, pdg, False, None
+    (_, cls, dn, tid, pdg, bg_cls, bg_pdg, bg_tid,
+     root_pdg, lin_status, lin_chain) = best
+    return (cls, dn, tid, pdg, False, None, bg_cls, bg_pdg, bg_tid,
+            root_pdg, lin_status, lin_chain)
 
 
 # --------------------------------------------------------------------------- #
@@ -208,9 +326,31 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
             dp_pdg = np.array(ak.to_list(dp_arr["DirectParent_NeutronAncestorPDG"][i]),  dtype=int) \
                      if "DirectParent_NeutronAncestorPDG" in wanted_dp \
                      else np.full(len(dp_ck), -1, dtype=int)
+            dp_bg_cls = np.array(ak.to_list(dp_arr["DirectParent_ImmediateAncestorClass"][i]), dtype=int) \
+                     if "DirectParent_ImmediateAncestorClass" in wanted_dp \
+                     else np.full(len(dp_ck), -5, dtype=int)
+            dp_bg_pdg = np.array(ak.to_list(dp_arr["DirectParent_ImmediateAncestorPDG"][i]), dtype=int) \
+                     if "DirectParent_ImmediateAncestorPDG" in wanted_dp \
+                     else np.full(len(dp_ck), -5, dtype=int)
+            dp_bg_tid = np.array(ak.to_list(dp_arr["DirectParent_ImmediateAncestorTrackID"][i]), dtype=int) \
+                     if "DirectParent_ImmediateAncestorTrackID" in wanted_dp \
+                     else np.full(len(dp_ck), -5, dtype=int)
+
+            # Full-chain branches (WCSim >= ac64522 only; absent on old MC).
+            dp_root_pdg = np.array(ak.to_list(dp_arr["DirectParent_RootAncestorPDG"][i]), dtype=int) \
+                     if "DirectParent_RootAncestorPDG" in wanted_dp else None
+            dp_lin_stat = np.array(ak.to_list(dp_arr["DirectParent_LineageStatus"][i]), dtype=int) \
+                     if "DirectParent_LineageStatus" in wanted_dp else None
+            dp_lin_pdg  = np.array(ak.to_list(dp_arr["DirectParent_LineagePDG"][i]), dtype=int) \
+                     if "DirectParent_LineagePDG" in wanted_dp else None
+            dp_lin_dep  = np.array(ak.to_list(dp_arr["DirectParent_LineageDepth"][i]), dtype=int) \
+                     if "DirectParent_LineageDepth" in wanted_dp else None
+            dp_chains   = _decode_lineage_chains(dp_lin_pdg, dp_lin_dep, len(dp_ck))
 
             offset    = _compute_offset(hit_ck, hit_t, dp_ck, dp_t)
-            dp_lookup = _build_dp_lookup(dp_ck, dp_t, dp_cls, dp_dn, dp_tid, dp_pdg)
+            dp_lookup = _build_dp_lookup(dp_ck, dp_t, dp_cls, dp_dn, dp_tid, dp_pdg,
+                                          dp_bg_cls, dp_bg_pdg, dp_bg_tid,
+                                          dp_root_pdg, dp_lin_stat, dp_chains)
         else:
             offset    = 0.0
             dp_lookup = {}
@@ -220,7 +360,8 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
             ck = int(hit_ck[j])
             t_hit = float(hit_t[j])
 
-            cls, dn, tid, pdg, untraced, fail_reason = _match_hit(
+            (cls, dn, tid, pdg, untraced, fail_reason, bg_cls, bg_pdg, bg_tid,
+             root_pdg, lin_status, lin_chain) = _match_hit(
                 ck, t_hit, dp_lookup, offset
             )
 
@@ -240,6 +381,24 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
                 "match_failure_reason": fail_reason,
                 "ancestor_trackID":     tid,
                 "ancestor_pdg":         pdg,
+                # Species-general immediate-ancestor tag (any particle, not just
+                # neutrons) — see DirectParent_ImmediateAncestor* / BG_CLASS_LABELS.
+                "bg_class":             bg_cls,
+                "bg_pdg":               bg_pdg,
+                "bg_trackID":           bg_tid,
+                # Full ancestry chain (WCSim >= ac64522). root_pdg is the top of the
+                # chain and is only trustworthy where lineage_status == 1.
+                # lineage_chain is a readable 'e- <- gamma <- pi0' string so chain
+                # patterns can be value_counts()'d directly; lineage_first_pdg is the
+                # immediate emitter, and is_gamma_mediated flags a gamma anywhere in
+                # the chain (the component old productionv1/v2 cannot see at all).
+                "root_pdg":             root_pdg,
+                "lineage_status":       lin_status,
+                "lineage_depth":        len(lin_chain),
+                "lineage_chain":        lineage_chain_str(lin_chain),
+                "lineage_first_pdg":    int(lin_chain[0]) if lin_chain else -5,
+                "is_gamma_mediated":    int(22 in lin_chain),
+                "is_carrier_mediated":  int(bool(lin_chain) and lin_chain[0] in CARRIER_PDGS),
             })
 
         # ClusterFinder sidecar
@@ -312,6 +471,11 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
     total_clusters = 0
     # Accumulators for the end-of-run summary histogram (scalars only — tiny).
     tc_counts: dict = {}
+    bg_counts: dict = {}
+    lin_status_counts: dict = {}
+    lin_chain_counts: dict = {}
+    root_counts: dict = {}
+    n_bkg_hits = n_gamma_med = n_carrier_med = 0
     n_untraced = n_no_entry = n_time_mm = 0
 
     for k, rp in enumerate(root_files):
@@ -337,6 +501,24 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
         # Accumulate summary stats (scalars — negligible memory).
         for cls, cnt in pf["truth_class"].value_counts().items():
             tc_counts[cls] = tc_counts.get(cls, 0) + int(cnt)
+        for cls, cnt in pf["bg_class"].value_counts().items():
+            bg_counts[cls] = bg_counts.get(cls, 0) + int(cnt)
+        # Lineage accumulators, restricted to the class--5 background (truth_class
+        # == -5): that is the population the chains were added to characterise.
+        # Read truth_class FIRST -- bg_class/lineage never report "neutron", because
+        # a capture chain terminates at the gamma.
+        if "lineage_status" in pf.columns:
+            for st, cnt in pf["lineage_status"].value_counts().items():
+                lin_status_counts[st] = lin_status_counts.get(st, 0) + int(cnt)
+            bkg = pf[pf["truth_class"] == -5]
+            if len(bkg):
+                for ch, cnt in bkg["lineage_chain"].value_counts().items():
+                    lin_chain_counts[ch] = lin_chain_counts.get(ch, 0) + int(cnt)
+                for rp_, cnt in bkg["root_pdg"].value_counts().items():
+                    root_counts[rp_] = root_counts.get(rp_, 0) + int(cnt)
+                n_bkg_hits    += len(bkg)
+                n_gamma_med   += int(bkg["is_gamma_mediated"].sum())
+                n_carrier_med += int(bkg["is_carrier_mediated"].sum())
         n_untraced  += int(pf["is_untraced"].sum())
         n_no_entry  += int((pf["match_failure_reason"] == "no_entry").sum())
         n_time_mm   += int((pf["match_failure_reason"] == "time_mismatch").sum())
@@ -380,6 +562,42 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
             print(f"[mc.processor]   time_mismatch: "
                   f"{n_time_mm} ({100*n_time_mm/total_hits:.1f}%)  "
                   f"[merged-pulse / offset error]")
+            print("[mc.processor] bg_class histogram (species-general immediate "
+                  "ancestor, all detector hits):")
+            for cls in sorted(bg_counts, key=lambda c: -bg_counts[c]):
+                label = BG_CLASS_LABELS.get(cls, "?")
+                print(f"  {cls:>3d} {label:<18s} {bg_counts[cls]:>8d}  "
+                      f"({100*bg_counts[cls]/total_hits:.1f}%)")
+
+            # ---- full-chain lineage summary (absent on pre-ac64522 MC) ----
+            if lin_status_counts:
+                print("[mc.processor] lineage_status histogram (all detector hits):")
+                for st in sorted(lin_status_counts, key=lambda s: -lin_status_counts[s]):
+                    label = LINEAGE_STATUS_LABELS.get(st, "?")
+                    print(f"  {st:>3d} {label:<14s} {lin_status_counts[st]:>8d}  "
+                          f"({100*lin_status_counts[st]/total_hits:.1f}%)")
+                n_trunc = lin_status_counts.get(0, 0)
+                if n_trunc:
+                    print(f"[mc.processor]   WARNING {n_trunc} hits have TRUNCATED "
+                          f"chains (status 0) — save-on-demand did not take for those; "
+                          f"expect 0 on WCSim >= ac64522 output")
+            if n_bkg_hits:
+                print(f"[mc.processor] class--5 BACKGROUND lineage "
+                      f"({n_bkg_hits} hits, truth_class == -5):")
+                print(f"[mc.processor]   gamma-mediated  : {n_gamma_med:>8d}  "
+                      f"({100*n_gamma_med/n_bkg_hits:.1f}%)  "
+                      f"[exactly 0 on productionv1/v2]")
+                print(f"[mc.processor]   via e+- carrier : {n_carrier_med:>8d}  "
+                      f"({100*n_carrier_med/n_bkg_hits:.1f}%)  "
+                      f"[the rest radiate directly]")
+                print("[mc.processor]   root ancestor (top of chain):")
+                for rp_ in sorted(root_counts, key=lambda r: -root_counts[r])[:8]:
+                    print(f"      {pdg_short(rp_):<10s} {root_counts[rp_]:>8d}  "
+                          f"({100*root_counts[rp_]/n_bkg_hits:.1f}%)")
+                print("[mc.processor]   most common chains (nearest ancestor first):")
+                for ch in sorted(lin_chain_counts, key=lambda c: -lin_chain_counts[c])[:10]:
+                    print(f"      {100*lin_chain_counts[ch]/n_bkg_hits:5.1f}%  "
+                          f"{lin_chain_counts[ch]:>8d}   {ch}")
 
     return pulses_path, clusters_path
 
