@@ -775,6 +775,21 @@ _ROOT_SPECIES = {13: "muminus", -13: "muplus", 211: "piplus", -211: "piminus",
                  111: "pizero", 22: "gamma", 2212: "proton", 2112: "neutron",
                  11: "eminus", -11: "eplus"}
 
+# Origin species for processor.py's origin_pdg: the FIRST ancestor in the chain
+# that is neither e+- nor gamma. This is the middle ground between bg_class --
+# which stops at the gamma and therefore reads "photon" for almost everything --
+# and root_pdg, which jumps all the way to the generator primary. "What non-EM
+# particle actually deposited here" is the question this answers.
+#
+# Keyed by PDG, not by the BackTracker class code, and deliberately sharing
+# _ROOT_SPECIES' names so the origin and root tables are directly comparable
+# species-by-species. The class coding would fold pi0 into "other" (8), and pi0
+# is ~14% of the background, so it must have its own bucket. gamma/e+- cannot
+# appear here by construction; anything unlisted is counted in n_origin_other.
+_ORIGIN_SPECIES = {13: "muminus", -13: "muplus", 211: "piplus", -211: "piminus",
+                   111: "pizero", 2212: "proton", 2112: "neutron",
+                   321: "kplus", -321: "kminus"}
+
 
 def _hit_composition(mask: np.ndarray, df_event: pd.DataFrame) -> dict:
     """
@@ -816,6 +831,13 @@ def _hit_composition(mask: np.ndarray, df_event: pd.DataFrame) -> dict:
         n_root_<species> / frac_root_<species>_of_bg   generator-level primary at the
                              top of the chain, e.g. root_piminus, root_pizero
         root_dominant_species
+
+    Origin keys, emitted only when origin_class is present, same restriction
+    (background hits with lineage_status == 1):
+        n_origin_<species> / frac_origin_<species>_of_bg   first non-EM ancestor
+                             (e+- and gamma both skipped) -- muon, chgpion,
+                             proton, neutron, kaon, other
+        origin_dominant_species
     """
     cls       = df_event["truth_class"].to_numpy(int)[mask]
     untraced  = df_event["is_untraced"].to_numpy(int)[mask] \
@@ -841,6 +863,12 @@ def _hit_composition(mask: np.ndarray, df_event: pd.DataFrame) -> dict:
         empty.update({f"n_root_{s}": 0 for s in _ROOT_SPECIES.values()})
         empty.update({f"frac_root_{s}_of_bg": 0.0 for s in _ROOT_SPECIES.values()})
         empty["root_dominant_species"] = None
+    if "origin_pdg" in df_event.columns:
+        _onames = list(_ORIGIN_SPECIES.values()) + ["other"]
+        empty.update({f"n_origin_{s}": 0 for s in _onames})
+        empty.update({f"frac_origin_{s}_of_bg": 0.0 for s in _onames})
+        empty["n_origin_traced"] = 0
+        empty["origin_dominant_species"] = None
     if n == 0:
         return empty
 
@@ -924,6 +952,32 @@ def _hit_composition(mask: np.ndarray, df_event: pd.DataFrame) -> dict:
             result[f"frac_root_{name}_of_bg"] = round(n_r / n_good, 4) if n_good else 0.0
         rc = {name: int((root[good] == code).sum()) for code, name in _ROOT_SPECIES.items()}
         result["root_dominant_species"] = (max(rc, key=rc.get) if any(rc.values()) else None)
+
+    # ---- first-non-EM-ancestor composition, background hits only ----
+    # Same denominator discipline as the *_of_bg block above: numerator AND
+    # denominator both restricted to background hits with a complete chain, so the
+    # fractions stay <= 1 and cannot be inflated by neutron-capture gammas.
+    if "origin_pdg" in df_event.columns:
+        opdg  = df_event["origin_pdg"].to_numpy(int)[mask]
+        lstat_o = (df_event["lineage_status"].to_numpy(int)[mask]
+                   if "lineage_status" in df_event.columns else np.ones(n, int))
+        # An all-EM chain yields origin_pdg == -5; it is traced but has no non-EM
+        # ancestor, so it must not count towards any species NOR inflate the
+        # denominator (otherwise the fractions stop summing to 1).
+        good_o = is_bkg_hit & (lstat_o == 1) & (opdg != -5)
+        n_good_o = int(good_o.sum())
+        oc = {}
+        for code, name in _ORIGIN_SPECIES.items():
+            n_o = int((opdg[good_o] == code).sum())
+            oc[name] = n_o
+        oc["other"] = n_good_o - sum(oc.values())
+        for name, n_o in oc.items():
+            result[f"n_origin_{name}"] = n_o
+            result[f"frac_origin_{name}_of_bg"] = (round(n_o / n_good_o, 4)
+                                                  if n_good_o else 0.0)
+        result["n_origin_traced"] = n_good_o
+        result["origin_dominant_species"] = (max(oc, key=oc.get)
+                                            if any(oc.values()) else None)
     return result
 
 
@@ -1017,7 +1071,9 @@ def extract_all_features(ctx: RunContext,
                   "ancestor_trackID", "ancestor_pdg", "cc_pass",
                   "bg_class", "bg_pdg", "bg_trackID",
                   "root_pdg", "lineage_status", "lineage_depth",
-                  "is_gamma_mediated", "is_carrier_mediated"]
+                  "is_gamma_mediated", "is_carrier_mediated",
+                  "origin_pdg", "origin_class",
+                  "origin_in_tank", "origin_in_fv"]
     pf = pq.ParquetFile(str(pulses_path))
     avail_cols = set(pf.schema_arrow.names)
     read_cols  = [c for c in PULSE_COLS if c in avail_cols]
@@ -1058,12 +1114,22 @@ def extract_all_features(ctx: RunContext,
 
         event_ids = chunk["eventID"].unique()
         has_cc = "cc_pass" in chunk.columns
+        has_origin = "origin_in_tank" in chunk.columns
+        has_origin_fv = "origin_in_fv" in chunk.columns
         for evid in event_ids:
             df_ev = chunk[chunk["eventID"] == evid].reset_index(drop=True)
             if len(df_ev) < min_pulses_per_event:
                 continue
             # cc_pass is constant within an event (merged per-event by mc.processor)
             ev_cc_pass = bool(df_ev["cc_pass"].iloc[0]) if has_cc and len(df_ev) else True
+            # Likewise origin_in_tank — a property of the neutrino interaction, so
+            # constant within the event.  -1 = unknown (event absent from the CC table);
+            # when the column is missing entirely the label rule downstream degrades to
+            # the tank-only behaviour rather than guessing.
+            ev_origin_in_tank = (int(df_ev["origin_in_tank"].iloc[0])
+                                 if has_origin and len(df_ev) else -1)
+            ev_origin_in_fv = (int(df_ev["origin_in_fv"].iloc[0])
+                               if has_origin_fv and len(df_ev) else -1)
 
             df_cl = (clusters[clusters["eventID"] == evid].reset_index(drop=True)
                      if clusters is not None else None)
@@ -1132,6 +1198,14 @@ def extract_all_features(ctx: RunContext,
                         "is_prompt_cluster":       is_prompt,
                         "cc_pass":                 int(ev_cc_pass),
                     }
+                    # Emitted ONLY when the upstream hits carry it. Writing a
+                    # placeholder instead would create the column on a tank-only
+                    # sample and hand the downstream label rule a value it would
+                    # act on -- silently reclassifying every signal cluster.
+                    if has_origin:
+                        row["origin_in_tank"] = ev_origin_in_tank
+                    if has_origin_fv:
+                        row["origin_in_fv"] = ev_origin_in_fv
                     row.update(feats)
                     row.update(comp)
                     rows.append(row)
