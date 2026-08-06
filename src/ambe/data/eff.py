@@ -100,7 +100,28 @@ def source_loc(run):
         5785:(0, 100, 75), 5789: (0, 0, 75), 5791:(0, 0, 75),
 
         #outside the tank without source
-        5743: (0, 328, 0),  5778: (0, 328, 0),  5779: (0, 328, 0) #dummy positions
+        5743: (0, 328, 0),  5778: (0, 328, 0),  5779: (0, 328, 0), #dummy positions
+
+        #background/no-source runs (no AmBe source present anywhere; detector-only trigger)
+        6254: (0, 328, 0), 6256: (0, 328, 0), #dummy positions, placeholder coord reused
+
+        ##AmBe v3 Campaign 3 - March 2026
+        6046: (0, 0, 0), 6062: (0, -100, 0),                       ## Port 5 data
+        6056: (75, 0 , 0), 6060: (75, -100, 0), 6061: (75, 100, 0), ## Port 4 data
+
+        ##AmBe v4 Campaign 4
+        6165: (0, 100, 0),                                              ## Port 5 data
+        6230: (0, 100, -75), 6231: (0, 0, -75),
+        6232: (0, -100, -75), 6234: (0, -50, -75), 6235: (0, 50, -75),  ## Port 1 data
+        6188: (0, 100, 75), 6189: (0, 100, 75),
+        6237: (0, -100, 75), 6239: (0, -50, 75), 6241: (0, 0, 75), 6242: (0, 50, 75), ## Port 2 data
+        6166: (0, 0, 102), 6186: (0, 100, 102), 6187: (0, -60, 102),
+        6243: (0, -100, 102), 6244: (0, -50, 102), 6246: (0, 50, 102),  ## Port 3 data
+        6247: (75, -50, 0), 6248: (75, 50, 0),                         ## Port 4 data
+        6251: (0, -50, 0), 6252: (0, 50, 0),                          ## Port 5 data
+
+        ## LAPPD AmBe debug runs, Port 4, y=50 (same position as 6248)
+        6249: (75, 50, 0), 6250: (75, 50, 0),
     }
         
     if run in source_positions:

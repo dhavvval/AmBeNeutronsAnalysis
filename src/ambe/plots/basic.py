@@ -13,8 +13,6 @@ from scipy.stats import chi2
 import ast
 import lmfit
 from lmfit.models import ExponentialGaussianModel, ConstantModel
-import pymc as pm
-import arviz as az
 from typing import Dict, List, Tuple, Optional
 import matplotlib.colors as mcolors
 from scipy.special import erfc
@@ -28,10 +26,13 @@ class AmBeNeutronAnalyzer:
     Modular analyzer for AmBe neutron data with separate functions for different analysis tasks.
     """
     
-    def __init__(self, data_directory: str = './EventAmBeNeutronCandidatesData/', 
-                 output_pdf: str = 'AmBevtestv4ch10.pdf'):
+    def __init__(self, data_directory: str = './EventAmBeNeutronCandidatesData/',
+                 output_pdf: str = 'AmBevtestv4ch10.pdf',
+                 campaign_label: str = 'AmBe 2.0v4'):
         self.data_directory = data_directory
         self.output_pdf = output_pdf
+        self.campaign_label = campaign_label
+        self.campaign_tag = campaign_label.replace(' ', '')
         self.source_groups = {}
         self.time_fit_values = []
         self.pyMC_summary = []
@@ -57,15 +58,15 @@ class AmBeNeutronAnalyzer:
         
         # Port information mapping
         self.port_info = {
-            (0, 100, 0): 'Port 5', (0, 50, 0): 'Port 5', (0, 0, 0): 'Port 5', 
-            (0, -50, 0): 'Port 5', (0, -100, 0): 'Port 5', (0, 55, 0): 'Port 5',
-            (0, 100, -75): 'Port 1', (0, 50, -75): 'Port 1', (0, 0, -75): 'Port 1', 
+            (0, 100, 0): 'Port 5', (0, 50, 0): 'Port 5', (0, 0, 0): 'Port 5',
+            (0, -50, 0): 'Port 5', (0, -100, 0): 'Port 5', (0, 55.3, 0): 'Port 5',
+            (0, 100, -75): 'Port 1', (0, 50, -75): 'Port 1', (0, 0, -75): 'Port 1',
             (0, -50, -75): 'Port 1', (0, -100, -75): 'Port 1',
-            (75, 100, 0): 'Port 4', (75, 50, 0): 'Port 4', (75, 0, 0): 'Port 4', 
+            (75, 100, 0): 'Port 4', (75, 50, 0): 'Port 4', (75, 0, 0): 'Port 4',
             (75, -50, 0): 'Port 4', (75, -100, 0): 'Port 4',
-            (0, 100, 102): 'Port 3', (0, 50, 102): 'Port 3', (0, 0, 102): 'Port 3', 
-            (0, -50, 102): 'Port 3', (0, -100, 102): 'Port 3', (0, -105, 102): 'Port 3',
-            (0, 100, 75): 'Port 2', (0, 50, 75): 'Port 2', (0, 0, 75): 'Port 2', 
+            (0, 100, 102): 'Port 3', (0, 50, 102): 'Port 3', (0, 0, 102): 'Port 3',
+            (0, -50, 102): 'Port 3', (0, -60, 102): 'Port 3', (0, -100, 102): 'Port 3', (0, -105.5, 102): 'Port 3',
+            (0, 100, 75): 'Port 2', (0, 50, 75): 'Port 2', (0, 0, 75): 'Port 2',
             (0, -50, 75): 'Port 2', (0, -100, 75): 'Port 2'
         }
         self.port_order = ["Port 1", "Port 5", "Port 2", "Port 3", "Port 4"]
@@ -698,7 +699,7 @@ class AmBeNeutronAnalyzer:
             plt.xlabel(fr"Cluster Time [$\mu s$]")
             plt.ylabel("Counts")
             plt.legend()
-            plt.title(f"Neutron Capture Time (scipy) for AmBe 2.0v4, run positions:({sx}, {sy}, {sz})")
+            plt.title(f"Neutron Capture Time (scipy) for {self.campaign_label}, run positions:({sx}, {sy}, {sz})")
             plt.tight_layout()
             pdf.savefig(bbox_inches='tight')
             plt.close()
@@ -710,7 +711,7 @@ class AmBeNeutronAnalyzer:
             plt.axhline(0, color='gray', linestyle='--')
             plt.xlabel("Time [μs]")
             plt.ylabel("Normalized Residual")
-            plt.title(f"Fit Residuals (scipy) for AmBe 2.0v4, run positions:({sx}, {sy}, {sz})")
+            plt.title(f"Fit Residuals (scipy) for {self.campaign_label}, run positions:({sx}, {sy}, {sz})")
             plt.tight_layout()
             pdf.savefig(bbox_inches='tight')
             plt.close()
@@ -778,7 +779,7 @@ class AmBeNeutronAnalyzer:
             plt.xlabel("Cluster Time [μs]")
             plt.ylabel("Counts")
             plt.legend()
-            plt.title(f"Neutron Capture Time (LMFIT) for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
+            plt.title(f"Neutron Capture Time (LMFIT) for {self.campaign_label}, run positions:({sx}, {sy}, {sz})")
             plt.tight_layout()
             pdf.savefig(bbox_inches='tight')
             plt.close()
@@ -788,6 +789,8 @@ class AmBeNeutronAnalyzer:
 
     def pymc_analysis(self, data_dict: Dict, source_key: Tuple, pdf):
         """Perform Bayesian analysis using PyMC."""
+        import pymc as pm
+        import arviz as az
         CT = data_dict['CT']
         sx, sy, sz = (int(v) for v in source_key)
 
@@ -939,12 +942,12 @@ class AmBeNeutronAnalyzer:
         sns.heatmap(pivot_capturetime, annot=labels_SE_capture, fmt="", cmap="YlOrBr", 
                    cbar=True, annot_kws={"size": 12}, linecolor='black', linewidths=0.2, 
                    cbar_kws={"label": "Capture Time (μs)"})
-        plt.title("Capture Time of AmBe 2.0v4 (LMFIT)")
+        plt.title(f"Capture Time of {self.campaign_label} (LMFIT)")
         plt.xlabel("Port")
         plt.ylabel("Y Position")
         plt.gca().invert_yaxis()
         plt.tight_layout()
-        plt.savefig("OutputPlots/CaptureTime_AmBeNeutrons_AmBe2.0v4_LMFIT.png", dpi=300, bbox_inches='tight')
+        plt.savefig(f"OutputPlots/CaptureTime_AmBeNeutrons_{self.campaign_tag}_LMFIT.png", dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
 
@@ -953,12 +956,12 @@ class AmBeNeutronAnalyzer:
         sns.heatmap(pivot_thermal_time, annot=labels_SE_thermal, fmt="", cmap="YlOrBr", 
                    cbar=True, annot_kws={"size": 12}, linecolor='black', linewidths=0.2, 
                    cbar_kws={"label": "Thermal Time (μs)"})
-        plt.title("Thermal Time of AmBe 2.0v4 (LMFIT)")
+        plt.title(f"Thermal Time of {self.campaign_label} (LMFIT)")
         plt.xlabel("Port")
         plt.ylabel("Y Position")
         plt.gca().invert_yaxis()
         plt.tight_layout()
-        plt.savefig("OutputPlots/ThermalTime_AmBeNeutrons_AmBe2.0v4_LMFIT.png", dpi=300, bbox_inches='tight')
+        plt.savefig(f"OutputPlots/ThermalTime_AmBeNeutrons_{self.campaign_tag}_LMFIT.png", dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
 
@@ -967,12 +970,12 @@ class AmBeNeutronAnalyzer:
         sns.heatmap(pivot_lenEvents, annot=True, fmt="", cmap="YlOrBr", cbar=True, 
                    annot_kws={"size": 12}, linecolor='black', linewidths=0.2, 
                    cbar_kws={"label": "%"})
-        plt.title("Normalized Statistics of all AmBe Neutron-like Events for AmBe 2.0v4")
+        plt.title(f"Normalized Statistics of all AmBe Neutron-like Events for {self.campaign_label}")
         plt.xlabel("Port")
         plt.ylabel("Y Position")
         plt.gca().invert_yaxis()
         plt.tight_layout()
-        plt.savefig("OutputPlots/Statistics_AmBeNeutronEvents_AmBe2.0v4.png", dpi=300, bbox_inches='tight')
+        plt.savefig(f"OutputPlots/Statistics_AmBeNeutronEvents_{self.campaign_tag}.png", dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
 
