@@ -49,9 +49,10 @@ NEUTRON_CLASSES = {1, 2, 3, 4}
 EVENT_KEYS = ["run", "event_tank_time"]
 
 # ---- uniform style for every page in the new PDF -------------------------------
-plt.rcParams.update({
-    "font.family": "DejaVu Sans",
-    "mathtext.fontset": "dejavusans",   # greek/symbols share the body font
+# Two styles, selected by --style (no default: the choice is always explicit).
+#   poster : the original June-16 look — DejaVu Sans, blue signal / grey background
+#   bw     : black and white only, Helvetica metrics (Nimbus Sans), no hue anywhere
+_BASE_RC = {
     "font.size": 12,
     "axes.titlesize": 14,
     "axes.titleweight": "normal",       # no bold titles anywhere
@@ -59,10 +60,70 @@ plt.rcParams.update({
     "axes.labelsize": 12,
     "legend.fontsize": 10,
     "axes.grid": False,            # plain background (no dotted gridlines)
-    "axes.edgecolor": "#333333",
     "figure.facecolor": "white",
     "axes.facecolor": "white",
-})
+}
+# Nimbus Sans is the URW Helvetica clone and the only Helvetica-metric face on this
+# machine. It must be set for mathtext too, or greek renders in DejaVu and the two
+# faces don't match on the page. Check with `pdffonts` on the output.
+_HELVETICA = ["Nimbus Sans", "Helvetica", "Nimbus Sans L", "Liberation Sans", "Arial"]
+STYLE_RC = {
+    "poster": {**_BASE_RC, "axes.edgecolor": "#333333"},
+    "bw":     {**_BASE_RC, "axes.edgecolor": "black", "hatch.linewidth": 0.7},
+}
+
+# --font: the face, independent of the palette. helvetica = Nimbus Sans (the URW
+# Helvetica clone, the only Helvetica-metric face here) for words AND mathtext, or
+# greek renders in DejaVu and the two faces don't match. dejavu reproduces the
+# June-16 figures exactly. Whichever is used is printed at startup.
+FONT_RC = {
+    "helvetica": {"font.family": "sans-serif",
+                  "font.sans-serif": _HELVETICA,
+                  "mathtext.fontset": "custom",
+                  "mathtext.rm": "Nimbus Sans",
+                  "mathtext.it": "Nimbus Sans:italic",
+                  "mathtext.bf": "Nimbus Sans:bold",
+                  "mathtext.cal": "Nimbus Sans"},
+    "dejavu":    {"font.family": "DejaVu Sans",
+                  "mathtext.fontset": "dejavusans"},
+}
+
+# Per-style drawing kwargs. In bw the two histogram classes are separated by fill
+# level and outline, never by hue: signal is a black outline over a grey background
+# fill, which stays readable in print and photocopy.
+STYLE_ART = {
+    "poster": {
+        "sig":  dict(color="#1f77b4", alpha=0.85),
+        "bkg":  dict(color="#999999", alpha=0.55),
+        "step": dict(color="#1f77b4"),
+        "fit":  dict(color="#2ca02c"),
+    },
+    "bw": {
+        "sig":  dict(histtype="step", edgecolor="black", linewidth=1.7),
+        "bkg":  dict(facecolor="0.78", edgecolor="black", linewidth=0.8),
+        "step": dict(color="black"),
+        "fit":  dict(color="black", linestyle="--"),
+    },
+}
+
+STYLE = "poster"          # set by main() from --style; module-level for the page fns
+
+
+def art(kind):
+    """Drawing kwargs for the active style."""
+    return STYLE_ART[STYLE][kind]
+
+
+def apply_style(style: str, font: str = "helvetica") -> None:
+    global STYLE, HIST_COLOR, FIT_COLOR
+    STYLE = style
+    plt.rcParams.update(STYLE_RC[style])
+    plt.rcParams.update(FONT_RC[font])
+    HIST_COLOR = STYLE_ART[style]["step"]["color"]
+    FIT_COLOR = STYLE_ART[style]["fit"]["color"]
+    print(f"[presentable] style={style}  font={font}")
+
+
 HIST_COLOR = "#1f77b4"            # shared blue used by all three plot families
 FIT_COLOR = "#2ca02c"            # green capture-fit curve (matches existing)
 
@@ -88,18 +149,41 @@ def _watermark(fig, x=0.012, y=0.985):
 # ---- presentable feature names (β in greek, descriptive + units) ---------------
 # spatial_rms confirmed from src/ambe/mc/cluster_features.py:576 = RMS of hit PMT
 # positions around the PE-weighted centroid, in METRES.
+# d_wall and vtx_y are METRES too — cluster_features.py:30 and its own FEATURE_LABELS
+# map ("Distance to Nearest Wall (m)"), and the geometry is built in m. The "[cm]" that
+# used to be here was wrong; it is on the June-16 poster figures as well.
 FEATURE_LABELS = {
     "pe_total":          "Total PE [p.e.]",
+    "n_hits":            "Cluster Hits",
+    "n_hits_early":      "Early Hits",
+    "n_fit_hits":        "Hits Used in the Vertex Fit",
+    "sigma_t_mad":       r"$\sigma_t$ (MAD) [ns]",
+    "sigma_t_mad_corr":  r"$\sigma_t$ (MAD, corrected) [ns]",
+    "t_window_80pct":    "80% Time Window [ns]",
+    "fit_rms_ns":        "Fit Timing RMS [ns]",
+    "fit_goodness_init": "Fit Goodness (Centroid Vertex)",
+    "vtx_y":             "Vertex Y [m]",
+    "pe_balance":        "Charge Balance (PE)",
     "spatial_rms":       "Spatial RMS of Hit PMTs [m]",
     "beta2":             r"$\beta_2$",
     "beta1":             r"$\beta_1$",
-    "d_wall":            "Distance to Wall [cm]",
+    "d_wall":            "Distance to Wall [m]",
     "charge_bal_legacy": "Charge Balance",
 }
 
 # Title labels: same names without units (units stay on the x-axis).
 FEATURE_TITLES = {
     "pe_total":          "Total PE",
+    "n_hits":            "Cluster Hits",
+    "n_hits_early":      "Early Hits",
+    "n_fit_hits":        "Hits Used in the Vertex Fit",
+    "sigma_t_mad":       r"$\sigma_t$ (MAD)",
+    "sigma_t_mad_corr":  r"$\sigma_t$ (MAD, corrected)",
+    "t_window_80pct":    "80% Time Window",
+    "fit_rms_ns":        "Fit Timing RMS",
+    "fit_goodness_init": "Fit Goodness (Centroid Vertex)",
+    "vtx_y":             "Vertex Y",
+    "pe_balance":        "Charge Balance (PE)",
     "spatial_rms":       "Spatial RMS of Hit PMTs",
     "beta2":             r"$\beta_2$",
     "beta1":             r"$\beta_1$",
@@ -113,17 +197,94 @@ def _feat_title(feat):
     return f"Discriminating Feature: {FEATURE_TITLES.get(feat, feat)}"
 
 
-def feature_page(pdf, mc_scores_path, frozen_path):
-    """RF top-6 features, presentable names, signal vs background (MC)."""
+MODEL_NAMES = {"rf": "Random Forest", "gbt": "GBT", "xgb": "XGBoost"}
+
+
+def top_features(frozen_path, model="rf", n=6):
+    """
+    Top-n features by the chosen model's importances, read from the FROZEN bundle.
+    Nothing is refitted — the .pkl already holds the trained models.
+    """
     bundle = joblib.load(frozen_path)
     feats = list(bundle["features"])
-    rf = bundle["models"]["rf"]
-    imp = rf.feature_importances_
-    top6 = [feats[i] for i in np.argsort(imp)[::-1][:6]]
-    imp_map = dict(zip(feats, imp))
+    models = bundle["models"]
+    if model not in models:
+        raise SystemExit(f"[presentable] frozen bundle has no '{model}' model "
+                         f"(has: {sorted(models)})")
+    imp = np.asarray(models[model].feature_importances_, float)
+    order = np.argsort(imp)[::-1][:n]
+    return [feats[i] for i in order], dict(zip(feats, imp))
+
+
+def resolve_score_cut(d, score_col, spec):
+    """
+    'auto' = the 80%-signal-efficiency threshold, i.e. the 20th percentile of the
+    signal scores on the test set — the same definition the June deck used. Read
+    off the existing score table; nothing is retrained.
+    """
+    if spec != "auto":
+        return float(spec)
+    is_sig = signal_mask(d)
+    m = is_sig & (d["in_test"].to_numpy(bool) if "in_test" in d.columns
+                  else np.ones(len(d), bool))
+    cut = float(np.quantile(d.loc[m, score_col].to_numpy(float), 0.20))
+    print(f"      score cut (80% signal efficiency on {score_col}) = {cut:.3f}")
+    return cut
+
+
+def feature_bins(v_all, n=40):
+    """
+    1-99 percentile range. Integer-valued features get integer-centred bins —
+    linspace over an integer variable splits one integer across two bars and the
+    histogram comes out combed.
+    """
+    lo, hi = np.nanpercentile(v_all, [1, 99])
+    if not np.isfinite(hi) or hi <= lo:
+        hi = lo + 1
+    finite = v_all[np.isfinite(v_all)]
+    if np.allclose(finite, np.round(finite)) and (hi - lo) <= 60:
+        return np.arange(np.floor(lo), np.ceil(hi) + 2) - 0.5
+    return np.linspace(lo, hi, n)
+
+
+def signal_mask(d):
+    """
+    Truth signal mask for a scored frame: neutron-dominated cluster.
+
+    On a MERGED tank+world frame dominant_class ALONE IS WRONG — an out-of-tank
+    capture is neutron-dominated and is still background, because no in-tank
+    neutrino made it (see REPORT_ccinc_v3_world_merged.md §0). mva_analysis.py
+    persists the training target as `mva_label`; use it when present, else rebuild
+    it from origin_in_tank the same way the training did.
+    """
+    if "mva_label" in d.columns:
+        return d["mva_label"].to_numpy(int).astype(bool)
+    is_ndom = d["dominant_class"].isin(NEUTRON_CLASSES).to_numpy()
+    if "origin_in_tank" in d.columns:
+        return np.where(d["origin_in_tank"].to_numpy(int) == 0, False, is_ndom)
+    return is_ndom
+
+
+def emit(pdf, fig, figures_dir, name):
+    """Append the page to the multi-page PDF and, if asked, also save it alone."""
+    _watermark(fig)
+    pdf.savefig(fig)
+    if figures_dir is not None:
+        stem = Path(figures_dir) / name
+        fig.savefig(stem.with_suffix(".pdf"), bbox_inches="tight")
+        fig.savefig(stem.with_suffix(".png"), dpi=200, bbox_inches="tight")
+        print(f"      -> {stem.name}.pdf / .png")
+    plt.close(fig)
+
+
+def feature_page(pdf, mc_scores_path, frozen_path, figures_dir=None,
+                 title="OPTICS + Random Forest — Top 6 Discriminating Features",
+                 name="presentable_features", model="rf"):
+    """Top-6 features of `model`, presentable names, signal vs background (MC)."""
+    top6, imp_map = top_features(frozen_path, model, 6)
 
     d = pd.read_parquet(mc_scores_path)
-    is_sig = d["dominant_class"].isin(NEUTRON_CLASSES).to_numpy()
+    is_sig = signal_mask(d)
 
     # Plain features page only: rename pe_total -> "Total cluster charge"
     # (axis + title). The cut page keeps the shared FEATURE_LABELS/_TITLES maps.
@@ -131,52 +292,45 @@ def feature_page(pdf, mc_scores_path, frozen_path):
     tlabel = dict(FEATURE_TITLES, pe_total="Total cluster charge")
 
     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-    fig.suptitle("OPTICS + Random Forest — Top 6 Discriminating Features",
-                 fontsize=16)
+    fig.suptitle(title, fontsize=16)
     for ax, feat in zip(axes.ravel(), top6):
         v = d[feat].to_numpy(float)
         good = np.isfinite(v)
-        lo, hi = np.nanpercentile(v[good], [1, 99])
-        bins = np.linspace(lo, hi, 40)
-        ax.hist(v[good & is_sig], bins=bins, density=True, color=HIST_COLOR,
-                alpha=0.85, label="Neutron")
-        ax.hist(v[good & ~is_sig], bins=bins, density=True, color="#999999",
-                alpha=0.55, label="Background")
+        bins = feature_bins(v[good])
+        ax.hist(v[good & ~is_sig], bins=bins, density=True, label="Background",
+                **art("bkg"))
+        ax.hist(v[good & is_sig], bins=bins, density=True, label="Neutron",
+                **art("sig"))
         ax.set_xlabel(xlabel.get(feat, feat))
         ax.set_ylabel("Normalised Counts")
         ax.set_title(f"Discriminating Feature: {tlabel.get(feat, feat)}", fontsize=12)
         ax.legend(frameon=False)
     fig.tight_layout(rect=[0, 0, 1, 0.96])
-    _watermark(fig)
-    pdf.savefig(fig)
-    plt.close(fig)
+    emit(pdf, fig, figures_dir, name)
 
 
-def top2_feature_pages(pdf, mc_scores_path, frozen_path):
+def top2_feature_pages(pdf, mc_scores_path, frozen_path, figures_dir=None,
+                       name_prefix="presentable_features_top2", model="rf"):
     """One full-width landscape page PER top-2 RF feature (wide aspect, big fonts,
     larger framed legend). Same Neutron/Background MC split as the 6-panel page;
     pe_total renamed to 'Total cluster charge' (this page is plain features)."""
-    bundle = joblib.load(frozen_path)
-    feats = list(bundle["features"])
-    imp = bundle["models"]["rf"].feature_importances_
-    top2 = [feats[i] for i in np.argsort(imp)[::-1][:2]]
+    top2, _ = top_features(frozen_path, model, 2)
 
     d = pd.read_parquet(mc_scores_path)
-    is_sig = d["dominant_class"].isin(NEUTRON_CLASSES).to_numpy()
+    is_sig = signal_mask(d)
     xlabel = dict(FEATURE_LABELS, pe_total="Total cluster charge [p.e.]")
     tlabel = dict(FEATURE_TITLES, pe_total="Total cluster charge")
 
     for feat in top2:
         v = d[feat].to_numpy(float)
         good = np.isfinite(v)
-        lo, hi = np.nanpercentile(v[good], [1, 99])
-        bins = np.linspace(lo, hi, 40)
+        bins = feature_bins(v[good])
 
         fig, ax = plt.subplots(figsize=(11, 5.5))   # wide landscape, like attached
-        ax.hist(v[good & is_sig], bins=bins, density=True, color=HIST_COLOR,
-                alpha=0.85, label="Neutron")
-        ax.hist(v[good & ~is_sig], bins=bins, density=True, color="#999999",
-                alpha=0.55, label="Background")
+        ax.hist(v[good & ~is_sig], bins=bins, density=True, label="Background",
+                **art("bkg"))
+        ax.hist(v[good & is_sig], bins=bins, density=True, label="Neutron",
+                **art("sig"))
         ax.set_xlabel(xlabel.get(feat, feat), fontsize=BIG_LABEL)
         ax.set_ylabel("Normalised Counts", fontsize=BIG_LABEL)
         ax.set_title(f"Discriminating Feature: {tlabel.get(feat, feat)}",
@@ -190,51 +344,49 @@ def top2_feature_pages(pdf, mc_scores_path, frozen_path):
                   borderpad=1.0, labelspacing=0.8, handlelength=2.0,
                   loc=legend_loc)
         fig.tight_layout()
-        _watermark(fig)
-        pdf.savefig(fig)
-        plt.close(fig)
+        emit(pdf, fig, figures_dir, f"{name_prefix}_{feat}")
 
 
-def feature_cut_page(pdf, mc_scores_path, frozen_path, score_cut):
+def feature_cut_page(pdf, mc_scores_path, frozen_path, score_cut,
+                     figures_dir=None, name="presentable_features_cut",
+                     model="rf", title=None):
     """Top-6 features split by the RF 80%-eff cut: clusters PASSING rf_score>=cut
     (kept) vs FAILING (rejected). The cut is a threshold on the RF *score*, not on
     any single feature, so this pass/fail overlay -- not a vertical line -- is the
     correct way to show what the cut does to each feature distribution."""
-    bundle = joblib.load(frozen_path)
-    feats = list(bundle["features"])
-    imp = bundle["models"]["rf"].feature_importances_
-    top6 = [feats[i] for i in np.argsort(imp)[::-1][:6]]
+    top6, _ = top_features(frozen_path, model, 6)
 
     d = pd.read_parquet(mc_scores_path)
-    passes = (d["rf_score"] >= score_cut).to_numpy()
-    is_sig = d["dominant_class"].isin(NEUTRON_CLASSES).to_numpy()
+    score_col = f"{model}_score"
+    score_cut = resolve_score_cut(d, score_col, score_cut)
+    passes = (d[score_col] >= score_cut).to_numpy()
+    is_sig = signal_mask(d)
     # Same Neutron/Background truth split as the plain feature page, but restricted
     # to clusters that PASS the RF cut -> shows what survives the 80%-eff selection.
     keep = passes
 
     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-    fig.suptitle("OPTICS + Random Forest — Top 6 Features After the 80%-Efficiency "
-                 "Cut", fontsize=16)
+    fig.suptitle(title or ("OPTICS + Random Forest — Top 6 Features After the "
+                           "80%-Efficiency Cut"), fontsize=16)
     for ax, feat in zip(axes.ravel(), top6):
         v = d[feat].to_numpy(float)
         good = np.isfinite(v)
-        lo, hi = np.nanpercentile(v[good], [1, 99])
-        bins = np.linspace(lo, hi, 40)
-        ax.hist(v[good & keep & is_sig], bins=bins, density=True, color=HIST_COLOR,
-                alpha=0.85, label="Neutron")
-        ax.hist(v[good & keep & ~is_sig], bins=bins, density=True, color="#999999",
-                alpha=0.55, label="Background")
+        bins = feature_bins(v[good])
+        ax.hist(v[good & keep & ~is_sig], bins=bins, density=True,
+                label="Background", **art("bkg"))
+        ax.hist(v[good & keep & is_sig], bins=bins, density=True, label="Neutron",
+                **art("sig"))
         ax.set_xlabel(FEATURE_LABELS.get(feat, feat))
         ax.set_ylabel("Normalised Counts")
         ax.set_title(_feat_title(feat), fontsize=12)
         ax.legend(frameon=False)
     fig.text(0.5, 0.005,
-             fr"RF score $\geq$ {score_cut:.3f}   (80% neutron efficiency from CC-$\nu$ MC)",
-             ha="center", fontsize=12, color="#b22222")
+             fr"{MODEL_NAMES[model]} score $\geq$ {score_cut:.3f}   "
+             fr"(80% neutron efficiency from CC-$\nu$ MC)",
+             ha="center", fontsize=12,
+             color="black" if STYLE == "bw" else "#b22222")
     fig.tight_layout(rect=[0, 0.03, 1, 0.96])
-    _watermark(fig)
-    pdf.savefig(fig)
-    plt.close(fig)
+    emit(pdf, fig, figures_dir, name)
 
 
 def multiplicity_page(pdf, scored, score_cut, max_n=6, logy=True):
@@ -461,26 +613,77 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--mc-scores", required=True)
     p.add_argument("--frozen", required=True)
-    p.add_argument("--scored", required=True)
-    p.add_argument("--score-cut", type=float, default=0.547)
+    p.add_argument("--style", required=True, choices=sorted(STYLE_RC),
+                   help="poster = light blue signal over light grey background (the "
+                        "established look); bw = black and white. Always explicit.")
+    p.add_argument("--font", default="helvetica", choices=sorted(FONT_RC),
+                   help="helvetica (default, Nimbus Sans incl. mathtext) or dejavu "
+                        "to reproduce the June-16 figures exactly. Echoed at startup.")
+    p.add_argument("--scored",
+                   help="AmBe scored parquet. Needed for the multiplicity and "
+                        "capture-time pages; omit it together with --mc-only.")
+    p.add_argument("--mc-only", action="store_true",
+                   help="Produce the MC feature pages only, no AmBe data pages. "
+                        "Required when --scored is not given, so a missing input can "
+                        "never silently drop pages.")
+    p.add_argument("--rank-model", required=True, choices=sorted(MODEL_NAMES),
+                   help="Which trained model's importances order the features, and "
+                        "whose score the cut page uses. Pick the best-performing one "
+                        "for the run; it is read from the frozen bundle, never refit.")
+    p.add_argument("--score-cut", default="auto",
+                   help="Score threshold for the cut page, or 'auto' (default) for "
+                        "the 80%%-signal-efficiency threshold read off the score "
+                        "table.")
+    p.add_argument("--title",
+                   help="Suptitle for the top-6 feature page. Defaults to the "
+                        "OPTICS + Random Forest wording.")
+    p.add_argument("--name-prefix", default="presentable",
+                   help="Basename prefix for the per-figure files written into "
+                        "--figures-dir.")
+    p.add_argument("--figures-dir",
+                   help="Also write every page as its own standalone PDF + PNG here.")
     p.add_argument("--out", required=True)
     args = p.parse_args()
 
-    scored = pd.read_parquet(args.scored)
+    if args.scored is None and not args.mc_only:
+        p.error("--scored is missing: pass it, or pass --mc-only to say you want "
+                "the MC feature pages only.")
+    if args.mc_only and args.scored:
+        p.error("--mc-only and --scored are contradictory; drop one.")
+
+    apply_style(args.style, args.font)
+
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
+    figs = Path(args.figures_dir) if args.figures_dir else None
+    if figs:
+        figs.mkdir(parents=True, exist_ok=True)
+    pfx = args.name_prefix
+    mname = MODEL_NAMES[args.rank_model]
+    title = args.title or f"OPTICS + {mname} — Top 6 Discriminating Features"
+    cut_title = f"{title.split(' — ')[0]} — Top 6 Features After the 80%-Efficiency Cut"
+
+    n_stages = 2 if args.mc_only else 4
     with PdfPages(out) as pdf:
-        print("[1/4] RF top-6 feature page ...")
-        feature_page(pdf, args.mc_scores, args.frozen)
+        print(f"[1/{n_stages}] RF top-6 feature page ...")
+        feature_page(pdf, args.mc_scores, args.frozen, figures_dir=figs,
+                     title=title, name=f"{pfx}_features", model=args.rank_model)
         print("      + top-2 features, full-width landscape (1 per page) ...")
-        top2_feature_pages(pdf, args.mc_scores, args.frozen)
-        print("[2/4] RF cut-applied feature page ...")
-        feature_cut_page(pdf, args.mc_scores, args.frozen, args.score_cut)
-        print("[3/4] multiplicity pages (log-y + linear-y) ...")
-        multiplicity_page(pdf, scored, args.score_cut, logy=True)
-        multiplicity_page(pdf, scored, args.score_cut, logy=False)
-        print("[4/4] capture-time pages (per position + 2 combined) ...")
-        capture_pages(pdf, scored, args.score_cut)
+        top2_feature_pages(pdf, args.mc_scores, args.frozen, figures_dir=figs,
+                           name_prefix=f"{pfx}_features_top2",
+                           model=args.rank_model)
+        print(f"[2/{n_stages}] RF cut-applied feature page ...")
+        feature_cut_page(pdf, args.mc_scores, args.frozen, args.score_cut,
+                         figures_dir=figs, name=f"{pfx}_features_cut",
+                         model=args.rank_model, title=cut_title)
+        if not args.mc_only:
+            scored = pd.read_parquet(args.scored)
+            print(f"[3/{n_stages}] multiplicity pages (log-y + linear-y) ...")
+            data_cut = float(args.score_cut) if args.score_cut != "auto" else 0.547
+            multiplicity_page(pdf, scored, data_cut, logy=True)
+            multiplicity_page(pdf, scored, data_cut, logy=False)
+            print(f"[4/{n_stages}] capture-time pages (per position + 2 combined) ...")
+            capture_pages(pdf, scored, data_cut)
     print(f"\nwrote -> {out}")
 
 
