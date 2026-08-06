@@ -1,0 +1,39 @@
+run_name: AmBe2.0v4_fprompt
+display_label: "AmBe v4 real data (widened IC window + fprompt)"
+campaign: "AmBe 2.0v4"
+description: >
+  Real AmBe source-calibration data, v4 hardware/campaign — same runs as
+  data_ambe2v4.yaml, but Stage 1 uses the 2D waveform cut instead of the tight
+  1D IC window: 500 < IC_adjusted < 2000 AND 0.15 < fprompt < 0.30, plus the
+  unchanged second-pulse veto.
+
+  fprompt = (integral over the fast prompt peak, bins 350-400) / (integral over
+  the whole pulse, bins 350-1200), computed against a pre-pulse median baseline.
+  It is a pulse-shape variable, so unlike the IC window it does not track PMT
+  gain and needs no per-campaign retuning. Widening the IC window recovers the
+  efficiency that 700-1200 was clipping, while fprompt independently removes the
+  two populations that made the tight window necessary: low-IC noise sits at
+  high fprompt, high-IC pile-up at low fprompt.
+
+  Produced by:
+    python run_waveform_gated_pipeline.py \
+        --dataset /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4 \
+        --runinfo AmBe2.0v4_fprompt \
+        --selection-mode fprompt2d --pulse-gamma 500 --pulse-max 2000
+
+  Compare against data_ambe2v4.yaml (700-1200, IC only) — the numbers to watch
+  are efficiency per position and the capture-time tau, which must stay
+  consistent with 29.16 +/- 0.44 us if the extra statistics are signal and not
+  background.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/ambe_data
+
+inputs:
+  trigger_summary: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_AmBe2.0v4_fprompt.csv
+  candidate_csvs: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBe2.0v4_fprompt_*.csv
+
+cuts:
+  pe_max: 100
+  charge_balance_max: 0.45
+
+fit_params: {}
