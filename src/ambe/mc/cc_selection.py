@@ -66,7 +66,7 @@ import pandas as pd
 import uproot
 
 from ..context import RunContext
-from ..io import resolve_inputs
+from ..io import resolve_inputs, filter_files_with_tree
 
 # EventSelector flag bits (eventStatusFlagged) ------------------------------- #
 FLAG = {
@@ -83,9 +83,38 @@ FLAG = {
 #   r = sqrt(X^2 + Z^2) < 100 cm  (1 m radius)
 #   |Y| < 100 cm                  (2 m total height)
 TANK_RADIUS_CM = 152.4
+TANK_HALF_Y_CM = 198.0   # tank half-height; |Y| < 198 cm spans the full water volume
 FV_RADIUS_CM   = 100.0   # 1 m radius (James's CCPR reference)
 FV_HALF_Y_CM   = 100.0   # |Y| < 100 cm, 2 m height (James's CCPR reference)
 FV_REQUIRE_Z_NEGATIVE = False
+
+# --- Neutrino-interaction vertex, GENIE -> tank coordinates ------------------ #
+# There are TWO vertex branch families and they are NOT interchangeable:
+#
+#   trueVtx{X,Y,Z}        the WCSim PRIMARY-PARTICLE START POINT.  Equal to the
+#                         interaction vertex ONLY when the interaction happened
+#                         inside the tank.  In world-volume samples it is a
+#                         sentinel (0, 14.4602, -168.100) for ~67% of events
+#                         (co-occurring with trueMuonEnergy == -9999) and the
+#                         TANK-ENTRY POINT on the r=152.4 cm wall for the rest.
+#   trueNuIntxVtx_{X,Y,Z} the GENIE interaction vertex, in GENIE/world
+#                         coordinates.  Always the real interaction point.
+#
+# The two families differ by a rigid offset, measured on the productionv3 tank
+# sample over events with a valid WCSim primary:
+#     dx = 0.000 +- 0.011,  dy = -14.466 +- 0.062,  dz = +168.100 +- 0.013  [cm]
+# so tank coords = GENIE coords + (0, +14.466, -168.100).  Re-measure with:
+#     mean(trueVtxY - trueNuIntxVtx_Y) over trueMuonEnergy != -9999 events
+# The offset is verified at runtime by _origin_offset_report() below, which is
+# the guard against a future production changing the convention silently.
+NUVTX_OFFSET_X_CM =    0.000
+NUVTX_OFFSET_Y_CM =   14.466
+NUVTX_OFFSET_Z_CM = -168.100
+
+# Sentinel written when there is no primary muon (all NC events, plus CC events
+# whose muon was produced outside the tank).  Not filtered anywhere: it only
+# reaches the diagnostic muon_energy_min_mev cut, which defaults to off.
+NO_MUON_SENTINEL = -9999.0
 
 # Default prompt window (ns) used by the optional prompt_pe cut; kept consistent
 # with apply_residual_filter's `residual.prompt_window_ns`.
@@ -103,7 +132,9 @@ CC_EVENT_BRANCHES = [
     "truePiPlus", "truePiMinus", "PiPlusCount", "PiMinusCount",
     "trueMultiRing",
     "trueVtxX", "trueVtxY", "trueVtxZ",
-    "trueNuIntxVtx_Z",
+    # GENIE interaction vertex — all three coordinates.  Needed to decide whether
+    # the neutrino interacted inside the tank at all (see _augment_origin_columns).
+    "trueNuIntxVtx_X", "trueNuIntxVtx_Y", "trueNuIntxVtx_Z",
     "trueMuonEnergy", "trueNeutrons",
     # MRD / veto scalar branches (richer files only)
     "MRDClusterNumber", "TankMRDCoinc",
@@ -233,6 +264,19 @@ def _make_cut_registry() -> dict[str, Cut]:
         "single_ring": Cut("single-ring (trueMultiRing==0)",
                            lambda df, c: df["trueMultiRing"].to_numpy() == 0,
                            ("trueMultiRing",), toggle="require_single_ring"),
+        # --- interaction-origin cuts (world-volume samples) -------------------
+        # NOT part of any stream and default_on=False: origin_in_tank is a LABEL
+        # input, not a selection cut.  Registered so an origin-restricted variant
+        # can be recombined off a persisted table without reprocessing.
+        "origin_in_tank": Cut("interaction vertex inside tank",
+                              lambda df, c: df["origin_in_tank"].to_numpy() == 1,
+                              ("origin_in_tank",), toggle="require_origin_in_tank",
+                              default_on=False),
+        "origin_outside_tank": Cut("interaction vertex outside tank",
+                                   lambda df, c: df["origin_in_tank"].to_numpy() == 0,
+                                   ("origin_in_tank",),
+                                   toggle="require_origin_outside_tank",
+                                   default_on=False),
     }
 
 
@@ -269,6 +313,46 @@ _STREAMS: dict[str, List[str]] = {
     "ccinc_truth_plus_mrd": ["cc", "fsl_muon", "mu_p", "cos_theta",
                              "fv_radius", "fv_y", "fv_z", "nhit",
                              "mrd_tag", "no_veto", "prompt_pe"],
+    # --- The two INDEPENDENT streamlines (2026-08-03). ------------------------
+    # These are alternatives, NOT a combination: they share the fiducial-volume
+    # and muon-kinematics phase space and differ only in how the muon is TAGGED.
+    # ccinc_truth_plus_mrd above ANDs both taggings together, which conflates
+    # them — use it only if you specifically want the intersection.
+    #
+    # Cut order is deliberate and differs from the older streams: fiducial volume
+    # first, then muon kinematics, then the tagging cuts. That way the cut-flow's
+    # relative-efficiency column reads as "what does the tagging cost me on top of
+    # a fixed phase space", which is the comparison the two streamlines exist to
+    # make. Final survivor counts are order-independent; only the table changes.
+    "ccinc_truthtag": ["fv_radius", "fv_y", "fv_z",
+                       "mu_p", "cos_theta",
+                       "cc", "fsl_muon",
+                       "nhit"],
+    "ccinc_recotag": ["fv_radius", "fv_y", "fv_z",
+                      "mu_p", "cos_theta",
+                      "no_veto", "mrd_tag", "prompt_pe",
+                      "nhit"],
+    # --- World-volume variants (2026-08-04). ----------------------------------
+    # Same tagging as the tank streamlines above, with the fiducial-volume cuts
+    # REMOVED.  Two reasons, and neither is a shortcut:
+    #
+    #  1. The FV cut reads trueVtx*, which in a world sample is not the
+    #     interaction vertex at all (sentinel for ~67% of events, tank-entry point
+    #     for the rest) — so cutting on it there is meaningless, not just lossy.
+    #  2. Even on the correct vertex, requiring r<100 / |Y|<100 keeps only ~5% of
+    #     world events and removes exactly the out-of-tank population the world
+    #     sample exists to provide.
+    #
+    # `origin_in_tank` is persisted for every event either way, so an FV- or
+    # origin-restricted variant is recoverable from the saved table without
+    # reprocessing.  The FV cut is a MUON phase-space cut and plays no part in the
+    # signal/background label; see _augment_origin_columns.
+    "ccinc_truthtag_world": ["mu_p", "cos_theta",
+                             "cc", "fsl_muon",
+                             "nhit"],
+    "ccinc_recotag_world": ["mu_p", "cos_theta",
+                            "no_veto", "mrd_tag", "prompt_pe",
+                            "nhit"],
 }
 
 
@@ -371,6 +455,105 @@ def _read_event_table(root_path: Path, tree_name: str,
     return arr
 
 
+def _augment_origin_columns(df: pd.DataFrame, cuts: Optional[dict] = None) -> pd.DataFrame:
+    """Add the interaction-vertex-in-tank-coordinates columns and origin flags.
+
+    Always applied (not stream-dependent), because `origin_in_tank` is the
+    signal/background discriminator for world-volume samples and must be present
+    in every persisted table:
+
+      _nuvtx_x_tank / _nuvtx_y_tank / _nuvtx_z_tank   GENIE vertex in tank coords
+      _nuvtx_r                                        hypot(x, z); ANNIE axis is Y
+      origin_in_tank                                  1 = neutrino interacted
+                                                      inside the tank water
+      origin_in_fv                                    1 = interaction vertex also
+                                                      inside the FIDUCIAL volume
+
+    `origin_in_fv` exists so a merged tank+world training can hold the SIGNAL class
+    to one homogeneous phase space.  The tank sample's signal is FV-selected; world
+    in-tank events are not (the world streams drop the FV cut because it reads
+    trueVtx*, which is wrong there).  Measured on the full world sample: only 29.3%
+    of world in-tank cc_pass events are also inside the FV, so merging without this
+    would make 71% of the world signal near-wall events that the tank signal never
+    contains -- and d_wall is a top-4 discriminator.
+
+    Absent branches leave every column absent, so a consumer falls back to its
+    "column missing" default rather than getting a wrong answer — the same
+    convention the cut registry uses for dynamic omission.
+
+    NOTE the FV *cuts* intentionally still read trueVtx*, not these columns. These
+    are LABEL inputs consumed by mva_analysis, never selection cuts: origin_in_tank
+    decides signal-vs-background, origin_in_fv decides which clusters are eligible
+    for the signal class at all.
+    """
+    need = ("trueNuIntxVtx_X", "trueNuIntxVtx_Y", "trueNuIntxVtx_Z")
+    if not all(b in df.columns for b in need):
+        return df
+    df = df.copy()
+    df["_nuvtx_x_tank"] = df["trueNuIntxVtx_X"].to_numpy(dtype=float) + NUVTX_OFFSET_X_CM
+    df["_nuvtx_y_tank"] = df["trueNuIntxVtx_Y"].to_numpy(dtype=float) + NUVTX_OFFSET_Y_CM
+    df["_nuvtx_z_tank"] = df["trueNuIntxVtx_Z"].to_numpy(dtype=float) + NUVTX_OFFSET_Z_CM
+    df["_nuvtx_r"] = np.hypot(df["_nuvtx_x_tank"].to_numpy(),
+                              df["_nuvtx_z_tank"].to_numpy())
+    df["origin_in_tank"] = (
+        (df["_nuvtx_r"].to_numpy() < TANK_RADIUS_CM)
+        & (np.abs(df["_nuvtx_y_tank"].to_numpy()) < TANK_HALF_Y_CM)
+    ).astype(int)
+    # Same FV thresholds the fv_radius / fv_y cuts use, read from the config so the
+    # two cannot drift apart, but evaluated on the GENIE vertex rather than trueVtx.
+    c = cuts or {}
+    df["origin_in_fv"] = (
+        (df["_nuvtx_r"].to_numpy() < float(c.get("fv_radius_cm", FV_RADIUS_CM)))
+        & (np.abs(df["_nuvtx_y_tank"].to_numpy()) < float(c.get("fv_y_max_cm", FV_HALF_Y_CM)))
+    ).astype(int)
+    return df
+
+
+def _origin_offset_report(df: pd.DataFrame, verbose: bool) -> None:
+    """Validate the GENIE->tank vertex offset and report the in/out-of-tank split.
+
+    On events that (a) interacted inside the tank and (b) have a real WCSim
+    primary, trueVtx* must equal the offset-corrected GENIE vertex to well under
+    a centimetre.  If a future production changes the coordinate convention this
+    is the check that catches it — a wrong offset would otherwise mislabel every
+    event's origin while looking perfectly plausible.
+    """
+    if not verbose or "origin_in_tank" not in df.columns or not len(df):
+        return
+    n = len(df)
+    n_in = int(df["origin_in_tank"].sum())
+    print(f"[cc] interaction origin: {n_in}/{n} inside tank ({100.0 * n_in / n:.1f}%), "
+          f"{n - n_in} outside ({100.0 * (n - n_in) / n:.1f}%)")
+    r = df["_nuvtx_r"].to_numpy(dtype=float)
+    print(f"[cc]   _nuvtx_r range: {r.min():.1f} .. {r.max():.1f} cm")
+
+    if not all(c in df.columns for c in ("trueVtxX", "trueVtxY", "trueVtxZ")):
+        return
+    m = df["origin_in_tank"].to_numpy() == 1
+    if "trueMuonEnergy" in df.columns:
+        # trueVtx is a sentinel when there is no primary muon; those rows say
+        # nothing about the offset and must not enter the comparison.
+        m &= df["trueMuonEnergy"].to_numpy(dtype=float) != NO_MUON_SENTINEL
+    if m.sum() < 10:
+        print(f"[cc]   offset check skipped: only {int(m.sum())} in-tank events "
+              "with a valid WCSim primary")
+        return
+    d = np.stack([
+        np.abs(df["trueVtxX"].to_numpy(dtype=float)[m] - df["_nuvtx_x_tank"].to_numpy()[m]),
+        np.abs(df["trueVtxY"].to_numpy(dtype=float)[m] - df["_nuvtx_y_tank"].to_numpy()[m]),
+        np.abs(df["trueVtxZ"].to_numpy(dtype=float)[m] - df["_nuvtx_z_tank"].to_numpy()[m]),
+    ])
+    worst = d.max(axis=1)
+    frac_bad = float((d.max(axis=0) > 1.0).mean())
+    print(f"[cc]   GENIE->tank offset check on {int(m.sum())} in-tank events: "
+          f"max|dx,dy,dz| = ({worst[0]:.3f}, {worst[1]:.3f}, {worst[2]:.3f}) cm, "
+          f"{100.0 * frac_bad:.2f}% exceed 1 cm")
+    if frac_bad > 0.02:
+        print("[cc]   *** WARNING: the GENIE->tank vertex offset does not hold on this "
+              "sample. NUVTX_OFFSET_*_CM in cc_selection.py was measured on productionv3 "
+              "tank/fmvmrd; re-measure before trusting origin_in_tank. ***")
+
+
 def _augment_vector_columns(root_path: Path, df: pd.DataFrame, cuts: dict,
                             stream_ids: Sequence[str], tree_name: str,
                             max_events: Optional[int], verbose: bool) -> pd.DataFrame:
@@ -384,9 +567,14 @@ def _augment_vector_columns(root_path: Path, df: pd.DataFrame, cuts: dict,
     """
     import awkward as ak
 
-    need_tracks = "mrd_tag" in stream_ids and \
-        str(cuts.get("mrd_source", "cluster")).lower() == "tracks"
-    need_prompt = "prompt_pe" in stream_ids
+    # "__all__" forces every derived column regardless of what this stream cuts on.
+    # Used when the event table is persisted: a table missing _prompt_pe_sum cannot
+    # re-derive a promptPE cut later, so the saved table would silently only support
+    # the stream that produced it. Costs one extra vector read per file.
+    force_all = "__all__" in stream_ids
+    need_tracks = force_all or ("mrd_tag" in stream_ids and
+                                str(cuts.get("mrd_source", "cluster")).lower() == "tracks")
+    need_prompt = force_all or "prompt_pe" in stream_ids
     if not (need_tracks or need_prompt):
         return df
 
@@ -639,22 +827,110 @@ def _plot_nminus1(ctx: RunContext, n1: pd.DataFrame, stream_name: str):
     return out
 
 
+def _persist_cc_tables(ctx: RunContext, table: pd.DataFrame, stream: str,
+                       stream_cuts: List[Cut], cc_cuts: dict,
+                       cut_log: list, omitted: list, verbose: bool = True):
+    """
+    Write everything needed to reconstruct this stream's selection later, offline.
+
+    Stage 0 previously kept only the final `cc_pass` boolean, so the cut-flow lived
+    in the log text and "which cut removed this event" was unrecoverable without
+    re-reading every ROOT file (hours). Four artifacts fix that, all built from data
+    already in memory, so this costs no extra reading:
+
+      parquet/<run>__cc_<stream>_events.parquet
+          The FULL event-level table: every scalar CC branch plus the derived
+          _prompt_pe_sum / _mrd_ntracks_sum columns, one row per event, plus one
+          `cut_<id>` boolean per cut in the stream and the final cc_pass. Any cut
+          value, any cut combination, any other stream, and any N-1 study can be
+          recomputed from this file in seconds. This is the no-information-loss
+          guarantee — keep it even if the parquet of hits is deleted.
+      csv/<run>__cc_<stream>_cutflow.csv / .md
+          The sequential cut-flow table, ready to paste into a note or slide.
+      csv/<run>__cc_<stream>_omitted.csv
+          Only if a cut was skipped for a missing branch — so a silently shorter
+          cut list can never masquerade as a real efficiency.
+
+    The `cut_<id>` flags are evaluated INDEPENDENTLY (each cut against the full
+    sample, not against the survivors of the previous cut), which is what makes
+    arbitrary re-combination possible. The sequential cut-flow is recovered by
+    AND-ing them in order; do not read a single column as a sequential efficiency.
+    """
+    out = table.copy()
+    # Resolve IDs from the stream definition rather than zipping against stream_cuts:
+    # _resolve_stream drops toggled-off cuts, so the two lists need not align.
+    ids = [i for i in _resolve_stream_ids(stream, cc_cuts) if i in _CUT_REGISTRY]
+    cols = set(out.columns)
+    for cut_id in ids:
+        cut = _CUT_REGISTRY[cut_id]
+        if any(c not in cols for c in cut.requires):
+            continue                      # omitted cut — no flag, reported separately
+        try:
+            out[f"cut_{cut_id}"] = np.asarray(cut.fn(out, cc_cuts), dtype=bool)
+        except Exception as exc:           # never let bookkeeping kill the run
+            if verbose:
+                print(f"[cc] WARN could not store flag for cut {cut_id!r}: {exc}")
+
+    ev_out = ctx.parquet_path(f"{ctx.run_name}__cc_{stream}_events")
+    out.to_parquet(ev_out, index=False)
+
+    n = len(table)
+    cf = pd.DataFrame(
+        [{"cut": name, "events_before": before, "events_after": after,
+          "pct_of_total": round(100.0 * after / n, 4) if n else 0.0,
+          "pct_of_previous": round(100.0 * after / before, 4) if before else 0.0}
+         for name, before, after in cut_log])
+    cf_out = ctx.csv_path(f"{ctx.run_name}__cc_{stream}_cutflow")
+    cf.to_csv(cf_out, index=False)
+    md_out = ctx.csv_dir / f"{ctx.run_name}__cc_{stream}_cutflow.md"
+    md_out.write_text(cutflow_markdown(cut_log, n, stream, omitted))
+
+    if omitted:
+        om_out = ctx.csv_path(f"{ctx.run_name}__cc_{stream}_omitted")
+        pd.DataFrame({"stream": stream, "omitted_cut": omitted}).to_csv(om_out,
+                                                                       index=False)
+        if verbose:
+            print(f"[cc] [{stream}] WARNING {len(omitted)} cut(s) omitted -> {om_out}")
+
+    if verbose:
+        npass = int(table["cc_pass"].sum()) if "cc_pass" in table.columns else -1
+        print(f"[cc] [{stream}] persisted event table ({n} events, {npass} passing, "
+              f"{len([c for c in out.columns if c.startswith('cut_')])} per-cut flags) "
+              f"-> {ev_out}")
+        print(f"[cc] [{stream}] persisted cut-flow -> {cf_out}")
+        print(f"[cc] [{stream}] persisted cut-flow (markdown) -> {md_out}")
+
+
+def _resolve_stream_ids(stream_name: str, cc_cuts: dict) -> List[str]:
+    """The ordered cut IDs for a stream (config override wins over the builtin)."""
+    return list((cc_cuts.get("cc_streams", {}) or {}).get(stream_name)
+                or _STREAMS.get(stream_name, []))
+
+
 # --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
 def build_cc_table(ctx: RunContext, tree_name: str = "Event",
                    max_events: Optional[int] = None,
                    verbose: bool = True,
-                   stream: Optional[str] = None) -> pd.DataFrame:
+                   stream: Optional[str] = None,
+                   root_files: Optional[Sequence[Path]] = None,
+                   save_tables: bool = False) -> pd.DataFrame:
     """
     Read CC branches from all input ROOT files, compute cc_pass per event,
     and return a global event-level table (used by processor.py).
 
     stream: named selection stream (default: reads ctx.cuts['cc_stream'],
             falls back to 'cc0pi_legacy' for backward compatibility).
+    root_files: optional pre-resolved, tree-validated file list. processor.run passes
+            its own list so both see exactly the same files (see _build_stream_table).
+    save_tables: also persist the event table, the cut-flow (CSV + markdown) and the
+            per-cut pass flags for this stream — see _persist_cc_tables. Without this
+            the cut-flow exists only as log text and is lost with the log.
     """
     cc_cuts = _merged_cuts(ctx)
-    root_files = resolve_inputs(ctx.inputs["root_files"])
+    if root_files is None:
+        root_files = resolve_inputs(ctx.inputs["root_files"])
     if max_events is None and ctx.cuts:
         max_events = ctx.cuts.get("max_events")
     if stream is None:
@@ -678,8 +954,12 @@ def build_cc_table(ctx: RunContext, tree_name: str = "Event",
     if verbose:
         print(f"[cc] computing stream '{stream}' CC selection over {len(root_files)} file(s)")
     table, stream_cuts, _ = _build_stream_table(
-        ctx, stream, cc_cuts, tree_name, max_events, verbose)
+        ctx, stream, cc_cuts, tree_name, max_events, verbose, root_files=root_files,
+        augment_all=save_tables)
     table, _log, _omitted = _compute_pass(table, stream_cuts, cc_cuts, verbose, stream)
+    if save_tables:
+        _persist_cc_tables(ctx, table, stream, stream_cuts, cc_cuts,
+                           _log, _omitted, verbose)
     return table
 
 
@@ -710,11 +990,31 @@ def _build_cc_table_legacy(ctx: RunContext, tree_name: str = "Event",
 
 def _build_stream_table(ctx: RunContext, stream_name: str, cc_cuts: dict,
                         tree_name: str, max_events: Optional[int],
-                        verbose: bool) -> Tuple[pd.DataFrame, List[Cut], int]:
-    """Read all files, augment vectors, and return (table, stream_cuts, events_per_file)."""
-    root_files = resolve_inputs(ctx.inputs["root_files"])
+                        verbose: bool,
+                        root_files: Optional[Sequence[Path]] = None,
+                        augment_all: bool = False,
+                        ) -> Tuple[pd.DataFrame, List[Cut], int]:
+    """Read all files, augment vectors, and return (table, stream_cuts, events_per_file).
+
+    `root_files` lets the caller supply an already-resolved (and tree-validated) file
+    list. The CC table and the hit loop in processor.run MUST see the same files, or
+    the per-file cc_pass merge silently drops events, so processor passes its list in
+    rather than letting this re-resolve the glob independently.
+    """
+    if root_files is None:
+        # Same guard processor.run uses: a zero-key file left by an interrupted grid
+        # job (productionv3 ANNIEEvent_cc_neutrino_v3_24.root) otherwise aborts the
+        # whole read with a bare KeyError. When the caller supplies root_files it has
+        # already filtered, and re-filtering would re-open 498 files for nothing.
+        root_files, _ = filter_files_with_tree(
+            resolve_inputs(ctx.inputs["root_files"]), tree_name, verbose)
     stream_ids = (cc_cuts.get("cc_streams", {}).get(stream_name)
                   or _STREAMS.get(stream_name, []))
+    # When the table will be persisted, derive EVERY vector-reduced column, not just
+    # the ones this stream cuts on — otherwise the saved table can only re-derive its
+    # own stream (a truth-tag table with no _prompt_pe_sum cannot reproduce a promptPE
+    # cut, which defeats the point of saving it).
+    aug_ids = list(stream_ids) + (["__all__"] if augment_all else [])
     # propagate the residual prompt window for the prompt_pe augmentation
     prompt_win = float(((ctx.extra.get("residual", {}) if ctx.extra else {})
                         or {}).get("prompt_window_ns", PROMPT_WINDOW_NS))
@@ -725,7 +1025,8 @@ def _build_stream_table(ctx: RunContext, stream_name: str, cc_cuts: dict,
     first_file_events = 0
     for k, rp in enumerate(root_files):
         df = _read_event_table(rp, tree_name, max_events, verbose)
-        df = _augment_vector_columns(rp, df, cc_cuts, stream_ids, tree_name,
+        df = _augment_origin_columns(df, cc_cuts)
+        df = _augment_vector_columns(rp, df, cc_cuts, aug_ids, tree_name,
                                      max_events, verbose)
         df = df.reset_index(drop=True)
         df["eventID"] = np.arange(len(df)) + event_id_offset
@@ -735,6 +1036,7 @@ def _build_stream_table(ctx: RunContext, stream_name: str, cc_cuts: dict,
         frames.append(df)
 
     table = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    _origin_offset_report(table, verbose)
     stream_cuts = _resolve_stream(stream_name, cc_cuts)
     return table, stream_cuts, first_file_events
 
