@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Tuple
 
 import awkward as ak
 import numpy as np
@@ -41,7 +41,7 @@ import pandas as pd
 import uproot
 
 from ..context import RunContext
-from ..io import resolve_inputs
+from ..io import resolve_inputs, filter_files_with_tree
 
 
 # Branches needed from the full-hit list
@@ -90,6 +90,15 @@ PDG_SHORT = {
 # deliberately NOT in this set -- "a gamma did this" is real information.
 CARRIER_PDGS = frozenset({11, -11})
 
+# The EM-mediator set used by origin_pdg/origin_class (see first_non_em_pdg).
+# ImmediateAncestor deliberately stops at a gamma, which is the right call for
+# "did a gamma make this light" but hides WHAT made the gamma: a capture gamma, a
+# pi0 decay gamma and a proton-induced de-excitation gamma all read as class 5.
+# origin_* walks one step further and skips gammas too, so the reported ancestor
+# is the first hadron/muon/neutron in the chain. Both are kept: bg_class answers
+# "what emitted the light", origin_class answers "what physics put it there".
+EM_PDGS = frozenset({11, -11, 22})
+
 MAX_CHAIN_LABEL = 6   # truncate lineage_chain beyond this many generations
 
 
@@ -122,6 +131,57 @@ BG_CLASS_LABELS = {
     -5: "untraced", 0: "dark_noise", 1: "neutron", 2: "muon", 3: "charged_pion",
     4: "proton", 5: "photon", 6: "kaon", 7: "electron_positron", 8: "other",
 }
+
+
+# origin_class shares BG_CLASS_LABELS' codes but NOT its -5 label. A -5 here means
+# the chain is complete and contains no non-EM ancestor at all (e.g. "e- <- gamma"
+# where the gamma IS the generator primary) — that is a physics statement, not a
+# tracing failure, and reading it as "untraced" would be wrong.
+ORIGIN_CLASS_LABELS = {**BG_CLASS_LABELS, -5: "pure_em_or_untraced"}
+
+
+def classify_pdg(pdg: int) -> int:
+    """
+    PDG -> BG_CLASS_LABELS code.
+
+    Mirrors BackTracker::ClassifyBackgroundPDG
+    (EB_BC_TA/UserTools/BackTracker/BackTracker.cpp:479-491) so origin_class and
+    bg_class share one coding scheme and can be tabulated side by side. Any PDG
+    the C++ side would call "other" (8) lands on 8 here too.
+    """
+    pdg = int(pdg)
+    if pdg == 2112:
+        return 1
+    if abs(pdg) == 13:
+        return 2
+    if abs(pdg) == 211:
+        return 3
+    if pdg == 2212:
+        return 4
+    if pdg == 22:
+        return 5
+    if abs(pdg) in (321, 311):
+        return 6
+    if abs(pdg) == 11:
+        return 7
+    if pdg == -5:
+        return -5
+    return 8
+
+
+def first_non_em_pdg(chain) -> Tuple[int, int]:
+    """
+    First ancestor in `chain` that is neither e+- nor gamma.
+
+    `chain` is nearest-ancestor-first (see _decode_lineage_chains). Returns
+    (origin_pdg, n_em_steps_skipped). An all-EM or empty chain returns (-5, len)
+    -- -5 is the same "untraced/unavailable" sentinel used by bg_class, so the
+    two columns share a missing-value convention.
+    """
+    for k, p in enumerate(chain):
+        if int(p) not in EM_PDGS:
+            return int(p), k
+    return -5, len(chain)
 
 CLUSTER_BRANCHES = [
     "eventNumber",
@@ -365,6 +425,11 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
                 ck, t_hit, dp_lookup, offset
             )
 
+            # First non-EM ancestor: resolves the "everything is a photon"
+            # degeneracy of bg_class without over-shooting to the generator
+            # primary the way root_pdg does.
+            origin_pdg, n_em_skipped = first_non_em_pdg(lin_chain)
+
             pulse_rows.append({
                 "eventID":              event_id,
                 "eventNumber":          event_id,   # local (per-file) event number, for CC-table join
@@ -399,6 +464,12 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
                 "lineage_first_pdg":    int(lin_chain[0]) if lin_chain else -5,
                 "is_gamma_mediated":    int(22 in lin_chain),
                 "is_carrier_mediated":  int(bool(lin_chain) and lin_chain[0] in CARRIER_PDGS),
+                # First non-EM ancestor (e+- AND gamma skipped) — the particle
+                # that actually put the energy there. Only trustworthy where
+                # lineage_status == 1; -5 means all-EM chain or no chain.
+                "origin_pdg":           origin_pdg,
+                "origin_class":         classify_pdg(origin_pdg),
+                "n_em_steps_skipped":   n_em_skipped,
             })
 
         # ClusterFinder sidecar
@@ -439,10 +510,17 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
     import pyarrow.parquet as pq
 
     root_files = resolve_inputs(ctx.inputs["root_files"])
+    # Drop files with no usable tree BEFORE any reading, and use the same validated
+    # list for the CC table below — otherwise a single empty grid output aborts the
+    # whole pass, and a per-reader mismatch would desync the cc_pass merge.
+    n_globbed = len(root_files)
+    root_files, skipped_files = filter_files_with_tree(root_files, tree_name, verbose)
     if max_events is None:
         max_events = ctx.cuts.get("max_events") if ctx.cuts else None
     if verbose:
         print(f"[mc.processor] processing {len(root_files)} file(s)"
+              + (f" of {n_globbed} globbed ({len(skipped_files)} skipped)"
+                 if skipped_files else "")
               + (f"  (max_events={max_events})" if max_events else ""))
 
     # Build CC table once upfront (scalar branches only — fits in RAM easily).
@@ -452,10 +530,17 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
         print(f"[mc.processor] CC stream: {cc_stream!r}")
     cc_tbl = cc_selection.build_cc_table(ctx, tree_name=tree_name,
                                          max_events=max_events, verbose=verbose,
-                                         stream=cc_stream)
+                                         stream=cc_stream, root_files=root_files,
+                                         save_tables=True)
     cc_merge = None
     if len(cc_tbl) and "cc_pass" in cc_tbl.columns:
         cc_cols = ["_source_file", "eventNumber", "cc_pass"]
+        # origin_in_tank rides along UNRENAMED (not as event_origin_in_tank): it is
+        # the signal/background label input consumed downstream by cluster_features
+        # and mva_analysis, which look it up by this exact name.
+        for _oc in ("origin_in_tank", "origin_in_fv"):
+            if _oc in cc_tbl.columns:
+                cc_cols.append(_oc)
         extra = [c for c in ("trueCC", "truePrimaryPdg", "trueMultiRing",
                              "trueNeutrons", "trueMuonEnergy") if c in cc_tbl.columns]
         cc_merge = cc_tbl[cc_cols + extra].rename(
@@ -475,6 +560,7 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
     lin_status_counts: dict = {}
     lin_chain_counts: dict = {}
     root_counts: dict = {}
+    origin_counts: dict = {}          # origin_class over class--5 background hits
     n_bkg_hits = n_gamma_med = n_carrier_med = 0
     n_untraced = n_no_entry = n_time_mm = 0
 
@@ -497,6 +583,12 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
             file_cc = cc_merge[cc_merge["_source_file"] == rp.name]
             pf = pf.merge(file_cc, on=["_source_file", "eventNumber"], how="left")
             pf["cc_pass"] = pf["cc_pass"].fillna(False).astype(bool)
+            # An unmatched event means we know nothing about its origin; -1 keeps it
+            # distinguishable from a genuine "outside the tank" (0), which is a
+            # positive statement and gets labeled background.
+            for _oc in ("origin_in_tank", "origin_in_fv"):
+                if _oc in pf.columns:
+                    pf[_oc] = pf[_oc].fillna(-1).astype(int)
 
         # Accumulate summary stats (scalars — negligible memory).
         for cls, cnt in pf["truth_class"].value_counts().items():
@@ -516,6 +608,9 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
                     lin_chain_counts[ch] = lin_chain_counts.get(ch, 0) + int(cnt)
                 for rp_, cnt in bkg["root_pdg"].value_counts().items():
                     root_counts[rp_] = root_counts.get(rp_, 0) + int(cnt)
+                if "origin_class" in bkg.columns:
+                    for oc, cnt in bkg["origin_class"].value_counts().items():
+                        origin_counts[oc] = origin_counts.get(oc, 0) + int(cnt)
                 n_bkg_hits    += len(bkg)
                 n_gamma_med   += int(bkg["is_gamma_mediated"].sum())
                 n_carrier_med += int(bkg["is_carrier_mediated"].sum())
@@ -590,6 +685,13 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
                 print(f"[mc.processor]   via e+- carrier : {n_carrier_med:>8d}  "
                       f"({100*n_carrier_med/n_bkg_hits:.1f}%)  "
                       f"[the rest radiate directly]")
+                if origin_counts:
+                    print("[mc.processor]   origin_class (first non-EM ancestor — "
+                          "e+- AND gamma skipped):")
+                    for oc in sorted(origin_counts, key=lambda c: -origin_counts[c]):
+                        label = ORIGIN_CLASS_LABELS.get(oc, "?")
+                        print(f"      {oc:>3d} {label:<18s} {origin_counts[oc]:>8d}  "
+                              f"({100*origin_counts[oc]/n_bkg_hits:.1f}%)")
                 print("[mc.processor]   root ancestor (top of chain):")
                 for rp_ in sorted(root_counts, key=lambda r: -root_counts[r])[:8]:
                     print(f"      {pdg_short(rp_):<10s} {root_counts[rp_]:>8d}  "
@@ -602,10 +704,152 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
     return pulses_path, clusters_path
 
 
+def rederive_cc_pass(ctx: RunContext, source_pulses: Path,
+                     tree_name: str = "Event",
+                     max_events: Optional[int] = None,
+                     verbose: bool = True):
+    """
+    Build this run's __pulses.parquet from an EXISTING one by recomputing cc_pass
+    for this config's cc_stream. The per-hit content is copied unchanged.
+
+    Why this exists: the per-hit pass is the expensive part of Stage 0 (hours for a
+    few-hundred-file sample) and it is completely independent of the CC selection --
+    every detector hit is written regardless of cc_pass, and the residual/CC filter
+    is applied downstream in cluster_features. So two selection streamlines over the
+    same input files differ ONLY in the cc_pass column (and the event_* truth columns
+    merged alongside it). Re-reading every ROOT file per streamline would repeat hours
+    of identical work.
+
+    The CC table itself IS rebuilt here, because different cuts need different
+    branches -- that read is unavoidable, but it is a small fraction of Stage 0.
+
+    Guardrails: the source parquet must carry _source_file and eventNumber (the merge
+    keys) and must have been produced from the same input glob. Both are checked; a
+    mismatch raises rather than silently producing a mis-merged sample.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    source_pulses = Path(source_pulses)
+    if not source_pulses.exists():
+        raise FileNotFoundError(f"--reuse-hits source not found: {source_pulses}")
+
+    dest = ctx.parquet_path(f"{ctx.run_name}__pulses")
+    if dest.resolve() == source_pulses.resolve():
+        raise ValueError(
+            f"--reuse-hits source and this run's pulses path are the same file "
+            f"({dest}); that would overwrite the source mid-read. Use a different "
+            f"run_name.")
+
+    root_files = resolve_inputs(ctx.inputs["root_files"])
+    root_files, skipped = filter_files_with_tree(root_files, tree_name, verbose)
+    if max_events is None:
+        max_events = ctx.cuts.get("max_events") if ctx.cuts else None
+
+    from . import cc_selection
+    cc_stream = (ctx.cuts or {}).get("cc_stream", "cc0pi_legacy")
+    if verbose:
+        print(f"[mc.processor] REUSING hits from {source_pulses}")
+        print(f"[mc.processor] recomputing cc_pass for stream {cc_stream!r} "
+              f"over {len(root_files)} file(s)")
+    cc_tbl = cc_selection.build_cc_table(ctx, tree_name=tree_name,
+                                         max_events=max_events, verbose=verbose,
+                                         stream=cc_stream, root_files=root_files,
+                                         save_tables=True)
+    if not len(cc_tbl) or "cc_pass" not in cc_tbl.columns:
+        raise RuntimeError(f"CC table for stream {cc_stream!r} is empty — cannot "
+                           f"rederive cc_pass")
+
+    extra = [c for c in ("trueCC", "truePrimaryPdg", "trueMultiRing",
+                         "trueNeutrons", "trueMuonEnergy") if c in cc_tbl.columns]
+    base_cols = ["_source_file", "eventNumber", "cc_pass"]
+    # origin_in_tank is stream-independent (it describes the interaction, not the
+    # selection), but it is rebuilt rather than carried over so a source parquet
+    # produced before this column existed still gains it here.
+    for _oc in ("origin_in_tank", "origin_in_fv"):
+        if _oc in cc_tbl.columns:
+            base_cols.append(_oc)
+    cc_merge = cc_tbl[base_cols + extra].rename(
+        columns={c: f"event_{c}" for c in extra})
+    # Columns the previous run's merge added — dropped so they are rebuilt, never
+    # carried over stale from the other streamline.
+    stale = ["cc_pass", "origin_in_tank", "origin_in_fv"] + [f"event_{c}" for c in extra]
+
+    pf = pq.ParquetFile(str(source_pulses))
+    avail = set(pf.schema_arrow.names)
+    for req in ("_source_file", "eventNumber"):
+        if req not in avail:
+            raise KeyError(f"source parquet lacks {req!r} — cannot merge cc_pass "
+                           f"onto it (was it produced by a different processor "
+                           f"version?)")
+    src_files = set(cc_merge["_source_file"].unique())
+
+    writer = None
+    n_rows = n_pass = 0
+    seen_files: set = set()
+    n_groups = pf.num_row_groups
+    for i in range(n_groups):
+        d = pf.read_row_group(i).to_pandas()
+        if not len(d):
+            continue
+        seen_files.update(d["_source_file"].unique().tolist())
+        d = d.drop(columns=[c for c in stale if c in d.columns])
+        d = d.merge(cc_merge, on=["_source_file", "eventNumber"], how="left")
+        d["cc_pass"] = d["cc_pass"].fillna(False).astype(bool)
+        for _oc in ("origin_in_tank", "origin_in_fv"):
+            if _oc in d.columns:
+                d[_oc] = d[_oc].fillna(-1).astype(int)
+        n_rows += len(d)
+        n_pass += int(d["cc_pass"].sum())
+        tbl = pa.Table.from_pandas(d, preserve_index=False)
+        if writer is None:
+            writer = pq.ParquetWriter(dest, tbl.schema)
+        writer.write_table(tbl)
+        if verbose:
+            print(f"[mc.processor]  rederive chunk {i+1}/{n_groups}  "
+                  f"({100*(i+1)/n_groups:.0f}%)  rows={n_rows}", flush=True)
+    if writer:
+        writer.close()
+
+    missing = seen_files - src_files
+    if missing:
+        raise RuntimeError(
+            f"{len(missing)} source file(s) in the reused parquet have no CC-table "
+            f"entry, so their hits would all be cc_pass=False: "
+            f"{sorted(missing)[:5]}... The reused parquet was built from a different "
+            f"input glob than this config declares.")
+
+    # The ClusterFinder sidecar carries no cc_pass, so it is stream-independent.
+    src_cf = source_pulses.parent / source_pulses.name.replace("__pulses",
+                                                              "__clusterfinder")
+    dest_cf = ctx.parquet_path(f"{ctx.run_name}__clusterfinder")
+    if src_cf.exists() and not dest_cf.exists():
+        dest_cf.symlink_to(src_cf)
+        if verbose:
+            print(f"[mc.processor] clusterfinder sidecar (stream-independent) "
+                  f"symlinked -> {src_cf}")
+
+    if verbose:
+        print(f"[mc.processor] wrote {n_rows} hits     -> {dest}")
+        print(f"[mc.processor] cc_pass=True on {n_pass}/{n_rows} hits "
+              f"({100*n_pass/max(n_rows,1):.2f}%)")
+    return dest, dest_cf
+
+
 def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     p = argparse.ArgumentParser(prog="ambe mc process")
     p.add_argument("--tree", default="Event")
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--max-events", type=int, default=None)
+    p.add_argument("--reuse-hits", default=None, metavar="PULSES_PARQUET",
+                   help="Skip the per-hit ROOT pass: copy hits from this existing "
+                        "__pulses.parquet and only recompute cc_pass for this "
+                        "config's cc_stream. Use when running a second selection "
+                        "streamline over input files already processed once.")
     args = p.parse_args(list(argv) if argv else [])
-    run(ctx, tree_name=args.tree, verbose=not args.quiet, max_events=args.max_events)
+    if args.reuse_hits:
+        rederive_cc_pass(ctx, Path(args.reuse_hits), tree_name=args.tree,
+                         verbose=not args.quiet, max_events=args.max_events)
+    else:
+        run(ctx, tree_name=args.tree, verbose=not args.quiet,
+            max_events=args.max_events)
