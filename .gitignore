@@ -42,3 +42,8 @@ logs/
 .idea/
 *.swp
 .DS_Store
+
+# Local data trees (BeamCluster ROOT files + per-run waveform subdirs).
+# newPMTPhysics/ is ~70 GB and test/ ~2.6 GB — inputs, never repo content.
+newPMTPhysics/
+test/
