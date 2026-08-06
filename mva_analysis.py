@@ -35,10 +35,19 @@ Outputs (under <output_root>/<run_name>/)
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 import joblib
+import matplotlib
+# Force the non-interactive backend BEFORE pyplot is imported. With DISPLAY set this
+# otherwise picks TkAgg, and Tk's teardown aborts the interpreter (exit 134,
+# "RuntimeError: main thread is not in main loop") AFTER the plots and score table are
+# written but BEFORE the importance CSV — which is exactly what happened to the merged
+# truthtag/clusterfinder training on 2026-08-05.
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -149,6 +158,9 @@ def load_paths(config_path: str) -> tuple[str, Path, Path, Path, str]:
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
     run_name    = cfg["run_name"]
+    # Remembered so --merge-run can resolve sibling runs under the same output_root
+    # without each needing its own config file.
+    load_paths_for_run._default_root = cfg["output_root"]  # type: ignore[attr-defined]
     root        = Path(cfg["output_root"]) / run_name
     parquet_dir = root / "parquet"
     plots_dir   = root / "plots"
@@ -159,6 +171,84 @@ def load_paths(config_path: str) -> tuple[str, Path, Path, Path, str]:
     return run_name, parquet_dir, plots_dir, csv_dir, display_label
 
 
+def load_paths_for_run(run_name: str, output_root: Optional[str] = None) -> Path:
+    """Return the parquet dir for a run named directly (no config file needed).
+
+    Used by --merge-run.  Resolution order mirrors ambe.paths: explicit argument,
+    then $AMBE_OUT, then the output_root the primary config already resolved to
+    (set by main() so a merge run does not need its own config on disk).
+    """
+    root = (output_root or os.environ.get("AMBE_OUT")
+            or getattr(load_paths_for_run, "_default_root", None))
+    if not root:
+        raise RuntimeError(
+            f"cannot resolve output_root for --merge-run {run_name!r}; "
+            "set $AMBE_OUT or pass a primary --config that defines output_root")
+    return Path(root) / run_name / "parquet"
+
+
+def _report_per_source(sub: pd.DataFrame, y: np.ndarray, when: str) -> None:
+    """Signal/background counts broken down by source run and interaction origin.
+
+    Only prints for merged trainings — this is the table that shows what the world
+    sample actually contributed, and whether the 1:1 cap threw most of it away.
+    """
+    if "_source_run" not in sub.columns or sub["_source_run"].nunique() < 2:
+        return
+    if len(sub) != len(y):
+        return
+    print(f"[mva] per-source breakdown ({when}):")
+    for rn, grp in sub.groupby("_source_run", sort=True):
+        yy = y[grp.index.to_numpy()]
+        line = (f"[mva]   {rn}: signal={int(yy.sum())}  "
+                f"background={int((yy == 0).sum())}")
+        if "origin_in_tank" in grp.columns:
+            n_in = int((grp["origin_in_tank"] == 1).sum())
+            n_out = int((grp["origin_in_tank"] == 0).sum())
+            line += f"  (origin in-tank={n_in}, out-of-tank={n_out})"
+        print(line)
+
+
+def _apply_cc_filter(df: pd.DataFrame, cc_only: bool, run_name: str) -> pd.DataFrame:
+    """Apply the CC selection to one run's clusters, respecting interaction origin.
+
+    Out-of-tank interactions are harvested UNCONDITIONALLY: they are pure
+    background, and the CC-inclusive cuts exist to select a muon-neutrino signal
+    sample.  Gating the background on them would discard most of the contamination
+    being modelled and would make the background population a function of the
+    signal selection.  In-tank events still have to pass cc_pass.
+
+    On a tank-only run (no origin_in_tank column) this reduces exactly to the
+    previous behaviour: df[df.cc_pass == 1].
+    """
+    if not cc_only:
+        return df.reset_index(drop=True)
+    if "cc_pass" not in df.columns:
+        print(f"[mva] WARN: --cc-only requested but no 'cc_pass' column in {run_name}; "
+              "training on all clusters.")
+        return df.reset_index(drop=True)
+
+    n_before = len(df)
+    keep = df["cc_pass"] == 1
+    if "origin_in_tank" in df.columns:
+        out_of_tank = df["origin_in_tank"] == 0
+        keep = keep | out_of_tank
+        n_out = int(out_of_tank.sum())
+        n_out_failing_cc = int((out_of_tank & (df["cc_pass"] != 1)).sum())
+        print(f"[mva] CC filter [{run_name}]: {int(keep.sum())}/{n_before} kept "
+              f"(cc_pass==1: {int((df['cc_pass'] == 1).sum())}; "
+              f"out-of-tank kept unconditionally: {n_out}, of which "
+              f"{n_out_failing_cc} would have failed the CC selection)")
+    else:
+        print(f"[mva] CC filter [{run_name}] (cc_pass==1): "
+              f"{int(keep.sum())}/{n_before} clusters kept")
+    df = df[keep].reset_index(drop=True)
+    if df.empty:
+        sys.exit(f"[mva] No clusters survive the CC filter for {run_name} — check the "
+                 "CC selection or pass --all-events.")
+    return df
+
+
 # ---------------------------------------------------------------------------
 # Data preparation
 # ---------------------------------------------------------------------------
@@ -166,7 +256,8 @@ def load_paths(config_path: str) -> tuple[str, Path, Path, Path, str]:
 def prepare_data(df: pd.DataFrame,
                  method: str = "optics",
                  bkg_mode: str = "all",
-                 keep_prompt_bkg: bool = False) -> tuple[np.ndarray, np.ndarray, list[str], pd.DataFrame]:
+                 keep_prompt_bkg: bool = False,
+                 fv_signal_only: bool = True) -> tuple[np.ndarray, np.ndarray, list[str], pd.DataFrame]:
     """
     Filter to one clustering method, build feature matrix and binary labels.
 
@@ -202,6 +293,54 @@ def prepare_data(df: pd.DataFrame,
         # Fallback for parquets without dominant_class (older features runs)
         is_sig = sub["is_truth_neutron"] == 1
 
+    # --- Interaction-origin term ------------------------------------------------
+    # A cluster is signal only if a neutrino interacted INSIDE the tank. Neutron
+    # light from an interaction in the dirt/concrete/MRD steel is background no
+    # matter how clean the capture looks, because no in-tank neutrino produced it.
+    # This is what makes the world-volume sample usable as extra background.
+    #
+    # origin_in_tank: 1 = inside, 0 = outside, -1 = unknown (event absent from the
+    # CC table). Only an explicit 0 demotes a cluster; -1 and a missing column both
+    # leave the label untouched, so the tank-only runs trained before this existed
+    # reproduce their AUCs exactly.
+    # Signal phase-space homogeneity. The tank sample's signal is FV-selected; world
+    # in-tank events are not, because the world streams drop the FV cut (it reads
+    # trueVtx*, which is not the interaction vertex there). Only 29.3% of world
+    # in-tank cc_pass events are also inside the FV, so merging blind would make 71%
+    # of the world signal near-wall events the tank signal never contains -- and
+    # d_wall is a top-4 discriminator.
+    #
+    # These clusters are DROPPED, not moved to background: an in-tank neutron capture
+    # is signal-like and we simply did not select it. Labeling it background would
+    # teach the model that in-tank captures are background, which is the opposite of
+    # the truth we are trying to encode.
+    drop_outside_fv = pd.Series(False, index=sub.index)
+    if (fv_signal_only and "origin_in_fv" in sub.columns
+            and "origin_in_tank" in sub.columns):
+        drop_outside_fv = (sub["origin_in_tank"] == 1) & (sub["origin_in_fv"] == 0)
+        if int(drop_outside_fv.sum()):
+            print(f"[mva] signal phase space: dropped {int(drop_outside_fv.sum())} "
+                  "in-tank clusters outside the fiducial volume (kept the signal class "
+                  "homogeneous with the tank sample; pass --no-fv-signal to keep them)")
+
+    # Applied to the SIGNAL side here and to the background side below — these
+    # clusters must leave BOTH classes, or they stay signal and the phase-space
+    # inhomogeneity this flag exists to remove is still there.
+    is_sig = is_sig & ~drop_outside_fv
+
+    if "origin_in_tank" in sub.columns:
+        outside = sub["origin_in_tank"] == 0
+        n_demoted = int((is_sig & outside).sum())
+        is_sig = is_sig & ~outside
+        n_unknown = int((sub["origin_in_tank"] == -1).sum())
+        print(f"[mva] interaction-origin term: {int(outside.sum())} clusters from "
+              f"out-of-tank interactions -> background "
+              f"({n_demoted} of them neutron-dominated, i.e. real captures "
+              f"relabeled as background)")
+        if n_unknown:
+            print(f"[mva]   {n_unknown} clusters have origin_in_tank == -1 (unknown) "
+                  "and keep their composition-based label")
+
     if bkg_mode in ("darknoise", "nonneutron", "pop2"):
         if not has_dc:
             raise ValueError(
@@ -230,6 +369,15 @@ def prepare_data(df: pd.DataFrame,
             is_bkg = ~sub["dominant_class"].isin(NEUTRON_CLASSES)
         else:
             is_bkg = sub["is_truth_neutron"] == 0
+        # Out-of-tank neutron-dominated clusters were demoted out of the signal
+        # above; they must be picked up HERE or `mask = is_sig | is_bkg` would drop
+        # them from the training set altogether — silently discarding the exact
+        # population the world sample was processed to provide.
+        if "origin_in_tank" in sub.columns:
+            is_bkg = is_bkg | (sub["origin_in_tank"] == 0)
+        # In-tank/outside-FV clusters are excluded from BOTH classes (see above), so
+        # `mask = is_sig | is_bkg` drops them rather than mislabeling them.
+        is_bkg = is_bkg & ~drop_outside_fv
         # Prompt-cluster exclusion (default). With keep_prompt_bkg=True we KEEP the
         # early-timing non-neutron-physics clusters as background — ~3x more bkg
         # stats, which the 1:1 cap badly needs in the CC-neutrino context.
@@ -360,6 +508,20 @@ def event_train_test_split(
                 idx_tr, idx_te)
 
     event_ids = sub["eventID"].fillna(-1).to_numpy(int)
+
+    # With --merge-run, eventID restarts from 0 in every run. Keying the split on a
+    # bare eventID would treat event 17 of the tank run and event 17 of the world run
+    # as the SAME event, merging unrelated events and leaking clusters across the
+    # train/test boundary. Key on (_source_run, eventID) instead.
+    if "_source_run" in sub.columns and sub["_source_run"].nunique() > 1:
+        codes, _ = pd.factorize(
+            pd.Series(list(zip(sub["_source_run"].astype(str).tolist(),
+                               event_ids.tolist()))))
+        event_ids = np.where(event_ids < 0, -1, codes)
+        print(f"[split] keyed on (_source_run, eventID): "
+              f"{len(np.unique(event_ids[event_ids >= 0]))} distinct events across "
+              f"{sub['_source_run'].nunique()} runs")
+
     unique_events = np.unique(event_ids[event_ids >= 0])
 
     # Label each event: 1 if it has any signal cluster, 0 if all background
@@ -960,9 +1122,24 @@ def main():
     p.add_argument("--max-ratio", type=float, default=3.0, metavar="R",
                    help="Maximum signal:background (or background:signal) ratio after capping. "
                         "Default 3.0. Use 1.0 for a physically balanced 1:1 dataset.")
+    p.add_argument("--merge-run", action="append", default=None, metavar="RUN_NAME",
+                   help="Merge another run's cluster_features.parquet into the training "
+                        "set (repeatable). Resolved as <output_root>/<RUN_NAME>/parquet/. "
+                        "Labels come from the same rule as the primary run, so the full "
+                        "feature set is preserved — unlike --external-background, which "
+                        "forces every external row to y=0 and drops vtx_*/d_source_*. "
+                        "Intended for the world-volume background sample: "
+                        "--merge-run cc_neutrino_v3world_truthtag")
+    p.add_argument("--no-fv-signal", dest="fv_signal", action="store_false", default=True,
+                   help="Keep in-tank clusters whose interaction vertex is OUTSIDE the "
+                        "fiducial volume in the signal/background pool. Default is to "
+                        "drop them, so the signal class stays in the same phase space as "
+                        "the FV-selected tank sample. No effect on runs without an "
+                        "origin_in_fv column (i.e. all tank-only runs).")
     p.add_argument("--cc-only", dest="cc_only", action="store_true", default=True,
                    help="Train only on CC-passing clusters (cc_pass==1), if the column exists. "
-                        "Default: on.")
+                        "Clusters from out-of-tank interactions (origin_in_tank==0) are kept "
+                        "regardless, since they are background by construction. Default: on.")
     p.add_argument("--all-events", dest="cc_only", action="store_false",
                    help="Disable the CC filter — train on every cluster regardless of cc_pass.")
     p.add_argument("--save-model", nargs="?", const="__DEFAULT__", default=None,
@@ -1029,17 +1206,38 @@ def main():
 
     print(f"[mva] loading {feat_path}")
     df = pd.read_parquet(feat_path)
+    df["_source_run"] = run_name
+    df = _apply_cc_filter(df, args.cc_only, run_name)
 
-    # CC selection: by default restrict to CC-passing clusters (cc_pass==1).
-    if args.cc_only and "cc_pass" in df.columns:
-        n_before = len(df)
-        df = df[df["cc_pass"] == 1].reset_index(drop=True)
-        print(f"[mva] CC filter (cc_pass==1): {len(df)}/{n_before} clusters kept")
-        if df.empty:
-            sys.exit("[mva] No CC-passing clusters — check the CC selection or pass --all-events.")
-    elif args.cc_only:
-        print("[mva] WARN: --cc-only requested but no 'cc_pass' column in features parquet; "
-              "training on all clusters.")
+    # ── extra runs merged in (e.g. the world-volume background sample) ─────
+    # Each run is CC-filtered on its OWN cc_pass before the concat: cc_pass encodes
+    # a different selection in every run, so filtering after the merge would apply
+    # one run's selection semantics to another's rows.
+    for extra_run in (args.merge_run or []):
+        extra_paths = load_paths_for_run(extra_run)
+        extra_path = extra_paths / f"{extra_run}__cluster_features.parquet"
+        if not extra_path.exists():
+            sys.exit(f"[mva] --merge-run {extra_run}: features parquet not found: "
+                     f"{extra_path}\n      Run: ambe mc features --config "
+                     f"configs/{extra_run}.yaml")
+        print(f"[mva] merging {extra_path}")
+        extra_df = pd.read_parquet(extra_path)
+        extra_df["_source_run"] = extra_run
+        extra_df = _apply_cc_filter(extra_df, args.cc_only, extra_run)
+        df = pd.concat([df, extra_df], ignore_index=True)
+
+    if args.merge_run:
+        # Runs processed before origin_in_tank existed contribute NaN here. Normalise
+        # to -1 (unknown) so the label rule sees one dtype and one sentinel: NaN
+        # would silently compare False against every test, which happens to be the
+        # behaviour we want but for the wrong reason and only by luck.
+        for _oc in ("origin_in_tank", "origin_in_fv"):
+            if _oc in df.columns:
+                df[_oc] = df[_oc].fillna(-1).astype(int)
+        print(f"[mva] merged frame: {len(df)} clusters from "
+              f"{df['_source_run'].nunique()} run(s)")
+        for rn, cnt in df["_source_run"].value_counts().items():
+            print(f"[mva]   {rn}: {cnt}")
 
     # ── external real-data background mode ────────────────────────────────
     external_bkg = args.external_background
@@ -1074,7 +1272,8 @@ def main():
         bkg_mode = args.bkg_mode
         keep_prompt = bool(args.keep_prompt_bkg)
         X, y, features, sub = prepare_data(df, method=args.method, bkg_mode=bkg_mode,
-                                           keep_prompt_bkg=keep_prompt)
+                                           keep_prompt_bkg=keep_prompt,
+                                           fv_signal_only=bool(args.fv_signal))
         excl_str = "incl. prompt" if keep_prompt else "excl. prompt"
         bkg_label_str = {"darknoise":  "dark noise only (class 0)",
                          "nonneutron": "class-5 spurious (prompt gamma + near-capture)",
@@ -1082,7 +1281,10 @@ def main():
                          "all":        f"all non-neutron ({excl_str})"}.get(bkg_mode, bkg_mode)
         print(f"[mva] bkg_mode={bkg_mode}  ({bkg_label_str})")
         kp_tag = "__keepprompt" if (keep_prompt and bkg_mode == "all") else ""
-        mode_tag = ("" if bkg_mode == "all" else f"__{bkg_mode}") + kp_tag
+        # Merged trainings get their own tag so they never overwrite the tank-only
+        # baseline artifacts — the two must stay comparable side by side.
+        merge_tag = "__merged" if args.merge_run else ""
+        mode_tag = ("" if bkg_mode == "all" else f"__{bkg_mode}") + kp_tag + merge_tag
         plot_run_name = (f"{display_label} [{bkg_mode} bkg{', +prompt' if kp_tag else ''}]"
                          if (bkg_mode != "all" or kp_tag) else display_label)
         skip_event_level = False
@@ -1092,6 +1294,7 @@ def main():
     print(f"[mva] {X.shape[0]} clusters  |  "
           f"signal={n_sig}  background={n_bkg}  |  {len(features)} features")
     print(f"[mva] features: {features}")
+    _report_per_source(sub, y, "before capping")
 
     if n_sig < 10 or n_bkg < 10:
         sys.exit("[mva] Too few samples to train — check features parquet.")
@@ -1104,6 +1307,7 @@ def main():
     n_sig = int(y.sum())
     n_bkg = int((y == 0).sum())
     print(f"[mva] after capping: signal={n_sig}  background={n_bkg}")
+    _report_per_source(sub, y, "after capping")
 
     # Event-level train/test split
     # Assigns whole events to train or test so no event leaks across the boundary.
@@ -1208,6 +1412,10 @@ def main():
         sub[col] = vals
     sub["in_test"] = False
     sub.loc[idx_te, "in_test"] = True
+    # Persist the training target. Without it, anything reading the score table has
+    # to re-derive the label, and for a merged frame dominant_class alone gives the
+    # WRONG answer (out-of-tank captures are neutron-dominated but are background).
+    sub["mva_label"] = y
 
     # Output paths — mode_tag encodes the background choice so all four combinations
     # land in the same run directory without overwriting each other:
