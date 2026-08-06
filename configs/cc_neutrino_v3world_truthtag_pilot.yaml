@@ -1,0 +1,97 @@
+run_name: cc_neutrino_v3world_truthtag_pilot
+display_label: "CC Neutrino v3 WORLD — TRUTH-tag streamline (out-of-tank background) — 5-FILE PILOT"
+campaign: "MC CC Neutrino (productionv3 WORLD/fmvmrd, 500 files, 343,027 events)"
+description: >
+  World-volume counterpart of cc_neutrino_v3_truthtag, processed to supply the
+  background class the tank-only sample cannot contain: neutrino interactions in
+  the dirt/concrete/MRD steel whose final-state particles propagate into the tank.
+  ~77% of this sample interacts OUTSIDE the tank, ~23% inside.
+  Cuts in order: p_mu [600,1200) MeV/c, cos(theta)>0.8, trueCC==1,
+  FSL muon (trueFSLPdg==13), nhits>=4.
+  NO FIDUCIAL-VOLUME CUT — see cc_stream ccinc_truthtag_world in cc_selection.py.
+  Two reasons: (1) the FV cut reads trueVtx*, which in a world sample is NOT the
+  interaction vertex (sentinel for ~67% of events, tank-entry point for the rest);
+  (2) even on the correct vertex, r<100/|Y|<100 keeps only ~5% of world events and
+  removes exactly the out-of-tank population this sample exists to provide.
+  The FV cut is a MUON phase-space cut and plays no part in the label.
+  LABELING: signal = neutron-dominated AND origin_in_tank==1. Every cluster from an
+  out-of-tank interaction is background regardless of neutron content — a neutron
+  born in the dirt that drifts in and captures is background, because no in-tank
+  neutrino produced it. origin_in_tank / _nuvtx_r are persisted per event so any
+  FV- or origin-restricted variant is recoverable without reprocessing.
+  PILOT: first 5 files only (~3,400 events) — geometry/label smoke test before
+  the full pass. Sample: /pnfs/.../world/fmvmrd — 500 files,
+  N=0..499 with no gaps, 343,027 events, no empty/unreadable files. NOTE the file
+  naming differs from the tank sample (ANNIEEvent_cc_neutrino_world_<N>.root).
+  GENIE truth on THIS production is sound (verified 2026-08-04): for in-tank events
+  trueVtx matches the offset-corrected GENIE vertex to <0.2 cm and
+  corr(trueMuonEnergy,trueFSLEnergy)=1.000000. The "world truth is broken" finding
+  in WORLD_v3_REPORT.md applies only to the older hand-built
+  EB_BC_TA/ANNIEEvent_bt_v3world.root, not to these files.
+  OPTICS: ms=8, xi=0.02, t_unit=25 ns. Both clustering methods trained separately.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_world/productionv3/world/fmvmrd/ANNIEEvent_cc_neutrino_world_0.root
+    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_world/productionv3/world/fmvmrd/ANNIEEvent_cc_neutrino_world_1.root
+    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_world/productionv3/world/fmvmrd/ANNIEEvent_cc_neutrino_world_2.root
+    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_world/productionv3/world/fmvmrd/ANNIEEvent_cc_neutrino_world_3.root
+    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_world/productionv3/world/fmvmrd/ANNIEEvent_cc_neutrino_world_4.root
+
+cuts:
+  min_pulses_per_event: 0
+
+  cc_stream: ccinc_truthtag_world
+
+  cc_cuts:
+    # Fiducial volume: OFF. The keys are kept for documentation — the world streams
+    # do not reference the fv_* cuts at all, so these values are inert.
+    require_fv: false
+    fv_radius_cm: 100.0
+    fv_y_max_cm: 100.0
+    fv_require_z_negative: false
+    # muon phase space — identical to the tank streamlines
+    mu_p_min_mev: 600.0
+    mu_p_max_mev: 1200.0
+    cos_theta_min: 0.8
+    nhit_min: 4
+    # tagging — truth side
+    require_cc: true
+    require_fsl_muon: true
+    require_no_veto: false
+    require_mrd: false
+    mrd_source: cluster
+    require_prompt_pe: false
+    prompt_pe_min: 500.0
+    prompt_pe_max: 3000.0
+
+fit_params: {}
+
+residual:
+  # cc_only: FALSE — deliberately different from the tank streamlines.
+  # Clusters are built for EVERY event, not just cc_pass ones, which is what makes
+  # the unconditional out-of-tank background harvest possible. cc_pass is still
+  # computed and stored per cluster; the per-origin gating happens at merge time in
+  # mva_analysis.py (_apply_cc_filter), where it can change without reprocessing.
+  cc_only: false
+  prompt_window_ns: 10000
+
+optics:
+  min_samples: [8]
+  xi: [0.02]
+  t_unit_ns: [25]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 0.0
+
+features:
+  min_samples: 8
+  xi: 0.02
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0
+  truth_window_ns: 75.0
+
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv

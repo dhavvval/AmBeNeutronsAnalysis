@@ -1,0 +1,74 @@
+run_name: cc_neutrino_v3_mrdfmv_pilot
+display_label: "CC Neutrino v3 PILOT — CCinc + MRD + FMV (xi=0.02, 5 files)"
+campaign: "MC CC Neutrino (productionv3 tank/fmvmrd PILOT, 5 files)"
+description: >
+  GENIE neutrino-interaction WCSim, productionv3 tank/fmvmrd (499 files, 5000
+  events each). CC selection uses the ccinc_truth_plus_mrd stream: the previous
+  CC-inclusive cuts (trueCC, FSL muon trueFSLPdg==13, p_mu [600,1200) MeV/c,
+  cos(theta)>0.8, FV R<100 cm |Y|<100 cm, nhits>=4) PLUS the detector-level
+  MRD-tag (MRDClusterNumber>0), the FMV / front-veto requirement (NoVeto==1) and
+  the prompt-PE window [500,3000). Signal = final-state-neutron hits in the
+  delayed residual (t > 10000 ns, CC-passing events only). OPTICS: ms=8,
+  xi=0.02, t_unit=25 ns. Both clustering methods (OPTICS and ClusterFinder) are
+  trained separately at Stage 2. These files carry the full per-hit lineage
+  (DirectParent_Lineage*, RootAncestorPDG), so the background composition report
+  at Stage 1b resolves the background by immediate ancestor, first non-EM
+  ancestor (origin) and generator primary (root).
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+
+inputs:
+  root_files:
+    # 499 files. The *.root suffix is required: this directory also contains
+    # many *_dummy_output entries that a bare v3* pattern would match.
+    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_tank/productionv3/tank/fmvmrd/ANNIEEvent_cc_neutrino_v3_[0-4].root
+
+cuts:
+  min_pulses_per_event: 0
+
+  # cc, fsl_muon, mu_p, cos_theta, fv_radius, fv_y, fv_z, nhit, mrd_tag,
+  # no_veto, prompt_pe  (see _STREAMS in src/ambe/mc/cc_selection.py)
+  cc_stream: ccinc_truth_plus_mrd
+
+  cc_cuts:
+    require_cc: true
+    require_fsl_muon: true
+    mu_p_min_mev: 600.0
+    mu_p_max_mev: 1200.0
+    cos_theta_min: 0.8
+    require_fv: true
+    fv_radius_cm: 100.0
+    fv_y_max_cm: 100.0
+    fv_require_z_negative: false
+    nhit_min: 4
+    # --- MRD + FMV, new relative to cc_neutrino_xi02_compcut ---
+    require_mrd: true
+    mrd_source: cluster        # MRDClusterNumber > 0 (alternatives: tracks, coinc)
+    require_no_veto: true      # FMV: NoVeto == 1
+    require_prompt_pe: true
+    prompt_pe_min: 500.0
+    prompt_pe_max: 3000.0
+
+fit_params: {}
+
+residual:
+  cc_only: true
+  prompt_window_ns: 10000
+
+optics:
+  min_samples: [8]
+  xi: [0.02]
+  t_unit_ns: [25]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 0.0
+
+features:
+  min_samples: 8
+  xi: 0.02
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0
+  truth_window_ns: 75.0
+
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv

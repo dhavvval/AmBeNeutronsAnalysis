@@ -1,0 +1,65 @@
+run_name: cc_neutrino_v3_truthtag_pilot
+display_label: "CC Neutrino v3 — TRUTH-tag streamline (FV, p_mu, cos, isCC, FSL mu)"
+campaign: "MC CC Neutrino (productionv3 tank/fmvmrd, 498 usable files)"
+description: >
+  Truth-tagging streamline. Cuts in order: FV (R<100 cm, |Y|<100 cm), p_mu [600,1200) MeV/c, cos(theta)>0.8, trueCC==1, FSL muon (trueFSLPdg==13), nhits>=4. This is one of TWO INDEPENDENT streamlines over the same files; the other is cc_neutrino_v3_recotag, which replaces the isCC + FSL-muon tagging with the detector-level MRD/FMV/promptPE tagging. They are alternatives, never ANDed together.
+  Sample: /pnfs/.../productionv3/tank/fmvmrd — 499 files globbed, 498 usable
+  (ANNIEEvent_cc_neutrino_v3_24.root is an empty ROOT file and is skipped),
+  2,490,000 events. Signal = final-state-neutron hits in the delayed residual
+  (t > 10000 ns, cc_pass events only). OPTICS: ms=8, xi=0.02, t_unit=25 ns.
+  Both clustering methods (OPTICS and ClusterFinder) trained separately at Stage 2.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_tank/productionv3/tank/fmvmrd/ANNIEEvent_cc_neutrino_v3_[0-4].root
+
+cuts:
+  min_pulses_per_event: 0
+
+  cc_stream: ccinc_truthtag
+
+  cc_cuts:
+    # phase space — identical in both streamlines
+    require_fv: true
+    fv_radius_cm: 100.0
+    fv_y_max_cm: 100.0
+    fv_require_z_negative: false
+    mu_p_min_mev: 600.0
+    mu_p_max_mev: 1200.0
+    cos_theta_min: 0.8
+    nhit_min: 4
+    # tagging — this is what differs between the two streamlines
+    require_cc: true
+    require_fsl_muon: true
+    require_no_veto: false
+    require_mrd: false
+    mrd_source: cluster
+    require_prompt_pe: false
+    prompt_pe_min: 500.0
+    prompt_pe_max: 3000.0
+
+fit_params: {}
+
+residual:
+  cc_only: true
+  prompt_window_ns: 10000
+
+optics:
+  min_samples: [8]
+  xi: [0.02]
+  t_unit_ns: [25]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 0.0
+
+features:
+  min_samples: 8
+  xi: 0.02
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0
+  truth_window_ns: 75.0
+
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv

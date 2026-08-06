@@ -13,6 +13,10 @@ description: >
 
 output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
 
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv
+
 inputs:
   root_files:
     - /exp/annie/app/users/dajana/EB_BC_TA/ANNIEEvent_cc_neutrino_FMVMRDTEST87.root
