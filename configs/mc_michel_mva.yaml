@@ -1,0 +1,40 @@
+## Config for neutron-vs-Michel MVA workflow.
+##
+## Full workflow:
+##   1. ambe mc process  --config configs/mc_oneneutron_workspace.yaml
+##   2. ambe mc optics   --config configs/mc_oneneutron_workspace.yaml
+##   3. ambe mc features --config configs/mc_oneneutron_workspace.yaml
+##   4. python extract_michel_features.py --config configs/mc_michel_mva.yaml
+##   5. python mva_neutron_vs_michel.py   --config configs/mc_michel_mva.yaml
+
+# ── Neutron signal (from the one-neutron OPTICS pipeline) ────────────────────
+neutron_parquet: ambe_output/mc_oneneutron/parquet/mc_oneneutron__cluster_features.parquet
+neutron_method: optics    # optics or clusterfinder
+
+# ── Michel electron background ───────────────────────────────────────────────
+michel:
+  input:  /Users/dajana/Documents/ANNIEEvent/ANNIEEvent_MC_MichelElectron.root
+  output: ambe_output/michel_features.parquet
+
+  # Selection thresholds (MC-adapted from Michel_tuning.py).
+  # Event-level flags (MRD, NoVeto, Extended) are not applied:
+  # they are identically 1 in WCSim MC output.
+  muon_min_pe:       500      # cluster with PE > this is the muon
+  michel_max_pe:     650      # upper PE bound (same as Michel_tuning.py)
+  michel_min_hits:   5        # relaxed from 20; true Michels in this file have 5–17 hits
+  michel_min_dt_ns:  200.0    # minimum time after muon (ns)
+  michel_max_dt_ns:  70000.0  # generous upper bound (~30 muon lifetimes)
+
+  # Source position (metres) — same as the AmBe source in the neutron config.
+  # Enables d_source feature (distance from cluster vertex to AmBe source).
+  source_position_m: [0, -0.1446, 1.681]
+
+# ── Shared geometry ──────────────────────────────────────────────────────────
+geometry:
+  pmt_geometry:   /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/TankPMTTimingOffsets.csv
+
+# ── MVA settings ─────────────────────────────────────────────────────────────
+mva:
+  cv_folds:   5       # stratified k-fold for AUC estimation (handles small Michel sample)
+  output_dir: ambe_output/neutron_vs_michel/

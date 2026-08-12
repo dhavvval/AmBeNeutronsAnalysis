@@ -21,6 +21,12 @@ verbose/
 OutputPlots/
 mc_results/
 mc_parquet/
+ambe_output/
+beamoff/
+mc_steven/
+optics_beamcluster_benchmark_smoke/
+logs/
+*.log
 *.pdf
 *.png
 *.parquet
@@ -36,3 +42,8 @@ mc_parquet/
 .idea/
 *.swp
 .DS_Store
+
+# Local data trees (BeamCluster ROOT files + per-run waveform subdirs).
+# newPMTPhysics/ is ~70 GB and test/ ~2.6 GB — inputs, never repo content.
+newPMTPhysics/
+test/

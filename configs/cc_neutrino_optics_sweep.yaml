@@ -1,0 +1,54 @@
+run_name: cc_neutrino_optics_sweep
+display_label: "CC Neutrino — OPTICS hyperparameter sweep (10% sample)"
+campaign: "OPTICS sweep on cc_neutrino_productionv2 10% sample (5x5x4 = 100 configs)"
+description: >
+  OPTICS hyperparameter sweep on a 10% sample of cc_neutrino_productionv2 to find
+  purer-cluster configs than the production baseline (ms=8, xi=0.10, t_unit=25 ns).
+  Motivated by the purity study: OPTICS over-merges, sweeping 41.5% of background hits
+  into neutron-dominated clusters. Sweeps a broad 5x5x4 grid and evaluates against MC
+  truth (per-hit truth_class / ancestor_trackID), ClusterFinder scored alongside.
+  NOTE: `ambe mc optics` reads the PARQUET (pulses + clusterfinder) under this run_name,
+  NOT the ROOT files below. The 10% sample parquet must already exist (make_sweep_sample.py)
+  — pointing this at the full productionv2 pulses would OOM the gpvm.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_tank/gridtest/ANNIEEvent_cc_neutrino_*.root
+
+cuts:
+  min_pulses_per_event: 0
+
+  cc_stream: ccinc_truth
+
+  cc_cuts:
+    require_cc: true
+    require_fsl_muon: true
+    mu_p_min_mev: 600.0
+    mu_p_max_mev: 1200.0
+    cos_theta_min: 0.8
+    require_fv: true
+    fv_radius_cm: 100.0
+    fv_y_max_cm: 100.0
+    fv_require_z_negative: false
+    nhit_min: 4
+
+fit_params: {}
+
+residual:
+  cc_only: true
+  prompt_window_ns: 2000
+
+optics:
+  # BROAD grid — 5 x 5 x 4 = 100 configs. Production baseline ms=8 xi=0.10 t_unit=25
+  # is included as the anchor reference row.
+  min_samples: [5, 8, 12, 15, 20]      # larger -> denser clusters, reject loose bkg halos
+  xi:          [0.02, 0.05, 0.10, 0.15, 0.20]  # smaller -> steeper reachability cut, splits blobs
+  t_unit_ns:   [10, 25, 50, 75]        # smaller -> tighter in time
+  truth_window_ns: 75.0                # NOT swept; defines recoverable-signal window
+  hit_prefilter_ns: 2000.0             # +/-2000 ns gate around CF cluster times (~25x speedup)
+
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv

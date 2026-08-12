@@ -1,0 +1,56 @@
+run_name: cc_neutrino_productionv2
+display_label: "CC Neutrino — productionv2 mid-level test"
+campaign: "MC CC Neutrino (gridtest, productionv2 mid-level test, 376 files)"
+description: >
+  GENIE neutrino-interaction WCSim (376 files, gridtest), CC selection using the
+  ccinc_truth stream: trueCC, FSL muon (trueFSLPdg==13), p_mu [600,1200) MeV/c,
+  cos(theta)>0.8, FV (R<100 cm, |Y|<100 cm). Signal = final-state-neutron hits in
+  delayed residual (t > 2000 ns, CC-passing events only). OPTICS parameters frozen
+  to productionv1 best config: ms=8, xi=0.1, t_unit=25 ns.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_tank/gridtest/ANNIEEvent_cc_neutrino_*.root
+
+cuts:
+  min_pulses_per_event: 0
+
+  cc_stream: ccinc_truth
+
+  cc_cuts:
+    require_cc: true
+    require_fsl_muon: true
+    mu_p_min_mev: 600.0
+    mu_p_max_mev: 1200.0
+    cos_theta_min: 0.8
+    require_fv: true
+    fv_radius_cm: 100.0
+    fv_y_max_cm: 100.0
+    fv_require_z_negative: false
+    nhit_min: 4
+
+fit_params: {}
+
+residual:
+  cc_only: true
+  prompt_window_ns: 2000
+
+optics:
+  min_samples: [8]
+  xi: [0.10]
+  t_unit_ns: [25]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 0.0
+
+features:
+  min_samples: 8
+  xi: 0.10
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0
+  truth_window_ns: 75.0
+
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv

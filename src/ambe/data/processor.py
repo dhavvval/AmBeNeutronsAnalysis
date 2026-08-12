@@ -1,4 +1,5 @@
-import os          
+import os
+import glob
 import numpy as np
 import uproot
 #from tqdm import trange
@@ -19,17 +20,39 @@ class WaveformConfig:
     """Configuration parameters for waveform analysis."""
     pulse_start: int = 300
     pulse_end: int = 1200
-    #pulse_gamma: int = 700 #v4
+    pulse_gamma: int = 700 #v4
     #pulse_gamma: int = 590 #v3
-    pulse_gamma: int = 400 #v1
+    #pulse_gamma: int = 400 #v1
     lower_pulse: int = 175
-    #pulse_max: int = 1200 #v4
+    pulse_max: int = 1200 #v4
     #pulse_max: int = 1340 #v3
-    pulse_max: int = 575 #v1
+    #pulse_max: int = 575 #v1
     NS_PER_ADC_SAMPLE: int = 2
     ADC_IMPEDANCE: int = 50
     ADC_TO_VOLT: float = 2.415 / (2 ** 12)
     REF_ENERGY: float = 4.42  # MeV
+
+    # --- fprompt pulse-shape axis -------------------------------------------
+    # fprompt = (integral over the fast prompt peak) / (integral over the whole
+    # pulse), i.e. a *shape* variable that is independent of pulse *size*.
+    # Ported from lmlepin9/2x2_neutron_sources PMT_analysis_utils.PMT_wvfm_selection.
+    #
+    # Unlike the IC window (which tracks PMT gain and had to be retuned per
+    # campaign: 400 v1 / 590 v3 / 700 v4), fprompt is gain-independent -- v1 run
+    # 4499 sits at median IC 369 / fprompt 0.228, v4 run 6062 at median IC 965 /
+    # fprompt 0.224. One window covers every campaign.
+    #
+    # Window bin indices are stable across v1/v3/v4 and across the RWM_/BRF_
+    # channel switch: the BGO pulse rises at ~bin 350 and peaks at bin 357-372.
+    selection_mode: str = "ic"          # "ic" | "ic+fprompt" | "fprompt2d"
+    fprompt_prompt_start: int = 350     # numerator window start (bin index)
+    fprompt_prompt_end: int = 400       # numerator window end
+    fprompt_total_end: int = 1200       # denominator window end (= pulse_end)
+    fprompt_baseline_end: int = 250     # pre-pulse median baseline region [0, this)
+    fprompt_min: float = 0.15
+    fprompt_max: float = 0.30
+    fprompt_min_integral: float = 50.0  # denominator guard, ADC*samples
+    width_threshold: float = 10.0       # ADC, for the diagnostic width variable
 
 
 @dataclass
@@ -110,9 +133,26 @@ class AmBeNeutronProcessing:
             # Outside the tank without source
             5743: (0, 328, 0), 5778: (0, 328, 0), 5779: (0, 328, 0),
 
-            ##AmBe v3 Campaign 3 - March 2026
+            # Background/no-source runs (no AmBe source present anywhere; detector-only trigger)
+            6254: (0, 328, 0), 6256: (0, 328, 0),  # placeholder coord reused
+
+            ##AmBe v4 Campaign 3 - March 2026
             6046: (0, 0, 0), 6062: (0, -100, 0),                       ## Port 5 data
-            6056: (75, 0 , 0), 6060: (75, -100, 0), 6061: (75, 100, 0) ## Port 4 data
+            6056: (75, 0 , 0), 6060: (75, -100, 0), 6061: (75, 100, 0), ## Port 4 data
+
+            ##AmBe v4 Campaign 3 continued - June, July 2026
+            6165: (0, 100, 0),                                              ## Port 5 data
+            6230: (0, 100, -75), 6231: (0, 0, -75),
+            6232: (0, -100, -75), 6234: (0, -50, -75), 6235: (0, 50, -75),  ## Port 1 data
+            6188: (0, 100, 75), 6189: (0, 100, 75),
+            6237: (0, -100, 75), 6239: (0, -50, 75), 6241: (0, 0, 75), 6242: (0, 50, 75), ## Port 2 data
+            6166: (0, 0, 102), 6186: (0, 100, 102), 6187: (0, -60, 102),
+            6243: (0, -100, 102), 6244: (0, -50, 102), 6246: (0, 50, 102),  ## Port 3 data
+            6247: (75, -50, 0), 6248: (75, 50, 0),                         ## Port 4 data
+            6251: (0, -50, 0), 6252: (0, 50, 0),                          ## Port 5 data
+
+            ## LAPPD AmBe debug runs, Port 4, y=50 (same position as 6248)
+            6249: (75, 50, 0), 6250: (75, 50, 0),
         }
 
     def get_source_location(self, run: int) -> Tuple[float, float, float]:
@@ -217,94 +257,217 @@ class AmBeNeutronProcessing:
     def time_of_flight_correction(self, hitX, hitY, hitZ, hitPE, hitT, sourceX, sourceY, sourceZ, event_hits_data=None) -> str:
         """
         Calculate time of flight correction from hit positions and timing.
-        
+
+        UNIT CONVENTION (important):
+            hitX, hitY, hitZ    — in METRES  (from PMT geometry CSV)
+            sourceX, sourceY, sourceZ — in CM  (from self.source_positions dict)
+
+        The method converts source coordinates to metres internally before
+        computing distances.  Do NOT pre-convert the source coordinates; pass
+        them directly from get_source_location() / the source_positions dict.
+
         Args:
-            hitX, hitY, hitZ: Hit position arrays
+            hitX, hitY, hitZ: Hit position arrays in metres
             hitPE: Hit photoelectron values
-            hitT: Hit timing values
-            sourceX, sourceY, sourceZ: Source position coordinates
-            event_hits_data: Optional list of tuples for multi-cluster calculation
+            hitT: Hit timing values in ns
+            sourceX, sourceY, sourceZ: Source position in CM
+                (e.g. Port 4 centre → sourceX=75 meaning 75 cm = 0.75 m)
+            event_hits_data: Optional list of (hitX, hitY, hitZ, hitPE, hitT)
+                tuples for multi-cluster calculation; same unit convention.
         Returns:
-            Time of flight corrected time differences as space-separated string
+            Tuple of two space-separated strings:
+                (ToF-corrected pairwise time differences,
+                 raw pairwise time differences)
         """
-        SoL = 0.299792458 * 3/4
-        
+        SoL = 0.299792458 * 3.0 / 4.0   # speed of light in water, m/ns
+
+        # Convert source position from cm → metres to match hit coordinates
+        src_x_m = float(sourceX) / 100.0
+        src_y_m = float(sourceY) / 100.0
+        src_z_m = float(sourceZ) / 100.0
+
         # If event_hits_data is provided, use multi-cluster approach
         if event_hits_data is not None:
             all_hits = []
             for cluster_hits in event_hits_data:
                 cluster_hitX, cluster_hitY, cluster_hitZ, cluster_hitPE, cluster_hitT = cluster_hits
-                cluster_hitX = np.asarray(cluster_hitX, dtype=np.float64)
-                cluster_hitY = np.asarray(cluster_hitY, dtype=np.float64)
-                cluster_hitZ = np.asarray(cluster_hitZ, dtype=np.float64)
+                cluster_hitX  = np.asarray(cluster_hitX,  dtype=np.float64)
+                cluster_hitY  = np.asarray(cluster_hitY,  dtype=np.float64)
+                cluster_hitZ  = np.asarray(cluster_hitZ,  dtype=np.float64)
                 cluster_hitPE = np.asarray(cluster_hitPE, dtype=np.float64)
-                cluster_hitT = np.asarray(cluster_hitT, dtype=np.float64)
-                
-                cluster_hit_list = list(zip(cluster_hitX, cluster_hitY, cluster_hitZ, cluster_hitPE, cluster_hitT))
+                cluster_hitT  = np.asarray(cluster_hitT,  dtype=np.float64)
+                cluster_hit_list = list(zip(cluster_hitX, cluster_hitY, cluster_hitZ,
+                                            cluster_hitPE, cluster_hitT))
                 all_hits.extend(cluster_hit_list)
-            
             hits = all_hits
         else:
-            # Single cluster approach (original logic)
-            hitX = np.asarray(hitX, dtype=np.float64)
-            hitY = np.asarray(hitY, dtype=np.float64)
-            hitZ = np.asarray(hitZ, dtype=np.float64)
+            # Single cluster approach
+            hitX  = np.asarray(hitX,  dtype=np.float64)
+            hitY  = np.asarray(hitY,  dtype=np.float64)
+            hitZ  = np.asarray(hitZ,  dtype=np.float64)
             hitPE = np.asarray(hitPE, dtype=np.float64)
-            hitT = np.asarray(hitT, dtype=np.float64)
-            hits = list(zip(hitX, hitY, hitZ, hitPE, hitT))
-        
-        # Sort by time and calculate differences (same logic for both cases)
+            hitT  = np.asarray(hitT,  dtype=np.float64)
+            hits  = list(zip(hitX, hitY, hitZ, hitPE, hitT))
+
+        # Sort by time and calculate pairwise differences
         hits.sort(key=lambda h: h[4])
         n = len(hits)
         if n < 1:
-            return ""
-        
+            return "", ""
+
         tdiffs = []
         all_hits_delta_t_TofCorrected = []
         for i in range(n):
             x_i, y_i, z_i, pe_i, t_i = hits[i]
-            dist_i = np.sqrt((x_i - sourceX)**2 + (y_i - sourceY)**2 + (z_i - sourceZ)**2)
-            tcorr_i = t_i - dist_i/SoL
-            
-            for j in range(i+1, n):
+            # Distance from PMT (metres) to source (metres)
+            dist_i  = np.sqrt((x_i - src_x_m)**2 + (y_i - src_y_m)**2 + (z_i - src_z_m)**2)
+            tcorr_i = t_i - dist_i / SoL
+
+            for j in range(i + 1, n):
                 x_j, y_j, z_j, pe_j, t_j = hits[j]
-                dist_j = np.sqrt((x_j - sourceX)**2 + (y_j - sourceY)**2 + (z_j - sourceZ)**2)
-                tcorr_j = t_j - dist_j/SoL
-                delta_t_ToF = t_j - t_i
-                
+                dist_j  = np.sqrt((x_j - src_x_m)**2 + (y_j - src_y_m)**2 + (z_j - src_z_m)**2)
+                tcorr_j = t_j - dist_j / SoL
+                delta_t_raw = t_j - t_i
+
                 tdiffs.append(tcorr_j - tcorr_i)
-                all_hits_delta_t_TofCorrected.append(delta_t_ToF)
+                all_hits_delta_t_TofCorrected.append(delta_t_raw)
 
-        # Return as space-separated string for easy parsing
-        return " ".join(f"{val:.6f}" for val in tdiffs), " ".join(f"{val:.6f}" for val in all_hits_delta_t_TofCorrected)
+        # Return as space-separated strings for easy parsing
+        return (" ".join(f"{val:.6f}" for val in tdiffs),
+                " ".join(f"{val:.6f}" for val in all_hits_delta_t_TofCorrected))
 
-    def analyze_waveform(self, hist_values: np.ndarray, hist_edges: np.ndarray) -> Tuple[float, float, bool]:
+    def compute_waveform_features(self, hist_values: np.ndarray,
+                                  hist_edges: np.ndarray) -> Dict[str, Any]:
         """
-        Analyze a single waveform and return IC_adjusted, baseline, and acceptance status.
-        
-        Returns:
-            Tuple of (IC_adjusted, baseline, is_accepted)
+        Compute every per-waveform quantity in a single pass.
+
+        Two baselines are used deliberately, and they are not interchangeable:
+
+        * ``baseline`` -- ``norm.fit`` over the whole record, which is what the
+          IC cut has always used. Kept untouched so IC stays byte-identical to
+          every previously published number.
+        * ``baseline_pre`` -- median of the pre-pulse region. Used *only* for
+          fprompt. IC integrates ~900 samples, so a baseline error just shifts
+          it by 900*delta; fprompt is a ratio of a ~50-sample numerator to a
+          ~850-sample denominator, where a baseline error biases the ratio
+          instead of cancelling. ``norm.fit`` runs over the pulse as well as the
+          noise, so using it for fprompt produces an unphysical fprompt > 1 tail
+          (p99 = 1.32 on run 6062, up to 3.7 on v3 run 5740).
+
+        Returns a dict of features; no cuts are applied here.
         """
-        # Fit baseline
+        cfg = self.config
+        bins = hist_edges[:-1]
+
+        # --- IC: unchanged from the original implementation ------------------
         baseline, sigma = norm.fit(hist_values)
-        
-        # Calculate pulse integral
-        pulse_mask = ((hist_edges[:-1] > self.config.pulse_start) & 
-                     (hist_edges[:-1] < self.config.pulse_end))
+
+        pulse_mask = (bins > cfg.pulse_start) & (bins < cfg.pulse_end)
         IC = np.sum(hist_values[pulse_mask] - baseline)
-        IC_adjusted = (self.config.NS_PER_ADC_SAMPLE / self.config.ADC_IMPEDANCE) * IC
-        #IC_adjusted *= self.config.ADC_TO_VOLT
-        
-        # Check acceptance criteria
-        if not (self.config.pulse_gamma < IC_adjusted < self.config.pulse_max):
-            return IC_adjusted, baseline, False
-            
-        # Check for second pulse
-        post_pulse_mask = hist_edges[:-1] > self.config.pulse_end
-        post_pulse_values = hist_values[post_pulse_mask]
-        another_pulse = np.any(post_pulse_values > (7 + sigma + baseline))
-        
-        return IC_adjusted, baseline, not another_pulse
+        IC_adjusted = (cfg.NS_PER_ADC_SAMPLE / cfg.ADC_IMPEDANCE) * IC
+
+        # Second-pulse veto. Orthogonal to fprompt (measured on run 6062: inside
+        # the 700-1200 IC window the veto-pass and veto-fail sets have the same
+        # fprompt distribution, median 0.222 vs 0.218), so both cuts are kept.
+        post_pulse_values = hist_values[bins > cfg.pulse_end]
+        second_pulse = bool(np.any(post_pulse_values > (7 + sigma + baseline)))
+
+        # --- fprompt and the shape diagnostics -------------------------------
+        # Windows are selected on the axis values, matching how the IC window is
+        # applied above, so they stay correct if the binning ever changes.
+        baseline_pre = float(np.median(hist_values[bins < cfg.fprompt_baseline_end]))
+
+        prompt_mask = (bins >= cfg.fprompt_prompt_start) & (bins < cfg.fprompt_prompt_end)
+        total_mask = (bins >= cfg.fprompt_prompt_start) & (bins < cfg.fprompt_total_end)
+
+        prompt_integral = float((hist_values[prompt_mask] - baseline_pre).sum())
+        total_integral = float((hist_values[total_mask] - baseline_pre).sum())
+
+        # Guard the denominator: near-zero total light makes the ratio
+        # meaningless (and can send it above 1). These are the low-amplitude
+        # noise triggers we want rejected anyway, so flag them as NaN and let
+        # the fprompt modes drop them.
+        if total_integral > cfg.fprompt_min_integral:
+            fprompt = prompt_integral / total_integral
+        else:
+            fprompt = float('nan')
+
+        region_mask = (bins >= cfg.pulse_start) & (bins < cfg.fprompt_total_end)
+        pulse_region = hist_values[region_mask] - baseline_pre
+        if pulse_region.size:
+            peak_amp = float(pulse_region.max())
+            peak_bin = int(bins[region_mask][int(np.argmax(pulse_region))])
+            # Diagnostic only -- the reference uses an over-threshold width as its
+            # second axis, but our IC already measures total light better, so this
+            # is recorded and plotted, never cut on.
+            width_over_thresh = int((pulse_region > cfg.width_threshold).sum())
+        else:
+            peak_amp, peak_bin, width_over_thresh = float('nan'), -1, 0
+
+        return {
+            'IC_adjusted': float(IC_adjusted),
+            'baseline': float(baseline),
+            'baseline_sigma': float(sigma),
+            'baseline_pre': baseline_pre,
+            'fprompt': float(fprompt),
+            'prompt_integral': prompt_integral,
+            'total_integral': total_integral,
+            'peak_amp': peak_amp,
+            'peak_bin': peak_bin,
+            'width_over_thresh': width_over_thresh,
+            'second_pulse': second_pulse,
+        }
+
+    def passes_selection(self, features: Dict[str, Any]) -> bool:
+        """
+        Apply the configured Stage-1 selection to a feature record.
+
+        Modes:
+          "ic"          -- IC window + second-pulse veto. The historical cut.
+          "ic+fprompt"  -- additionally require the fprompt window. Conservative:
+                           inside the current v4 IC window this only removes
+                           ~0.4% of waveforms.
+          "fprompt2d"   -- same cut, but intended to be used with a deliberately
+                           widened IC window (e.g. 500-2000). fprompt then does
+                           the rejection that the tight IC window used to do:
+                           low-IC noise sits at high fprompt, high-IC pile-up at
+                           low fprompt.
+
+        The second-pulse veto applies in every mode -- it catches late pulses
+        beyond the fprompt denominator, which fprompt is blind to by construction.
+        """
+        cfg = self.config
+
+        if not (cfg.pulse_gamma < features['IC_adjusted'] < cfg.pulse_max):
+            return False
+        if features['second_pulse']:
+            return False
+
+        if cfg.selection_mode == 'ic':
+            return True
+
+        if cfg.selection_mode not in ('ic+fprompt', 'fprompt2d'):
+            raise ValueError(
+                f"Unknown selection_mode {cfg.selection_mode!r}; "
+                "expected 'ic', 'ic+fprompt' or 'fprompt2d'"
+            )
+
+        fprompt = features['fprompt']
+        if not np.isfinite(fprompt):
+            return False
+        return cfg.fprompt_min < fprompt < cfg.fprompt_max
+
+    def analyze_waveform(self, hist_values: np.ndarray,
+                         hist_edges: np.ndarray) -> Tuple[float, float, bool, Dict[str, Any]]:
+        """
+        Analyze a single waveform.
+
+        Returns:
+            Tuple of (IC_adjusted, baseline, is_accepted, features)
+        """
+        features = self.compute_waveform_features(hist_values, hist_edges)
+        return (features['IC_adjusted'], features['baseline'],
+                self.passes_selection(features), features)
 
     def plot_waveform_sample(self, hist_edges: np.ndarray, hist_values: np.ndarray, 
                            baseline: float, timestamp: str, run: str, 
@@ -327,20 +490,26 @@ class AmBeNeutronProcessing:
         plt.savefig(f'{save_dir}/{status}Waveform_{timestamp}_Run{run}.png', dpi=300)
         plt.close()
 
-    def process_run_waveforms(self, run: str, waveform_dir: str, 
-                            campaign: int = 1, 
+    def process_run_waveforms(self, run: str, waveform_dir: str,
+                            campaign: int = 1,
                             save_waveform_samples: bool = False,
-                            max_samples: int = 10) -> Dict[str, Any]:
+                            max_samples: int = 10,
+                            feature_dump_path: Optional[str] = None) -> Dict[str, Any]:
         """
         Process all waveforms for a single run with memory-efficient approach.
-        
+
         Args:
             run: Run number as string
             waveform_dir: Directory containing waveform files
             campaign: Campaign number (1 or 2)
             save_waveform_samples: Whether to save sample waveforms
             max_samples: Maximum number of sample waveforms to save
-            
+            feature_dump_path: If given, write the per-waveform feature table to
+                this parquet path. The table carries the tank timestamp, so the
+                whole Stage-1 decision becomes re-derivable offline -- retuning
+                the IC or fprompt window turns into a pandas query instead of
+                another multi-hour read over dCache.
+
         Returns:
             Dictionary with run results
         """
@@ -367,51 +536,84 @@ class AmBeNeutronProcessing:
         # Use generators and batch processing for memory efficiency
         ic_values_batch = []
         ic_accepted_batch = []
-        
-        waveform_files = os.listdir(os.path.join(waveform_dir, run))
-        
+        feature_rows = [] if feature_dump_path else None
+
+        # Recursive glob so waveforms are found whether they sit directly in
+        # <run>/ or are nested one level deeper (e.g. <run>/RWM/...root) --
+        # storage layout has varied between runs/campaigns.
+        waveform_files = sorted(
+            glob.glob(os.path.join(waveform_dir, run, '**', '*.root'), recursive=True)
+        )
+
         print('Loading and processing waveforms...')
         for file_idx in range(len(waveform_files)):
-            waveform_filepath = os.path.join(waveform_dir, run, waveform_files[file_idx])
-            
-            with uproot.open(waveform_filepath) as root:
-                folder_names = [name for name in root.keys() if folder_pattern.match(name)]
-                
-                for folder in folder_names:
-                    timestamp = folder.split('_')[-1].split(';')[0]
-                    if timestamp in seen_timestamps:
-                        continue
-                    seen_timestamps.add(timestamp)
-                    
-                    try:
-                        hist = root[folder]
-                        hist_values = hist.values()
-                        hist_edges = hist.axes[0].edges()
-                        
-                        IC_adjusted, baseline, is_accepted = self.analyze_waveform(hist_values, hist_edges)
-                        ic_values_batch.append(IC_adjusted)
-                        
-                        if is_accepted:
-                            good_events.append(int(timestamp))
-                            accepted_events += 1
-                            ic_accepted_batch.append(IC_adjusted)
-                            
-                            # Save sample waveforms if requested
-                            if save_waveform_samples and accepted_events <= max_samples:
-                                self.plot_waveform_sample(hist_edges, hist_values, baseline, 
-                                                        timestamp, run, IC_adjusted, "Accepted")
-                        else:
-                            rejected_events += 1
-                            
-                            # Save sample rejected waveforms
-                            if save_waveform_samples and rejected_events in [1, 10, 20]:
-                                self.plot_waveform_sample(hist_edges, hist_values, baseline, 
-                                                        timestamp, run, IC_adjusted, "Rejected")
-                    
-                    except Exception as e:
-                        print(f"Could not access '{folder}': {e}")
-                        continue
-            
+            waveform_filepath = waveform_files[file_idx]
+
+            try:
+                with uproot.open(waveform_filepath) as root:
+                    folder_names = [name for name in root.keys() if folder_pattern.match(name)]
+
+                    # Some files nest the RWM/BRF histograms one level deeper
+                    # inside a same-named TDirectory instead of storing them
+                    # at top level -- recurse into it if we didn't find any
+                    # matches directly.
+                    if not folder_names:
+                        nested_dirs = [name for name in root.keys()
+                                       if name.split(';')[0] in ('RWM', 'BRF')]
+                        for nested in nested_dirs:
+                            sub = root[nested]
+                            folder_names.extend(
+                                f"{nested}/{k}" for k in sub.keys() if folder_pattern.match(k)
+                            )
+
+                    for folder in folder_names:
+                        timestamp = folder.split('_')[-1].split(';')[0]
+                        if timestamp in seen_timestamps:
+                            continue
+                        seen_timestamps.add(timestamp)
+
+                        try:
+                            hist = root[folder]
+                            hist_values = hist.values()
+                            hist_edges = hist.axes[0].edges()
+
+                            IC_adjusted, baseline, is_accepted, features = self.analyze_waveform(
+                                hist_values, hist_edges
+                            )
+                            ic_values_batch.append(IC_adjusted)
+
+                            if feature_rows is not None:
+                                feature_rows.append({
+                                    'timestamp': int(timestamp),
+                                    'accepted': is_accepted,
+                                    **features,
+                                })
+
+                            if is_accepted:
+                                good_events.append(int(timestamp))
+                                accepted_events += 1
+                                ic_accepted_batch.append(IC_adjusted)
+
+                                # Save sample waveforms if requested
+                                if save_waveform_samples and accepted_events <= max_samples:
+                                    self.plot_waveform_sample(hist_edges, hist_values, baseline,
+                                                            timestamp, run, IC_adjusted, "Accepted")
+                            else:
+                                rejected_events += 1
+
+                                # Save sample rejected waveforms
+                                if save_waveform_samples and rejected_events in [1, 10, 20]:
+                                    self.plot_waveform_sample(hist_edges, hist_values, baseline,
+                                                            timestamp, run, IC_adjusted, "Rejected")
+
+                        except Exception as e:
+                            print(f"Could not access '{folder}': {e}")
+                            continue
+
+            except Exception as e:
+                print(f"Could not open '{waveform_filepath}': {e}")
+                continue
+
             # Periodic garbage collection for large datasets
             if file_idx % 100 == 0:
                 gc.collect()
@@ -423,7 +625,26 @@ class AmBeNeutronProcessing:
         print(f'Total acquisitions: {total}')
         print(f'Accepted: {accepted_events} ({acceptance_rate:.2f}%)')
         print(f'Rejected: {rejected_events} ({rejection_rate:.2f}%)')
-        
+
+        if feature_rows:
+            features_df = pd.DataFrame(feature_rows)
+            os.makedirs(os.path.dirname(feature_dump_path) or '.', exist_ok=True)
+            try:
+                features_df.to_parquet(feature_dump_path, index=False)
+            except (ImportError, ValueError) as e:
+                # No pyarrow/fastparquet available -- a CSV keeps the retuning
+                # workflow working rather than losing the features entirely.
+                fallback = os.path.splitext(feature_dump_path)[0] + '.csv'
+                print(f'Parquet write failed ({e}); falling back to {fallback}')
+                features_df.to_csv(fallback, index=False)
+                feature_dump_path = fallback
+            finite_fp = features_df['fprompt'].replace([np.inf, -np.inf], np.nan).dropna()
+            print(f'Feature table: {len(features_df)} rows -> {feature_dump_path}')
+            if len(finite_fp):
+                print(f'  fprompt median {finite_fp.median():.3f} '
+                      f'(p5 {finite_fp.quantile(0.05):.3f}, p95 {finite_fp.quantile(0.95):.3f}), '
+                      f'{len(features_df) - len(finite_fp)} low-light/undefined')
+
         return {
             'source_position': (x_pos, y_pos, z_pos),
             'accepted_events': accepted_events,
@@ -775,7 +996,8 @@ class AmBeNeutronProcessing:
                                       file_pattern: re.Pattern, campaign: int = 1,
                                       runinfo: str = 'default', which_tree: int = 1,
                                       save_waveform_samples: bool = False,
-                                      plot_ic_distributions: bool = True) -> Dict[str, Any]:
+                                      plot_ic_distributions: bool = True,
+                                      dump_features: bool = True) -> Dict[str, Any]:
         """
         Complete analysis pipeline that replicates AnalysisRun.py functionality.
         This integrates waveform analysis, event processing, and CSV output generation.
@@ -789,13 +1011,23 @@ class AmBeNeutronProcessing:
             which_tree: PhaseIITreeMaker (0) or ANNIEEventTreeMaker (1) tool
             save_waveform_samples: Whether to save sample waveforms
             plot_ic_distributions: Whether to plot IC distributions
-            
+            dump_features: Whether to write the per-waveform feature table for
+                each run to TriggerSummary/WaveformFeatures_<runinfo>_<run>.parquet
+                (input to tune_waveform_fprompt.py)
+
         Returns:
             Dictionary with complete analysis results
         """
         print("="*80)
         print("STARTING COMPLETE AmBe NEUTRON ANALYSIS PIPELINE")
         print("="*80)
+        print(f"Selection mode : {self.config.selection_mode}")
+        print(f"IC window      : {self.config.pulse_gamma} < IC_adjusted < {self.config.pulse_max}")
+        if self.config.selection_mode != 'ic':
+            print(f"fprompt window : {self.config.fprompt_min} < fprompt < {self.config.fprompt_max} "
+                  f"(prompt bins {self.config.fprompt_prompt_start}-{self.config.fprompt_prompt_end}, "
+                  f"total to {self.config.fprompt_total_end})")
+        print(f"Feature dump   : {'on' if dump_features else 'off'}")
 
         run_numbers = []
         file_names = []
@@ -835,8 +1067,12 @@ class AmBeNeutronProcessing:
         for c1, run in enumerate(run_numbers):
 
             run_result = self.process_run_waveforms(
-                run, waveform_dir, campaign, 
-                save_waveform_samples=save_waveform_samples
+                run, waveform_dir, campaign,
+                save_waveform_samples=save_waveform_samples,
+                feature_dump_path=(
+                    f'TriggerSummary/WaveformFeatures_{runinfo}_{run}.parquet'
+                    if dump_features else None
+                ),
             )
          
             # Get waveform results for this run

@@ -1,0 +1,20 @@
+run_name: AmBe2.0v1
+display_label: "AmBe v1 real data (waveform-gated)"
+campaign: "AmBe 2.0v1"
+description: >
+  Real AmBe source-calibration data, v1 hardware/campaign (original PMT setup).
+  Waveform IC-gated (400 < IC_adjusted < 575) then ambe_single_cut-selected via
+  run_waveform_gated_pipeline.py. No MVA/MC involved -- efficiency and
+  capture-time computed directly from the real candidate data.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/ambe_data
+
+inputs:
+  trigger_summary: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_AmBe2.0v1.csv
+  candidate_csvs: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBe2.0v1_*.csv
+
+cuts:
+  pe_max: 100
+  charge_balance_max: 0.45
+
+fit_params: {}

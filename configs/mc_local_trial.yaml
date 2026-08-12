@@ -1,4 +1,5 @@
 run_name: mc_local_trial
+display_label: "Simulated AmBe Spectrum"
 campaign: "MC AmBe Local"
 description: "OPTICS training on local ANNIETree_MC.root file."
 
@@ -6,14 +7,42 @@ output_root: /Users/dajana/Documents/ambe_output
 
 inputs:
   root_files:
-    - /Users/dajana/Documents/ANNIETree_MC.root
+    - /Users/dajana/Documents/ANNIEEvent/ANNIEEvent_MC_wcsimlucho_0.root
 
 cuts:
-  min_pulses_per_event: 3
+  min_pulses_per_event: 0
+  max_events: 300
 
 fit_params: {}
 
 optics:
-  min_samples: [5, 10, 20]
-  xi: [0.01, 0.05, 0.10]
-  t_scale: [null, 1.0, 5.0]
+  min_samples: [3, 8]
+  xi: [0.10]
+  t_unit_ns: [10, 25]
+  truth_window_ns: 75.0
+  # hit_prefilter_ns: keep only hits within this window of any CF cluster time.
+  # Reduces hits/event from ~200-500 → ~30-50, giving ~25x OPTICS speedup.
+  # 2000 ns = ±1000 ns around CF cluster time. Set to 0 to disable.
+  hit_prefilter_ns: 2000.0
+  # source_position_m: AmBe source position in METRES for ToF correction.
+  # With correction, signal hits collapse to ~2-5 ns spread (vs 20-40 ns raw),
+  # allowing t_unit_ns = 10 ns and lower min_samples.
+  # Units: METRES. data/processor.py source_positions dict is in cm → divide by 100.
+  # Lucho WCSim: Port 5 centre at (0, 0, 0) m.  Verify against MC config if needed.
+  # Set to null or omit to disable.
+  source_position_m: [0, -0.1446, 1.681]
+
+# --- Feature extraction (ambe mc features) ---
+# Uses the single best config from the grid sweep above.
+features:
+  min_samples: 8
+  xi: 0.10
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0      # no prefilter for feature extraction
+  truth_window_ns: 75.0
+  source_position_m: [0, -0.1446, 1.681]  # source ToF for d_source feature
+
+# --- Detector geometry (needed for cluster features) ---
+geometry:
+  pmt_geometry:   /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/TankPMTTimingOffsets.csv

@@ -1,0 +1,61 @@
+run_name: cc_neutrino
+display_label: "CC Neutrino-Interaction Neutron Clusters"
+campaign: "MC CC Neutrino (tank-only, productionv1)"
+description: >
+  Tank-only GENIE neutrino-interaction WCSim (87 files), processed through the
+  CC_MC_RECO_ntuple_neutrino ToolAnalysis chain (ANNIEEventTreeMaker output with
+  DirectParent neutron-ancestor / dark-noise truth branches). CC selection is
+  applied offline (truth-based: trueCC, muon, CC0pi, single-ring, FV). Signal =
+  final-state-neutron hits; background = all remaining tank charge.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_tank/productionv1/fmvmrd/ANNIEEvent_cc_neutrino_*.root
+
+cuts:
+  min_pulses_per_event: 0   # OPTICS min_samples handles thresholding — do not pre-filter events here
+  # max_events: 2000        # uncomment for a quick test run
+
+  # Offline CC event selection (truth-based; MRD-based cuts omitted — tank-only).
+  # See src/ambe/mc/cc_selection.py for definitions and the omitted-cut log.
+  cc_cuts:
+    require_cc: true            # trueCC == 1
+    require_fsl_muon: true      # trueFSLPdg == 13 (final-state lepton is muon)
+    require_cc0pi: true         # no π± in final state (truePiPlus==0, truePiMinus==0)
+    require_single_ring: true   # trueMultiRing == 0
+    require_fv: true            # true vertex inside tank FV (James's CCPR reference)
+    fv_radius_cm: 100.0         # 1 m radius
+    fv_y_max_cm: 100.0          # |Y| < 100 cm (2 m height)
+    fv_require_z_negative: false
+    nhit_min: 4
+    muon_energy_min_mev: 0.0
+
+fit_params: {}
+
+# Delayed-residual definition for the neutron search. The CC muon (and prompt
+# pions/protons) deposit their light in the prompt window; we remove that window
+# and run OPTICS + features on the surviving delayed hits. Time-based only (no
+# truth) so it is directly applicable to real data.
+residual:
+  cc_only: true            # restrict to CC-passing events (cc_pass==1)
+  prompt_window_ns: 2000   # drop hits with t <= 2000 ns (prompt muon window)
+
+optics:
+  min_samples: [3, 5, 8]
+  xi: [0.10]
+  t_unit_ns: [10, 25]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 0.0
+
+features:
+  min_samples: 8
+  xi: 0.10
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0
+  truth_window_ns: 75.0
+
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv

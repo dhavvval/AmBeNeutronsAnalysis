@@ -1,0 +1,36 @@
+run_name: mc_neutrinoint
+display_label: "Neutrino Interaction Clusters"
+campaign: "MC Neutrino Interaction sample"
+description: "~100k events"
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_tank/productionv1/ANNIEEvent/ANNIEEvent_neutrinoint_*.root
+
+cuts:
+  min_pulses_per_event: 0   # OPTICS min_samples handles thresholding — do not pre-filter events here
+  # max_events is NOT set — runs all 10,001 events
+
+fit_params: {}
+
+optics:
+  min_samples: [3, 5, 8]
+  xi: [0.10]
+  t_unit_ns: [10, 25]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 0.0      # keep hits ±1000 ns around CF cluster time (~28 hits/event → fast)
+  #source_position_m: [0, -0.1446, 1.681]   # AmBe source at Port 5 centre, but WCSim files coordinate for the port5 are 0 -14.46 168.1
+
+features:
+  min_samples: 8
+  xi: 0.10
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0          # no prefilter for features (needed for clean sigma_t)
+  truth_window_ns: 75.0
+  #source_position_m: 
+
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv

@@ -1,0 +1,60 @@
+run_name: cc_neutrino_v3world
+display_label: "WORLD volume (all events, no CC/FV cuts) — productionv3 (save-on-demand), xi=0.02"
+campaign: "MC CC Neutrino, productionv3 PILOT: 1 file / 4000 events, WCSim ac64522 with /WCSimIO/SaveTracksOnDemand true"
+description: >
+  Validation run of the save-on-demand WCSim regeneration. Identical settings to
+  cc_neutrino_xi02_compcut (OPTICS ms=8, xi=0.02, t_unit=25 ns; same CC cuts) so the
+  class composition is directly comparable, but reads the single productionv3 pilot
+  ntuple instead of the 376 productionv2/gridtest files. Purpose is to confirm the
+  per-hit truth_class / bg_class composition behaves as expected before committing to
+  full-scale production. NOTE: existing productionv1/v2 is 34% untraced and its photon
+  class is exactly zero (the gamma-mediated EM component is invisible without the
+  mediating electron saved), so bg_class composition from this sample is NOT expected to
+  match the older campaigns -- the difference is the point.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+
+inputs:
+  root_files:
+    - /exp/annie/app/users/dajana/EB_BC_TA/ANNIEEvent_bt_v3world.root
+
+cuts:
+  min_pulses_per_event: 0
+
+  cc_stream: ccinc_truth
+
+  cc_cuts:
+    require_cc: false
+    require_fsl_muon: false
+    mu_p_min_mev: 0.0
+    mu_p_max_mev: 1000000.0
+    cos_theta_min: -1.1
+    require_fv: false
+    fv_radius_cm: 100.0
+    fv_y_max_cm: 100.0
+    fv_require_z_negative: false
+    nhit_min: 4
+
+fit_params: {}
+
+residual:
+  cc_only: false
+  prompt_window_ns: 10000
+
+optics:
+  min_samples: [8]
+  xi: [0.02]
+  t_unit_ns: [25]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 0.0
+
+features:
+  min_samples: 8
+  xi: 0.02
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0
+  truth_window_ns: 75.0
+
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv

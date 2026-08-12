@@ -1,0 +1,30 @@
+run_name: sweep10_feat_ms8_xi02_t15
+display_label: "OPTICS feat ms8_xi02_t15 (10% sample) ms=8 xi=0.02 t=15.0"
+campaign: "Composition-cut validation of OPTICS config ms8_xi02_t15 (10% sample)"
+output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_tank/gridtest/ANNIEEvent_cc_neutrino_*.root
+cuts:
+  min_pulses_per_event: 0
+  cc_stream: ccinc_truth
+  cc_cuts: {require_cc: true, require_fsl_muon: true, mu_p_min_mev: 600.0, mu_p_max_mev: 1200.0, cos_theta_min: 0.8, require_fv: true, fv_radius_cm: 100.0, fv_y_max_cm: 100.0, fv_require_z_negative: false, nhit_min: 4}
+fit_params: {}
+residual:
+  cc_only: true
+  prompt_window_ns: 2000
+optics:
+  min_samples: [8]
+  xi: [0.02]
+  t_unit_ns: [15.0]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 2000.0
+features:
+  min_samples: 8
+  xi: 0.02
+  t_unit_ns: 15.0
+  hit_prefilter_ns: 2000.0
+  truth_window_ns: 75.0
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv

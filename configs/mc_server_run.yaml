@@ -1,0 +1,19 @@
+run_name: mc_server_run
+campaign: "MC AmBe Server"
+description: "OPTICS training on ANNIE MC ROOT file."
+
+output_root: /exp/annie/app/users/dajana/ambe_output
+
+inputs:
+  root_files:
+    - /exp/annie/app/users/dajana/EB_BC_TA/ANNIETree_MC.root
+
+cuts:
+  min_pulses_per_event: 5
+
+fit_params: {}
+
+optics:
+  min_samples: [5, 10, 20]
+  xi: [0.01, 0.05, 0.10]
+  t_scale: [null, 1.0, 5.0]

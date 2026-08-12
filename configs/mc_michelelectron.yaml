@@ -1,0 +1,42 @@
+run_name: mc_michel_electron
+campaign: "MC Michel Electron"
+description: >
+  OPTICS training on the 896-event ANNIEEvent_MC_AmBe_withoutdarknoise_0_999.root file, which contains only one neutron per event and no dark noise. This is a "best case" scenario for OPTICS clustering, so we expect to find exactly one cluster per event with the right settings. Use this config to verify that the pipeline is working end-to-end before running on more complex files with multiple neutrons and dark noise.
+
+# Output inside workspace mount so sandbox can read parquets after running
+output_root: /Users/dajana/Documents/AmBe/AmBeNeutronsAnalysis/ambe_output
+
+inputs:
+  root_files:
+    # ⚠ Confirm this path on your machine before running
+    - /Users/dajana/Documents/ANNIEEvent/ANNIEEvent_MC_MichelElectron.root
+
+cuts:
+  min_pulses_per_event: 0  # OPTICS min_samples handles thresholding — do not pre-filter events here
+  # max_events: 300   # uncomment for a quick test run
+
+fit_params: {}
+
+optics:
+  # Permissive Stage-1 settings — goal is high recall, not high purity
+  min_samples: [3, 5, 8]
+  xi: [0.10]
+  t_unit_ns: [10, 15, 25, 50]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 0.0         # grid sweep only
+  source_position_m: [0, -0.1446, 1.681]
+
+features:
+  # ms=8 gives mean_n_predicted=0.968 (≈1/event), 0 spurious — correct for single-neutron file.
+  # ms=3 was splitting the 18-hit neutron cluster into ~2.26 sub-clusters, producing 2034 clusters
+  # from 896 events instead of the expected ~896.
+  min_samples: 8
+  xi: 0.10
+  t_unit_ns: 10.0
+  hit_prefilter_ns: 0.0            # no prefilter during feature extraction
+  truth_window_ns: 75.0
+  source_position_m: [0, -0.1446, 1.681]
+
+geometry:
+  pmt_geometry:   /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/TankPMTTimingOffsets.csv

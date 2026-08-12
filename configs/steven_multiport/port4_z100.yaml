@@ -1,0 +1,37 @@
+run_name: mc_steven_port4_z100
+campaign: "MC AmBe Steven multiport — port4 z100"
+description: "Pure neutron signal, ~50k events, port4 z100 position"
+
+output_root: /Users/dajana/Documents/AmBe/AmBeNeutronsAnalysis/ambe_output
+
+inputs:
+  root_files:
+    - /Users/dajana/Documents/ANNIEEvent/Steven_ANNIEEvent/ANNIEEvent_port4_z100QE_1.50_0_999.root
+    - /Users/dajana/Documents/ANNIEEvent/Steven_ANNIEEvent/ANNIEEvent_port4_z100QE_1.50_1000_1999.root
+    - /Users/dajana/Documents/ANNIEEvent/Steven_ANNIEEvent/ANNIEEvent_port4_z100QE_1.50_2000_2999.root
+    - /Users/dajana/Documents/ANNIEEvent/Steven_ANNIEEvent/ANNIEEvent_port4_z100QE_1.50_3000_3999.root
+
+cuts:
+  min_pulses_per_event: 0   # OPTICS min_samples handles thresholding
+
+fit_params: {}
+
+optics:
+  min_samples: [3, 5, 8]
+  xi: [0.10]
+  t_unit_ns: [10, 25]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 0.0
+  source_position_m: [-0.750000, 0.8553512482, 1.6810]
+
+features:
+  min_samples: 8
+  xi: 0.10
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0
+  truth_window_ns: 75.0
+  source_position_m: [-0.750000, 0.8553512482, 1.6810]
+
+geometry:
+  pmt_geometry:   /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /Users/dajana/Documents/ToolAnalysis/configfiles/LoadGeometry/TankPMTTimingOffsets.csv

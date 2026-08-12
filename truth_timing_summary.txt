@@ -1,0 +1,32 @@
+=================================================================
+TRUTH HIT TIMING ANALYSIS
+Window tested: ±25 ns of per-cluster median  (=50.0 ns total)
+Total neutron truth clusters analysed: 1368
+=================================================================
+
+Class 1  [Primary neutron]  — 463 clusters
+  delta_t   mean=22073.1 ns  median=19403.0 ns  max=66213.9 ns
+  frac_in_50ns   mean=0.582  median=0.630
+  n_in_win  mean=8.5  n_out_win mean=7.9
+
+Class 2  [Secondary n←p]  — 114 clusters
+  delta_t   mean=23511.3 ns  median=21256.4 ns  max=64706.4 ns
+  frac_in_50ns   mean=0.495  median=0.542
+  n_in_win  mean=6.5  n_out_win mean=9.3
+
+Class 3  [Secondary n←n]  — 700 clusters
+  delta_t   mean=24675.3 ns  median=21607.5 ns  max=66233.8 ns
+  frac_in_50ns   mean=0.513  median=0.556
+  n_in_win  mean=6.8  n_out_win mean=7.7
+
+Class 4  [Secondary n←other]  — 91 clusters
+  delta_t   mean=16070.2 ns  median=11701.9 ns  max=62633.9 ns
+  frac_in_50ns   mean=0.584  median=0.667
+  n_in_win  mean=3.9  n_out_win mean=3.9
+
+--- Composition of hits OUTSIDE the 50.0 ns window ---
+Total out-of-window hits: 10494
+  Class   1  [Primary neutron          ]:   3678 hits  (35.0%)
+  Class   2  [Secondary n←p            ]:   1058 hits  (10.1%)
+  Class   3  [Secondary n←n            ]:   5407 hits  (51.5%)
+  Class   4  [Secondary n←other        ]:    351 hits  (3.3%)

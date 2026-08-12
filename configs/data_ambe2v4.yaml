@@ -1,0 +1,21 @@
+run_name: AmBe2.0v4_gated
+display_label: "AmBe v4 real data (waveform-gated)"
+campaign: "AmBe 2.0v4"
+description: >
+  Real AmBe source-calibration data, v4 hardware/campaign (Campaign 3, March
+  2026 runs 6046-6062 + continued June-July 2026 runs 6165-6248). Waveform
+  IC-gated (700 < IC_adjusted < 1200) then ambe_single_cut-selected via
+  run_waveform_gated_pipeline.py. No MVA/MC involved -- efficiency and
+  capture-time computed directly from the real candidate data.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/ambe_data
+
+inputs:
+  trigger_summary: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_AmBe2.0v4_gated.csv
+  candidate_csvs: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBe2.0v4_gated_*.csv
+
+cuts:
+  pe_max: 100
+  charge_balance_max: 0.45
+
+fit_params: {}
