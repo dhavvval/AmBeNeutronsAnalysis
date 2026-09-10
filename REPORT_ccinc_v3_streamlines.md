@@ -4,7 +4,7 @@
 **Runs:** `cc_neutrino_v3_truthtag`, `cc_neutrino_v3_recotag`
 **Date produced:** 2026-08-03 / 04 · **Report written:** 2026-08-04
 **MC input:** `/pnfs/annie/persistent/users/dajana/output/genie_wcsim_tank/productionv3/tank/fmvmrd/ANNIEEvent_cc_neutrino_v3*.root`
-**Output root:** `/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/`
+**Output root:** `/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/`
 
 This report is **standalone** — every number comes from these two runs. It documents the result of
 the two-streamline study: running the *same* CC-inclusive analysis twice over the same files, once

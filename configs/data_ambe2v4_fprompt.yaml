@@ -26,7 +26,7 @@ description: >
   consistent with 29.16 +/- 0.44 us if the extra statistics are signal and not
   background.
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/ambe_data
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data
 
 inputs:
   trigger_summary: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_AmBe2.0v4_fprompt.csv

@@ -3,7 +3,7 @@
 
 **Run:** `cc_neutrino_xi02_compcut` · 412 GENIE-WCSim files · prompt-inclusive MVA
 **Date:** 2026-06-11
-**Base output:** `/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/`
+**Base output:** `/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/`
 
 ---
 

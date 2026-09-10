@@ -25,7 +25,7 @@ Usage (myboy venv):
   python reprocess_ambe_v1.py --tag v1_raw \
       --waveform-dir /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v1 \
       --beamcluster-dir /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v1 \
-      --out-dir /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/ambe_data/cf_raw \
+      --out-dir /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data/cf_raw \
       --runs 4499
 """
 import re

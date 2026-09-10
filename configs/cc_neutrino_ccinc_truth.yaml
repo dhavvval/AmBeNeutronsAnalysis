@@ -7,7 +7,7 @@ description: >
   MeV/c, cos(theta)>0.8, FV (R<100 cm, |Y|<100 cm). Signal = final-state-neutron
   hits in delayed residual (t > 2000 ns); background = all other tank charge.
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:

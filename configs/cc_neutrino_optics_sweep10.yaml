@@ -8,7 +8,7 @@ description: >
   the PARQUET (pulses+clusterfinder) under run_name cc_neutrino_optics_sweep (the 10%
   sample already on disk). Evaluates against MC truth; ClusterFinder scored alongside.
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:

@@ -13,8 +13,20 @@ venv/
 build/
 dist/
 
-# Output artefacts (everything here should live under $AMBE_OUT, not the repo)
-# Kept for historical reasons; new runs must write to $AMBE_OUT.
+# Output artefacts. These live in this directory but are NEVER repo content -- every
+# entry below is ignored, so a 20+ GB output tree can sit here safely.
+#
+# As of 2026-09-09 there is ONE output tree for all server-side work:
+#     /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
+# Before that, outputs were split across three places -- ambe_output/ and logs/ in a
+# sibling `AmBeNeutronAnalysis` (no "s"), TriggerSummary/ + verbose/ +
+# EventAmBeNeutronCandidatesData/ here, and a stray
+# /exp/annie/app/users/dajana/ambe_output -- so no path could be guessed. They are
+# merged here, both old locations are now symlinks to this tree, and all 49
+# server-side configs resolve under it.
+#
+# Configs with /Users/... or /sessions/... output_root are laptop / sandbox runs and
+# are deliberately NOT pointed at this tree.
 EventAmBeNeutronCandidatesData/
 TriggerSummary/
 verbose/
@@ -31,6 +43,12 @@ logs/
 *.png
 *.parquet
 *.npz
+
+# PRESENTATION_PLOTS/ is a collected-figure tree. Any script snapshotted into it by
+# collect_presentation_plots.py is a stale copy of the version tracked at the repo
+# root -- ignore those so git carries exactly one copy of each script. The per-deck
+# README.md files ARE repo content and stay tracked.
+PRESENTATION_PLOTS/*.py
 
 # CSVs that are outputs (keep CSVs under configs/ or tests/ if they're inputs)
 *.csv

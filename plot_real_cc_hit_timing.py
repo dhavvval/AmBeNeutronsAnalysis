@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from ambe.plotting import set_style  # noqa: E402
 
 PULSES_PARQUET = (
-    "/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/"
+    "/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/"
     "cc_neutrino_xi02_compcut/parquet/cc_neutrino_xi02_compcut__pulses.parquet"
 )
 DEFAULT_EVENT_ID = 685824
@@ -110,7 +110,7 @@ if __name__ == "__main__":
     p.add_argument("--event-id", type=int, default=DEFAULT_EVENT_ID)
     p.add_argument(
         "--out-dir",
-        default="/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/cc_neutrino_xi02_compcut/plots",
+        default="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/cc_neutrino_xi02_compcut/plots",
     )
     args = p.parse_args()
     make_plot(args.event_id, Path(args.out_dir))

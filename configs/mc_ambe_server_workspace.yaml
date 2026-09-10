@@ -2,7 +2,7 @@ run_name: mc_ambe_server
 campaign: "MC AmBe Server"
 description: "ANNIEEvent_MC_AmBe_wcsim_0_999.root — server paths for EB_BC_TA"
 
-output_root: /exp/annie/app/users/dajana/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:

@@ -2,7 +2,7 @@
 
 **Run:** productionv2 (376 GENIE-WCSim files) · prompt-inclusive MVA iteration
 **Date:** 2026-06-11
-**Base output path:** `/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/`
+**Base output path:** `/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/`
 
 > ⚠️ **TWO model iterations coexist on disk.** Present only the NEW one.
 > - **OLD (superseded):** `cc_neutrino_productionv2/…__mva_frozen.pkl` (13:31, AUC 0.587, prompt-EXCLUDED, starved) + `…__mva_frozen__vs_offbeam.pkl` (offbeam experiment, dropped) + `rate_rf/` & `rate_gbt/` (14:47).

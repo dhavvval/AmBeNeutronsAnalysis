@@ -12,7 +12,7 @@ description: >
   Composition cut before MVA scoring: reject if n_neutron <= 10 AND
   frac_nonneutron >= 0.40.
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:

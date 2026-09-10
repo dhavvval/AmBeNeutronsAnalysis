@@ -3,7 +3,7 @@ display_label: "Neutrino Interaction Clusters"
 campaign: "MC Neutrino Interaction sample"
 description: "~100k events"
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:

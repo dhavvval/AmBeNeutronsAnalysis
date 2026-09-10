@@ -5,7 +5,7 @@ Generate a collaboration slide deck (PDF) for the xi=0.02 + composition-cut
 configuration, mirroring the June-8 poster format. Sans-serif fonts throughout.
 
 All numbers are read live from the pipeline outputs under:
-    /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/
+    /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/
 
 Run:
     source /exp/annie/app/users/dajana/myboy/bin/activate
@@ -35,7 +35,7 @@ GOLD   = "#CEB888"   # FSU gold
 NAVY   = "#1f4e79"
 ORANGE = "#d35400"
 
-BASE = Path("/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output")
+BASE = Path("/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output")
 RUN  = "cc_neutrino_xi02_compcut"
 NEUT = [1, 2, 3, 4]
 EVENT_KEYS = ["run", "event_tank_time"]

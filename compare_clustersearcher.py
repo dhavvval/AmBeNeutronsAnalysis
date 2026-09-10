@@ -332,7 +332,7 @@ def main():
     p.add_argument("--config", default="configs/cc_neutrino_optics.yaml",
                    help="YAML config (used only to locate parquet dir + run_name)")
     p.add_argument("--parquet-dir",
-                   default="/exp/annie/app/users/dajana/AmBeNeutronAnalysis/"
+                   default="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/"
                            "ambe_output/cc_neutrino/parquet",
                    help="Directory containing the _pulses and _clusterfinder parquets")
     p.add_argument("--run-name", default="cc_neutrino")

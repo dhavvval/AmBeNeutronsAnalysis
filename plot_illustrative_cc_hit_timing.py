@@ -174,7 +174,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument(
         "--out-dir",
-        default="/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/cc_neutrino_xi02_compcut/plots",
+        default="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/cc_neutrino_xi02_compcut/plots",
     )
     args = p.parse_args()
     make_plot(Path(args.out_dir))

@@ -30,7 +30,7 @@ description: >
   EB_BC_TA/ANNIEEvent_bt_v3world.root, not to these files.
   OPTICS: ms=8, xi=0.02, t_unit=25 ns. Both clustering methods trained separately.
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:

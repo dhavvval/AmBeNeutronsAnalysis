@@ -8,7 +8,7 @@ description: >
   applied offline (truth-based: trueCC, muon, CC0pi, single-ring, FV). Signal =
   final-state-neutron hits; background = all remaining tank charge.
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:

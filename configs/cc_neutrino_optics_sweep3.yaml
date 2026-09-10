@@ -9,7 +9,7 @@ description: >
   PARQUET (pulses + clusterfinder) under this run_name, NOT the ROOT files.
   The 3% sample parquet must already exist (make_sweep_sample3.py).
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:

@@ -30,7 +30,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 EVT = ["run", "event_tank_time"]
-ROOT = "/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/ambe_data"
+ROOT = "/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data"
 STREAMS = {
     "optics": f"{ROOT}/ccinc_xi02cc_optics_mcbkg/*__scored.parquet",
     "cf":     f"{ROOT}/ccinc_xi02cc_cf_mcbkg/*__scored.parquet",

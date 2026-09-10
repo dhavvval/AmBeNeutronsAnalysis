@@ -52,7 +52,7 @@ REPO=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis
 VENV=/exp/annie/app/users/dajana/myboy/bin/activate
 CONFIG="configs/${RUN}.yaml"
 LOG="${REPO}/logs_${RUN}.log"
-OUT_ROOT=/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+OUT_ROOT=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 # Composition cut thresholds (Stages 3 + 4)
 COMP_N_NEUTRON_MAX=10

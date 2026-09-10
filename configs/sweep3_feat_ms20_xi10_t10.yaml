@@ -1,7 +1,7 @@
 run_name: sweep3_feat_ms20_xi10_t10
 display_label: "OPTICS feat ms20_xi10_t10 (3% sample) ms=20 xi=0.1 t_unit=10.0"
 campaign: "Phase B composition-cut validation of OPTICS config ms20_xi10_t10"
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:

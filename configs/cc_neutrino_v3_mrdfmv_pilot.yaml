@@ -15,7 +15,7 @@ description: >
   at Stage 1b resolves the background by immediate ancestor, first non-EM
   ancestor (origin) and generator primary (root).
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:

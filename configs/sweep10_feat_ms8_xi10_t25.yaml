@@ -1,7 +1,7 @@
 run_name: sweep10_feat_ms8_xi10_t25
 display_label: "OPTICS feat ms8_xi10_t25 (10% sample) ms=8 xi=0.1 t=25.0"
 campaign: "Composition-cut validation of OPTICS config ms8_xi10_t25 (10% sample)"
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 inputs:
   root_files:
     - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_tank/gridtest/ANNIEEvent_cc_neutrino_*.root

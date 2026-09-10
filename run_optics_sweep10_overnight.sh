@@ -15,7 +15,7 @@ set -uo pipefail   # NOTE: not -e — we want the script to finish all configs e
 
 REPO=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis
 VENV=/exp/annie/app/users/dajana/myboy/bin/activate
-OUT_ROOT=/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+OUT_ROOT=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 SWEEP_CFG=configs/cc_neutrino_optics_sweep10.yaml
 SWEEP_RUN=cc_neutrino_optics_sweep
 LOG="${REPO}/logs_optics_sweep10.log"

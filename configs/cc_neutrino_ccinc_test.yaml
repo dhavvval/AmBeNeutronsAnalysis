@@ -11,7 +11,7 @@ description: >
   ccinc_truth_plus_mrd) and supports per-cut N-1 impact studies + a raw-MC-stats
   estimator for ML training. See src/ambe/mc/cc_selection.py.
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 geometry:
   pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv

@@ -30,7 +30,7 @@ REPO=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis
 VENV=/exp/annie/app/users/dajana/myboy/bin/activate
 CONFIG="configs/${RUN}.yaml"
 LOG="${REPO}/logs_ccinc_productionv2.log"
-OUT_ROOT=/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+OUT_ROOT=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 GEO=/exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
 OFFSETS=/exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv
 

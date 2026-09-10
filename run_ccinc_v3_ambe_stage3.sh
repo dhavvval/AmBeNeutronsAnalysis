@@ -44,7 +44,7 @@ cd /exp/annie/app/users/dajana/AmBeNeutronsAnalysis
 source /exp/annie/app/users/dajana/myboy/bin/activate
 export PYTHONUNBUFFERED=1
 
-BASE=/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+BASE=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 AMBE=$BASE/ambe_data
 STAGE=$BASE/ccinc_v3_ambe_stage3
 LOG=logs_ccinc_v3_ambe_stage3.log

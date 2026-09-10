@@ -89,7 +89,7 @@ untouched). For EACH method (optics, clusterfinder):
   steven's 0.8423) → `capture_stageAB_lucho_<method>/`.
 - **Stage 5** data/MC KS comparison (`--mc-method <method>`) → `compare_selections_lucho_<method>/`.
 
-Outputs land under `/exp/.../AmBeNeutronAnalysis/ambe_output/ambe_data/` (the mount with free space).
+Outputs land under `/exp/.../AmBeNeutronsAnalysis/ambe_output/ambe_data/` (the mount with free space).
 Run in tmux, `set -euo pipefail`, tee to `logs_ambe_lucho_mva.log`.
 
 ## Files

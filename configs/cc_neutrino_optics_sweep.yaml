@@ -11,7 +11,7 @@ description: >
   NOT the ROOT files below. The 10% sample parquet must already exist (make_sweep_sample.py)
   — pointing this at the full productionv2 pulses would OOM the gpvm.
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:

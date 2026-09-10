@@ -12,7 +12,7 @@ description: >
   mediating electron saved), so bg_class composition from this sample is NOT expected to
   match the older campaigns -- the difference is the point.
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:

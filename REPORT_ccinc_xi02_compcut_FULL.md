@@ -5,7 +5,7 @@
 **Date produced:** 2026-06-11
 **MC input:** 416 GENIE-neutrino-interaction WCSim ROOT files (tank-only simulation, normal PMT geometry)
 **AmBe data:** 2023 campaign, 31 runs across 5 source ports
-**Output root:** `/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/`
+**Output root:** `/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/`
 **Pipeline log:** `logs_ccinc_xi02_compcut.log`
 
 This report is **standalone** — every number comes from this run only. There are no comparisons to any previous production.

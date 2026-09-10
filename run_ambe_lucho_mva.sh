@@ -27,7 +27,7 @@ SIG_EFF="${SIG_EFF:-0.80}"              # MC signal-efficiency working point for
 # ── Paths ────────────────────────────────────────────────────────────────────
 REPO="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis"
 VENV="/exp/annie/app/users/dajana/myboy/bin/activate"
-OUT="/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/ambe_data"
+OUT="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data"
 DATA_DIR="/pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v1"
 GATE_DIR="${REPO}/EventAmBeNeutronCandidatesData"
 GEOM="/exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv"

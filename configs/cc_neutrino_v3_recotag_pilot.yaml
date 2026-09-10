@@ -9,7 +9,7 @@ description: >
   (t > 10000 ns, cc_pass events only). OPTICS: ms=8, xi=0.02, t_unit=25 ns.
   Both clustering methods (OPTICS and ClusterFinder) trained separately at Stage 2.
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:

@@ -8,7 +8,7 @@ description: >
   delayed residual (t > 2000 ns, CC-passing events only). OPTICS parameters frozen
   to productionv1 best config: ms=8, xi=0.1, t_unit=25 ns.
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:

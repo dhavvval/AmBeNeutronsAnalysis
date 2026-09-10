@@ -29,8 +29,8 @@ set -euo pipefail
 # ── Paths ────────────────────────────────────────────────────────────────────
 REPO="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis"
 VENV="/exp/annie/app/users/dajana/myboy/bin/activate"
-OUT="/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/ambe_data"
-CC_DIR="/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/cc_neutrino/parquet"
+OUT="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data"
+CC_DIR="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/cc_neutrino/parquet"
 
 # Frozen OPTICS model (steven multiport)
 MODEL_DIR="${REPO}/mc_steven"           # frozen .pkl + .keras files live here
