@@ -27,21 +27,46 @@ After installation the `ambe` command is available in your shell.
 
 ## Output location
 
-All outputs (plots, Parquet, CSV) are written **outside the repo** so they are never accidentally committed.
+**There is one output tree for all server-side work:**
 
-Priority order:
+```
+/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
+```
 
-1. `output_root:` key in your config YAML
+Every plot, Parquet and CSV lands under it, and each run gets its own subdirectory:
+`<output_root>/<run_name>/plots/`, `.../parquet/`, `.../csv/`. Data-campaign runs sit
+one level deeper, under `ambe_output/ambe_data/<run_name>/`.
+
+Outputs live inside this directory but are **never repo content** — `.gitignore` has an
+explicit rule for each output tree, so 20+ GB can sit here without ever being staged.
+
+Priority order for resolving the root:
+
+1. `output_root:` key in your config YAML  ← what all 49 server-side configs use
 2. `$AMBE_OUT` environment variable
 3. `~/ambe_analysis_output/`
 
-Set it once and forget:
+### If you have older scripts or notes
 
-```bash
-export AMBE_OUT=/exp/annie/persistent/users/dajana/ambe_output
+Until 2026-09-09 the outputs were split across **three** locations, so no path could be
+guessed:
+
+| old location | held |
+|---|---|
+| `AmBeNeutronAnalysis/` (no "s") | `ambe_output/`, `logs/`, `beamoff/`, `mc_steven/` |
+| `AmBeNeutronsAnalysis/` (this one) | `TriggerSummary/`, `verbose/`, `EventAmBeNeutronCandidatesData/` |
+| `/exp/annie/app/users/dajana/ambe_output` | a few MC workspace runs |
+
+All three are merged here. **Both old paths are now symlinks to this tree**, so older
+scripts, notes and job definitions keep resolving rather than failing:
+
+```
+/exp/annie/app/users/dajana/AmBeNeutronAnalysis -> AmBeNeutronsAnalysis
+/exp/annie/app/users/dajana/ambe_output         -> AmBeNeutronsAnalysis/ambe_output
 ```
 
-Each run gets its own subdirectory: `$AMBE_OUT/<run_name>/plots/`, `.../parquet/`, `.../csv/`.
+Configs whose `output_root` is under `/Users/...` or `/sessions/...` are laptop and
+sandbox runs; those are deliberately left pointing off-server.
 
 ---
 
@@ -66,10 +91,44 @@ Or run stages individually:
 
 ```bash
 ambe data process   --config configs/my_run.yaml   # waveform processing -> CSVs
+ambe data icscan    --config configs/my_run.yaml --mode differential  # IC-window scan
+
 ambe plots combined --config configs/my_run.yaml   # capture-time fit, multiplicity, ...
 ambe plots heatmap  --config configs/my_run.yaml   # efficiency heatmaps + residuals
 ambe stats core     --config configs/my_run.yaml   # statistical summary
 ```
+
+### IC-window scan
+
+`ambe data icscan` re-tallies the efficiency for many Stage-1 IC windows offline, with
+no further waveform read. It needs a config whose `stage1` block sets
+`dump_event_index: true` and whose IC gate is at least as wide as the scan range --
+see `configs/data_ambe2v4_port5center_icscan.yaml`. A waveform rejected at Stage 1 is
+never Stage-2 processed, so the scan can only ever narrow the pass window, never widen
+it; `icscan` asserts that rather than silently returning zeros.
+
+`--mode` is required and picks the question:
+
+```bash
+ambe data icscan --config <cfg> --mode closure       # re-tally the production window,
+                                                     # check cell-for-cell vs the frozen summary
+ambe data icscan --config <cfg> --mode differential  # disjoint slices -- INDEPENDENT points,
+                                                     # the only mode a flatness test is valid on
+ambe data icscan --config <cfg> --mode left          # walk the lower edge, upper fixed
+ambe data icscan --config <cfg> --mode right         # walk the upper edge, lower fixed
+ambe data icscan --config <cfg> --mode widthsweep    # differential at widths 50..500
+ambe data icscan --config <cfg> --mode grid          # every arbitrary (lower, upper) pair
+```
+
+`differential` takes `--width` to set the slice width (default `icscan.step`). Slice
+width is the scan RESOLUTION: structure narrower than a slice is averaged away, while
+wider slices have smaller error bars. Those pull chi2/dof in opposite directions, so
+**chi2/dof is not comparable between widths** — `widthsweep` prints one row per width
+for exactly that reason.
+
+`left`/`right` windows are nested and so share most of their events: their error bars
+are per-point only, never point-to-point. Run `closure` first -- if it does not pass,
+no other mode's output means anything.
 
 ### MC OPTICS training
 

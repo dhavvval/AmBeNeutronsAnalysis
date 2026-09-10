@@ -59,7 +59,7 @@ files anyway. **Use a 10% sample** under a separate run_name.
 groups (whole files, so every event keeps all its hits) from the productionv2
 pulses + clusterfinder parquets into a new run_name `cc_neutrino_optics_sweep`:
 ```
-out: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/
+out: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/
        cc_neutrino_optics_sweep/parquet/
          cc_neutrino_optics_sweep__pulses.parquet
          cc_neutrino_optics_sweep__clusterfinder.parquet
@@ -80,7 +80,7 @@ baseline reference point).
 run_name: cc_neutrino_optics_sweep
 display_label: "CC Neutrino — OPTICS hyperparameter sweep (10% sample)"
 campaign: "OPTICS sweep on cc_neutrino_productionv2 10% sample"
-output_root: /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 
 inputs:
   root_files:

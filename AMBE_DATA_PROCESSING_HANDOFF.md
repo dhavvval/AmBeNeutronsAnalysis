@@ -122,7 +122,7 @@ print('SCRIPT DONE')
     cosmic leakage right at the `ct_min=2000ns` selection edge? reflected
     light?) before deciding whether to keep 10-67, patch the model, or
     add per-position custom initial guesses/bounds for a 2-70 fit.
-  - Full log: `/exp/annie/app/users/dajana/AmBeNeutronAnalysis/logs/capture_time_AmBe2.0v4_gated_fit2to70.log`
+  - Full log: `/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/logs/capture_time_AmBe2.0v4_gated_fit2to70.log`
 
 ## Results so far (AmBe2.0v4_gated, 700 < IC < 1200, the "production" run)
 
@@ -152,7 +152,7 @@ on the table:
 python -u run_waveform_gated_pipeline.py --dataset /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4 \
     --runinfo AmBe2.0v4_test --pulse-gamma 600 --pulse-max 1400
 ```
-Log: `/exp/annie/app/users/dajana/AmBeNeutronAnalysis/logs/waveform_gated_AmBe2.0v4_test_stage12.log`
+Log: `/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/logs/waveform_gated_AmBe2.0v4_test_stage12.log`
 Progress as of last check (laptop about to go offline — tmux session is
 unaffected, it runs server-side on anniegpvm02): 10/15 runs done (6186,
 6187, 6188, 6189, 6056, 6060, 6061, 6062, 6230, 6231), acceptance 45-51%
