@@ -28,9 +28,21 @@ class AmBeNeutronAnalyzer:
     
     def __init__(self, data_directory: str = './EventAmBeNeutronCandidatesData/',
                  output_pdf: str = 'AmBevtestv4ch10.pdf',
-                 campaign_label: str = 'AmBe 2.0v4'):
+                 campaign_label: str = 'AmBe 2.0v4',
+                 min_cluster_hits: int = 10,
+                 selection_label: str = ''):
         self.data_directory = data_directory
         self.output_pdf = output_pdf
+        # Plot-only hits cut applied in prepare_data. See the note there: it is not
+        # part of any published selection, so it has to be stated, not assumed.
+        self.min_cluster_hits = min_cluster_hits
+        # How this book's clusters were selected, printed on every page. Empty
+        # falls back to the box wording. Several titles used to hardcode both the
+        # campaign ('AmBe 2.0v1' on one page, 'AmBe 2.0v4' on the next, for the same
+        # run) and '(PE < 100 & CCB < 0.45)' -- which is simply false for the MVA
+        # book, whose selection has no PE or charge-balance cut at all.
+        self.selection_label = selection_label or (
+            'box cuts PE ≤ 100, CB < 0.45, t ≥ 2 µs, hits ≥ 5')
         self.campaign_label = campaign_label
         self.campaign_tag = campaign_label.replace(' ', '')
         self.source_groups = {}
@@ -43,8 +55,20 @@ class AmBeNeutronAnalyzer:
         self.fitting_config = {
             'time_bins': 70,
             'time_range': (0, 70),
-            'fit_min_time': 10.0,
+            # WAS 10.0. The fit window is now 2-67 us campaign-wide -- see the note
+            # on FIT_MIN in fit_capture_time_fprompt_compare.py, which this must stay
+            # equal to. 2 us is where the data starts (the box cut is t >= 2 us and
+            # the cosmic veto removes anything earlier), so fitting from 10 discarded
+            # the whole thermalisation rise. Every published capture time moves
+            # because of this; the tau = 30.53 +- 0.26 us anchor was a 10-67 number
+            # and is superseded.
+            'fit_min_time': 2.0,
             'fit_max_time': 67.0,
+            # Where the fitted curve is DRAWN from. Now equal to fit_min_time, so the
+            # drawn curve and the fitted range coincide and there is no extrapolated
+            # segment to distinguish. Kept as its own key so the two can be separated
+            # again without touching the fit.
+            'plot_min_time': 2.0,
             'initial_amplitude': 200.0,
             'initial_thermal_time': 5.0,
             'initial_capture_time': 25.0,
@@ -142,11 +166,23 @@ class AmBeNeutronAnalyzer:
         # Convert cluster time to microseconds
         combined_df['clusterTime'] = combined_df['clusterTime'] / 1000
 
-        # Extract relevant columns
-        #combined_df = combined_df[(combined_df['clusterHits'] >= 10) & (combined_df['clusterPE'] < ) & (combined_df['clusterChargeBalance'] < 0.5)]
-        # & (combined_df['clusterPE'] < 60) & (combined_df['clusterChargeBalance'] < 0.5)]
-        combined_df = combined_df[(combined_df['clusterHits'] >= 10) ]
-        
+        # PLOT-ONLY CUT, now explicit. This used to be a hardcoded
+        # `clusterHits >= 10`, applied on top of whatever selection produced the
+        # candidate CSVs. Two reasons it had to become a parameter:
+        #   * It is NOT part of the published box (which requires hits >= 5), so the
+        #     per-position pages did not show the selection they were labelled with.
+        #   * Under the MVA neutron definition there is no hits requirement at all,
+        #     so leaving it hardcoded would silently reimpose one and make the
+        #     "no box" deck a hits-cut deck.
+        # Default stays 10 so existing callers reproduce their old pages; the deck
+        # configs set it explicitly, and identically, so the two decks stay
+        # comparable. None / 0 disables it.
+        if self.min_cluster_hits:
+            n_before = len(combined_df)
+            combined_df = combined_df[combined_df['clusterHits'] >= self.min_cluster_hits]
+            print(f"  plot cut clusterHits >= {self.min_cluster_hits}: "
+                  f"{n_before:,} -> {len(combined_df):,} clusters")
+
         EventID = combined_df['eventID'].value_counts()
         EventTime = combined_df['eventTankTime'].value_counts()
         event_counts = combined_df.groupby('eventTankTime')['clusterTime'].transform('count')
@@ -341,7 +377,7 @@ class AmBeNeutronAnalyzer:
         axes[2].set_xlabel('Y'); axes[2].set_ylabel('Z'); axes[2].set_title('YZ')
         fig.colorbar(im2[3], ax=axes[2], label='Counts')
 
-        plt.suptitle(f'Cluster vector distributions for AmBe 2.0v1 , run positions:({sx}, {sy}, {sz})')
+        plt.suptitle(f'{self.selection_label}\nCluster vector distributions, {self.campaign_label}, source position ({sx}, {sy}, {sz})')
         plt.tight_layout(rect=[0, 0, 1, 0.95])
         pdf.savefig(fig, bbox_inches='tight')
         #plt.show()
@@ -379,7 +415,7 @@ class AmBeNeutronAnalyzer:
         ax2[2].set_xlabel("Cluster Time (μs)")
         ax2[2].set_ylabel("Cluster Charge Balance")
 
-        plt.suptitle(f'SINGLE - Cluster PE, Charge Balance and Time distributions for AmBe 2.0v1 (CH >= 10), run positions:({sx}, {sy}, {sz})')
+        plt.suptitle(f'{self.selection_label}\nSingle-cluster PE, charge balance and time, {self.campaign_label}, source position ({sx}, {sy}, {sz})')
         plt.tight_layout(rect=[0, 0, 1, 0.95])
         pdf.savefig(fig2, bbox_inches='tight')
         #plt.show()
@@ -418,7 +454,7 @@ class AmBeNeutronAnalyzer:
                 color="lightblue", linewidth=0.5, align='left', density=False)
         plt.xlabel('Neutron multiplicity for Events')
         plt.ylabel('Counts')
-        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 100 & CCB < 0.45), run positions:({sx}, {sy}, {sz})')
+        plt.title(f'{self.selection_label}\nNeutron multiplicity, {self.campaign_label}, source position ({sx}, {sy}, {sz})')
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         #plt.show()
@@ -429,7 +465,7 @@ class AmBeNeutronAnalyzer:
                 color="lightblue", linewidth=0.5, align='left', density=False, log=True)
         plt.xlabel('Neutron multiplicity for Events')
         plt.ylabel('Counts')
-        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v4 (PE < 100 & CCB < 0.45), run positions:({sx}, {sy}, {sz})')
+        plt.title(f'{self.selection_label}\nNeutron multiplicity per trigger, {self.campaign_label}, source position ({sx}, {sy}, {sz})')
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         #plt.show()
@@ -442,7 +478,7 @@ class AmBeNeutronAnalyzer:
         plt.hist(PE, bins=70, range=(0, 70), histtype='step', color='blue', label="Data")
         plt.xlabel("Cluster PE")
         plt.ylabel("Counts")
-        plt.title(f"PE Spectrum for AmBe 2.0v4, run positions:({sx}, {sy}, {sz})")
+        plt.title(f"{self.selection_label}\nCluster PE spectrum, {self.campaign_label}, source position ({sx}, {sy}, {sz})")
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         #plt.show()
@@ -452,7 +488,7 @@ class AmBeNeutronAnalyzer:
         plt.hist(hit_delta_t, bins=200, color='coral', edgecolor='black')
         plt.xlabel("hit Δt (ns)")
         plt.ylabel("Counts")
-        plt.title(f"Δt Distribution for cluster collection for AmBe 2.0v4, run positions:({sx}, {sy}, {sz})")
+        plt.title(f"{self.selection_label}\nΔt for cluster collection, {self.campaign_label}, source position ({sx}, {sy}, {sz})")
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         #plt.show()
@@ -484,7 +520,7 @@ class AmBeNeutronAnalyzer:
         plt.hist(Neutron_vertex_tof, bins=300, range=(-20, 50), color='coral', edgecolor='black')
         plt.xlabel("Neutron Vertex Distance from Source (ns)")
         plt.ylabel("Counts")
-        plt.title(f"Multi - Neutron Vertex TOF for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
+        plt.title(f"{self.selection_label}\nMulti-neutron vertex ToF, {self.campaign_label}, source position ({sx}, {sy}, {sz})")
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         #plt.show()
@@ -496,7 +532,7 @@ class AmBeNeutronAnalyzer:
             plt.hist(all_hits_pe, bins=50, range=(0, 20), log=True, color='skyblue', edgecolor='black')
             plt.xlabel("Hit PE Values")
             plt.ylabel("Counts")
-            plt.title(f"All Cluster Hits PE Distribution for AmBe 2.0v4, run positions:({sx}, {sy}, {sz})")
+            plt.title(f"{self.selection_label}\nAll cluster-hit PE, {self.campaign_label}, source position ({sx}, {sy}, {sz})")
             plt.tight_layout()
             pdf.savefig(bbox_inches='tight')
             #plt.show()
@@ -517,7 +553,7 @@ class AmBeNeutronAnalyzer:
         plt.hist(all_delta_t_tof_corrected, bins=300, range=(-20, 70), color='coral', edgecolor='black')
         plt.xlabel("All Hits Δt ToF Corrected (ns)")
         plt.ylabel("Counts")
-        plt.title(f"All Hits Δt ToF Corrected for AmBe 2.0v4 for all ToF, run positions:({sx}, {sy}, {sz})")
+        plt.title(f"{self.selection_label}\nAll hits Δt, ToF corrected, {self.campaign_label}, source position ({sx}, {sy}, {sz})")
         plt.tight_layout()
         #plt.show()
         #pdf.savefig(bbox_inches='tight')
@@ -744,12 +780,42 @@ class AmBeNeutronAnalyzer:
             params['tau'].max = self.fitting_config['capture_bounds'][1]
             params['B'].vary = False
             
-            result = model.fit(ydata, params, t=xdata, weights=1/ydata_errors, method="basinhopping")
+            # method="least_squares", NOT "basinhopping" and NOT lmfit's default
+            # "leastsq". Two separate reasons, both measured on this campaign:
+            #
+            #   leastsq (lmfit default) imposes min/max by transforming the
+            #   parameters internally, and on the high-statistics positions that
+            #   transform settles in a worse local minimum and reports no error bars
+            #   at all. At (0,-100,-75) it returns therm = 0.33 -- effectively pinned
+            #   at the 0.1 bound -- and tau = 33.21 with stderr None; 2 of 26
+            #   positions failed outright that way.
+            #
+            #   basinhopping is a global-minimum search wrapped around a local one.
+            #   It is far slower per position and its covariance is not on the same
+            #   footing as curve_fit's, so the per-page numbers could not be compared
+            #   with CaptureTimeFits_*.csv or with the 30.53 +- 0.26 anchor.
+            #
+            # least_squares IS scipy.optimize.least_squares -- the bounded TRF solver
+            # curve_fit uses -- so these pages reproduce the frozen fits to every
+            # digit they print. scale_covar=False keeps the stderr absolute
+            # (curve_fit's absolute_sigma=True) rather than rescaled by sqrt(redchi).
+            result = model.fit(ydata, params, t=xdata, weights=1 / ydata_errors,
+                               method="least_squares", scale_covar=False)
             print(f"LMFIT results for position {source_key}:")
             print(result.fit_report())
             
-            best_fit_curve = result.best_fit
-            
+            # Evaluate the fitted model on a dense grid over the DISPLAY range
+            # (plot_min_time -> fit_max_time), not on xdata. result.best_fit is the
+            # model at the fit points only, i.e. 10-67 us, which is why the curve
+            # used to start at 10. Same parameters either way -- this extends the
+            # drawn line across the thermalisation rise the fit already describes.
+            xplot = np.linspace(self.fitting_config['plot_min_time'],
+                                self.fitting_config['fit_max_time'], 500)
+            best_fit_curve = self.NeutCapture(
+                xplot,
+                result.params['A'].value, result.params['therm'].value,
+                result.params['tau'].value, result.params['B'].value)
+
             lm_run_summary = {
                 "Thermal": result.params['therm'].value,
                 "Thermal_err": result.params['therm'].stderr,
@@ -772,9 +838,22 @@ class AmBeNeutronAnalyzer:
                 fr"$\mathrm{{therm}} = {result.params['therm'].value:.2f} \pm {result.params['therm'].stderr:.2f}\ \mu s$" + "\n"
                 fr"$\tau = {result.params['tau'].value:.2f} \pm {result.params['tau'].stderr:.2f}\ \mu s$" + "\n"
                 fr"$\chi^2 = {result.chisqr:.2f},\ \mathrm{{ndof}} = {result.nfree}$, " + "\n"
-                fr"$\frac{{\chi^2}}{{\mathrm{{ndof}}}} = {result.redchi:.2f}$"
+                fr"$\frac{{\chi^2}}{{\mathrm{{ndof}}}} = {result.redchi:.2f}$" + "\n"
+                # The window is stated on every page. It is not decoration: these
+                # numbers are NOT comparable with anything fitted on the old 10-67
+                # window, and a page that does not say which window it used cannot be
+                # told apart from one that did. Built from the config rather than
+                # written out, so it cannot drift from the fit that produced it.
+                + (fr"fit {self.fitting_config['fit_min_time']:.0f}–"
+                   fr"{self.fitting_config['fit_max_time']:.0f} $\mu s$"
+                   if self.fitting_config['plot_min_time']
+                   >= self.fitting_config['fit_min_time'] else
+                   fr"fit {self.fitting_config['fit_min_time']:.0f}–"
+                   fr"{self.fitting_config['fit_max_time']:.0f} $\mu s$, "
+                   fr"drawn {self.fitting_config['plot_min_time']:.0f}–"
+                   fr"{self.fitting_config['fit_max_time']:.0f} $\mu s$")
             )
-            plt.plot(xdata, best_fit_curve, 'g-', linewidth=2, 
+            plt.plot(xplot, best_fit_curve, 'g-', linewidth=2,
                     label=label)
             plt.xlabel("Cluster Time [μs]")
             plt.ylabel("Counts")
@@ -1030,8 +1109,14 @@ class AmBeNeutronAnalyzer:
         if tasks is None:
             tasks = ['2d_histograms', '1d_histograms', 'lmfit_fit', 'summary']
 
-        # Load and group data
-        self.load_and_group_data(file_pattern)
+        # Load and group data. A list of patterns is accepted so a campaign split
+        # across several tags on disk can be loaded as one sample: grouping is by
+        # source position and load_and_group_data appends rather than resetting, so
+        # the tags merge per position. Only pass several patterns when they cover
+        # DISJOINT positions -- overlapping tags would double-count silently.
+        for pat in ([file_pattern] if isinstance(file_pattern, str) else file_pattern):
+            self.load_and_group_data(pat)
+        print(f"[basic] grouped into {len(self.source_groups)} source positions")
 
         # Create output directory
         os.makedirs("OutputPlots", exist_ok=True)
@@ -1106,17 +1191,74 @@ if __name__ == "__main__":
 # ambe CLI integration
 # ---------------------------------------------------------------------------
 def run(ctx, argv=None):
-    """Run basic plots using paths and cuts from RunContext."""
+    """Run basic plots using paths and cuts from RunContext.
+
+    This is the per-source-position book: load_and_group_data groups the candidate
+    CSVs by (x, y, z) and the histogram tasks emit one page per position, which is
+    the per-port-position view for whichever selection the config names.
+    """
     from ..io import inputs_from_ctx
+    from pathlib import Path
+    import glob as _glob
     csv_paths = inputs_from_ctx(ctx, "candidate_csvs")
     data_dir = str(ctx.run_dir / "candidate_csvs") if not csv_paths else str(csv_paths[0].parent)
-    out_pdf = str(ctx.plot_path(ctx.filename("basic_plots", "pdf")))
-    analyzer = AmBeNeutronAnalyzer(data_directory=data_dir, output_pdf=out_pdf)
+    # ctx.plot_path() composes the campaign/run suffix itself, so it takes the BARE
+    # base name. Passing ctx.filename(...) into it applied the suffix twice and wrote
+    # "basic_plots__<c>__<r>.pdf__<c>__<r>.png" -- a .png-suffixed file containing a
+    # PDF, which no downstream stage could find.
+    out_pdf = str(ctx.plot_path("basic_plots", "pdf"))
+
+    # Derive the glob from the config instead of letting run_analysis fall back to
+    # its default 'EventAmBeNeutronCandidates_fullwindowtest_*.csv'. That default
+    # matches nothing for any current campaign, so this entry point used to produce
+    # an empty book in silence -- load_and_group_data simply found no files.
+    patterns = sorted({Path(str(p)).name for p in ctx.inputs.get("candidate_csvs", [])})
+    if not patterns:
+        raise SystemExit("config declares no inputs.candidate_csvs")
+
+    n_found = 0
+    for pat in patterns:
+        n = len(_glob.glob(os.path.join(data_dir, pat)))
+        print(f"[plots.basic] {data_dir}/{pat} -> {n} candidate CSVs")
+        n_found += n
+    if n_found == 0:
+        raise SystemExit(
+            f"no candidate CSVs match {patterns} in {data_dir} -- run "
+            f"`ambe data process --config <cfg> --selection <box|mva>` first")
+
+    # Plot-only hits cut, taken from the config so both decks state it and use the
+    # same value. 0 / null disables it. Legacy default is 10 (see prepare_data).
+    mch = ctx.cuts.get("plot_min_cluster_hits", 10)
+    print(f"[plots.basic] plot-only cut clusterHits >= {mch}"
+          f"{'  (disabled)' if not mch else ''}")
+    analyzer = AmBeNeutronAnalyzer(data_directory=data_dir, output_pdf=out_pdf,
+                                   min_cluster_hits=int(mch or 0),
+                                   campaign_label=ctx.campaign or 'AmBe 2.0v4',
+                                   selection_label=ctx.cuts.get('selection_label', ''))
     fc = ctx.fit_params
     if fc:
         analyzer.update_fitting_config(**{k: v for k, v in fc.items()
                                           if k in analyzer.fitting_config})
-    analyzer.run_analysis(tasks=["2d_histograms", "1d_histograms"])
+    # 'lmfit_fit' was NOT in this list, which is why the per-position capture-time
+    # fits did not exist anywhere in the decks: lmfit_analysis() emits one fitted page
+    # per source position carrying BOTH time constants -- therm and tau with their
+    # errors, chi2 and chi2/ndof -- and it was unreachable from this entry point, so
+    # the per-position book stopped at the raw histograms. Adding it here puts the
+    # fits in the book for WHICHEVER selection the config names, which is what makes
+    # the box and MVA appendices twins.
+    #
+    # 'summary' is deliberately NOT added. It runs generate_summary_plots(), whose
+    # capture/thermal port x y heatmaps are now produced as deck figures by
+    # boxcut_v4_campaign.py --do captureheat (J9/J10, K9/K10) with a convergence gate,
+    # masked cells and the weighted mean in the title. Worse, it writes to
+    # OutputPlots/{Capture,Thermal}Time_AmBeNeutrons_<campaign_tag>_LMFIT.png, and
+    # campaign_tag is 'AmBe2.0v4' for BOTH selections -- so running the box book and
+    # then the MVA book would silently overwrite one with the other under a filename
+    # that names neither. Two differently-computed versions of the same map is the
+    # trap; the deck figures are the ones to quote.
+    analyzer.run_analysis(file_pattern=patterns,
+                          tasks=["2d_histograms", "1d_histograms", "lmfit_fit"])
+    print(f"[plots.basic] wrote {out_pdf}")
 
 
 def cli(ctx, argv=None):
