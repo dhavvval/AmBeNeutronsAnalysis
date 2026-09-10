@@ -143,12 +143,38 @@ def extract_cf_features_one_file(fp, geo_path, offsets_path, max_events: int = 0
                                            df_clust["pmtID"].to_numpy(int))
             n_hits = int(mask.sum())
             t_earliest = float(df_clust["t"].min())
+            # ClusterFinder's OWN summary of this cluster, carried through unchanged.
+            # `cid` is the positional index into df_cf (assign_clusterfinder_labels
+            # returns an index into df_clusters), so this is the same cluster, not a
+            # nearest-in-time match.
+            #
+            # These exist so the AmBe pipeline's Stage-2 neutron definition
+            # (src/ambe/data/processor.py: 0 < clusterPE <= 100, 0 < CB < 0.45,
+            # clusterTime >= 2000 ns, clusterHits >= 5) can be applied EXACTLY to this
+            # table, with no join back to EventAmBeNeutronCandidates_*.csv. They are
+            # the raw pre-residual quantities: cf_clusterHits is CF's full membership
+            # count, of which the MC-matched (-5,+20) ns window keeps ~81% — so
+            # n_hits < cf_clusterHits is expected and is the signature that the
+            # MC-matched path ran. A ratio of 1.0 means raw membership leaked in.
+            #
+            # NOTE `passes_stage1` above is a DIFFERENT cut (PE<80, CB<0.45, hits>9,
+            # from the OPTICS data benchmark). Do not confuse the two.
+            cf = df_cf.iloc[int(cid)]
             row = {
                 "run": run, "port": port,
                 "event_number": ev["event_number"],
                 "event_tank_time": ev["event_tank_time"],
                 "cluster_id": int(cid),
                 "clusterTime_earliest": t_earliest,
+                "cf_clusterTime": float(cf["clusterTime"]),
+                "cf_clusterPE": float(cf["clusterPE"]),
+                "cf_clusterCB": float(cf["clusterCB"]),
+                "cf_clusterHits": int(cf["clusterHits"]),
+                # The pipeline's `clusterNumber`: for the BeamCluster tree it reads
+                # `numberOfClusters`, the per-EVENT cluster count, and splits its
+                # candidates into single (== 1) and multiple (!= 1). `n_cf_raw` is
+                # that same branch, taken from load_file.
+                "cf_clusterNumber": int(ev["n_cf_raw"]),
                 "passes_stage1": bool(passes_preselection(pe_tot, cb, n_hits)),
                 "method": "clusterfinder",
             }

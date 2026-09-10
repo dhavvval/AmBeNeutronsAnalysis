@@ -260,7 +260,16 @@ CL_BR  = ["clusterTime", "clusterPE", "clusterChargeBalance", "clusterHits"]
 EV_BR  = ["eventNumber", "eventTimeTank", "numberOfClusters"]
 
 
-def load_file(root_file: Path, max_events: int = 0, gate_set=None):
+# Events read into memory per uproot call. The nested hit branches expand by
+# roughly an order of magnitude over the on-disk size, so reading a whole file at
+# once costs several GB — a 75,625-event v4 BeamCluster file (run 6266) is an
+# out-of-memory kill on an 11 GB node. Batching changes nothing observable: the
+# same events are yielded, in the same order, with the same contents.
+LOAD_BATCH_EVENTS = 5000
+
+
+def load_file(root_file: Path, max_events: int = 0, gate_set=None,
+              batch_events: int = LOAD_BATCH_EVENTS):
     """
     Yield per-event dicts from one BeamCluster file:
       run, event_number, n_cf_raw, df_cf (CF cluster table), df_hits (raw hits).
@@ -269,42 +278,51 @@ def load_file(root_file: Path, max_events: int = 0, gate_set=None):
     gate_set: if not None, a set of accepted eventTimeTank timestamps; events
     whose eventTimeTank is not in the set are skipped (waveform-gating).  The
     timestamps come from the waveform IC cut (see --gate-csv-dir).
+
+    batch_events: how many entries to hold in memory at a time. The gate is
+    applied per event AFTER the read, so gating does not reduce the read cost and
+    a gated run of a large file needs this just as much as an ungated one.
     """
     run  = run_number_from_path(root_file)
     f    = uproot.open(str(root_file))
     tree = f["Event"]
-    stop = max_events if max_events > 0 else None
+    n_total = tree.num_entries
+    stop = min(max_events, n_total) if max_events > 0 else n_total
+    step = max(int(batch_events), 1)
 
-    a = tree.arrays(EV_BR + CL_BR + HIT_BR, library="np", entry_stop=stop)
+    for start in range(0, stop, step):
+        a = tree.arrays(EV_BR + CL_BR + HIT_BR, library="np",
+                        entry_start=start, entry_stop=min(start + step, stop))
 
-    ett_all = a["eventTimeTank"]
-    n = len(a["eventNumber"])
-    for i in range(n):
-        if gate_set is not None and int(ett_all[i]) not in gate_set:
-            continue
-        ncl = int(a["numberOfClusters"][i])
-        df_cf = pd.DataFrame({
-            "clusterTime": np.asarray(a["clusterTime"][i], dtype=float),
-            "clusterPE":  np.asarray(a["clusterPE"][i], dtype=float),
-            "clusterCB":  np.asarray(a["clusterChargeBalance"][i], dtype=float),
-            "clusterHits": np.asarray(a["clusterHits"][i], dtype=float),
-        })
-        df_hits = pd.DataFrame({
-            "x":  np.asarray(a["hitX"][i], dtype=float),
-            "y":  np.asarray(a["hitY"][i], dtype=float),
-            "z":  np.asarray(a["hitZ"][i], dtype=float),
-            "t":  np.asarray(a["hitT"][i], dtype=float),
-            "pe": np.asarray(a["hitPE"][i], dtype=float),
-            "chankey": np.asarray(a["hitChankey"][i], dtype=int),
-        })
-        yield {
-            "run": run,
-            "event_number": int(a["eventNumber"][i]),
-            "event_tank_time": int(ett_all[i]),
-            "n_cf_raw": ncl,
-            "df_cf": df_cf,
-            "df_hits": df_hits,
-        }
+        ett_all = a["eventTimeTank"]
+        n = len(a["eventNumber"])
+        for i in range(n):
+            if gate_set is not None and int(ett_all[i]) not in gate_set:
+                continue
+            ncl = int(a["numberOfClusters"][i])
+            df_cf = pd.DataFrame({
+                "clusterTime": np.asarray(a["clusterTime"][i], dtype=float),
+                "clusterPE":  np.asarray(a["clusterPE"][i], dtype=float),
+                "clusterCB":  np.asarray(a["clusterChargeBalance"][i], dtype=float),
+                "clusterHits": np.asarray(a["clusterHits"][i], dtype=float),
+            })
+            df_hits = pd.DataFrame({
+                "x":  np.asarray(a["hitX"][i], dtype=float),
+                "y":  np.asarray(a["hitY"][i], dtype=float),
+                "z":  np.asarray(a["hitZ"][i], dtype=float),
+                "t":  np.asarray(a["hitT"][i], dtype=float),
+                "pe": np.asarray(a["hitPE"][i], dtype=float),
+                "chankey": np.asarray(a["hitChankey"][i], dtype=int),
+            })
+            yield {
+                "run": run,
+                "event_number": int(a["eventNumber"][i]),
+                "event_tank_time": int(ett_all[i]),
+                "n_cf_raw": ncl,
+                "df_cf": df_cf,
+                "df_hits": df_hits,
+            }
+        del a
 
 
 # ── Per-event counting ────────────────────────────────────────────────────────

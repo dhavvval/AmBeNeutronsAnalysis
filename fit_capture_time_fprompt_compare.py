@@ -11,7 +11,7 @@ between two tags, so it has to be built here. The histogram/mask/model are
 replicated *exactly* from `ambe.plots.basic` so the numbers stay comparable
 to the published tau = 29.16 +/- 0.44 us:
 
-  - 70 bins over (0, 70) us, fit mask 10 < bin_centre < 67
+  - 70 bins over (0, 70) us, fit mask 2 < bin_centre < 67  (WAS 10 < ... < 67)
   - NeutCapture(t) = A*(1-exp(-t/therm))*exp(-t/tau) + B
   - bounds A (0, inf), therm (0.1, 10), tau (10, 70), B (0, 15)
   - weights 1/sqrt(N)
@@ -34,12 +34,24 @@ Usage:
     source /exp/annie/app/users/dajana/myboy/bin/activate
     MPLBACKEND=Agg python -u fit_capture_time_fprompt_compare.py
 """
+import argparse
+import glob
 import os
+import re
 import sys
 
 import numpy as np
 import pandas as pd
 from scipy.optimize import curve_fit
+
+import lmfit
+
+# Fit backends. Both minimise the same chi2 of the same NeutCapture model over the
+# same 10-67 us window with the same bounds, so they are meant to agree; they are
+# kept as an explicit choice rather than one being swapped in because the published
+# tau = 30.53 +- 0.26 us anchor was measured with "scipy", and `ambe.plots.basic`
+# uses lmfit. Every caller states which one it wants -- see fit().
+BACKENDS = ("scipy", "lmfit")
 
 CAND_DIR = "EventAmBeNeutronCandidatesData"
 BASE_TAG = "AmBe2.0v4_gated"
@@ -50,7 +62,21 @@ RUNS = [6046, 6056, 6060, 6061, 6062, 6165, 6166, 6186, 6187, 6188, 6189,
 # --- replicated verbatim from ambe/plots/basic.py fitting_config ---
 TIME_BINS = 70
 TIME_RANGE = (0, 70)
-FIT_MIN, FIT_MAX = 10.0, 67.0
+# THE FIT WINDOW WAS 10-67 us AND IS NOW 2-67 us. Changed deliberately, campaign-wide,
+# so that one window is used by every capture-time product in the analysis rather than
+# the fit window and the selection's own lower bound disagreeing.
+#
+# 2 us is where the data actually starts: the box cut is t >= 2 us and the cosmic veto
+# drops any event containing a cluster below 2 us, so no selection admits anything
+# earlier. Fitting from 10 threw away the eight microseconds that contain the
+# thermalisation rise -- which is the only part of the range where the
+# (1-exp(-t/therm)) term carries information, so therm was being constrained almost
+# entirely by its bounds.
+#
+# EVERY PUBLISHED CAPTURE TIME MOVES BECAUSE OF THIS. The old anchor, tau = 30.53 +-
+# 0.26 us over 19 positions and 30.535 +- 0.228 over 26, was measured on 10-67. It is
+# superseded, not reproduced. Anything quoting 30.53 predates this change.
+FIT_MIN, FIT_MAX = 2.0, 67.0
 INIT = dict(A=200.0, therm=5.0, tau=25.0, B=0.0)
 BOUNDS_LO = dict(A=0.0, therm=0.1, tau=10.0, B=0.0)
 BOUNDS_HI = dict(A=np.inf, therm=10.0, tau=70.0, B=15.0)
@@ -62,18 +88,46 @@ def NeutCapture(t, A, therm, tau, B):
     return A * (1 - np.exp(-t / therm)) * np.exp(-t / tau) + B
 
 
-def prepare(ct_us):
-    """Exact replica of AmBeNeutronAnalyzer._prepare_fitting_data."""
+# fit_expflat keeps a 10 us start and does NOT follow FIT_MIN. It is a DIFFERENT
+# MODEL -- A*exp(-t/tau) + B, with no rise term at all -- and dropping the rise term
+# is only legitimate above ~10 us where the rise is >=86% saturated. Fitting it from
+# 2 us asks a pure exponential to describe the thermalisation rise it has no
+# parameter for: measured on the 28-run sample that gives chi2/ndof 165 against 1.4,
+# and a tau of 46 us against 29.5. That is not a weak fit, it is the wrong model on
+# that range, so it would report a meaningless flat-pedestal limit. The pedestal
+# diagnostic therefore stays on 10-67 and says so wherever it is quoted.
+EXPFLAT_MIN = 10.0
+
+
+def prepare(ct_us, fit_min=None):
+    """Exact replica of AmBeNeutronAnalyzer._prepare_fitting_data.
+
+    `fit_min` overrides the module FIT_MIN for callers that need a different lower
+    edge -- only fit_expflat does, see EXPFLAT_MIN.
+    """
+    lo = FIT_MIN if fit_min is None else fit_min
     counts, edges = np.histogram(ct_us, bins=TIME_BINS, range=TIME_RANGE)
     centres = (edges[:-1] + edges[1:]) / 2
-    mask = (centres > FIT_MIN) & (centres < FIT_MAX)
+    mask = (centres > lo) & (centres < FIT_MAX)
     x, y = centres[mask], counts[mask]
     err = np.sqrt(y).astype(float)
     err[err == 0] = 1e-10
     return x, y, err
 
 
-def fit(ct_us, float_B):
+def fit(ct_us, float_B, backend):
+    """NeutCapture fit on the FIT_MIN-FIT_MAX window (2-67 us). `backend` is REQUIRED.
+
+    No default on `backend` on purpose: "scipy" is the recipe the frozen
+    tau = 30.53 +- 0.26 us anchor was measured with, "lmfit" is the recipe
+    `ambe.plots.basic.lmfit_analysis` uses, and a caller that does not say which
+    one it wants would silently attribute one recipe's number to the other. Both
+    return the SAME dict schema, so a caller only has to name the backend.
+    """
+    if backend not in BACKENDS:
+        raise ValueError(f"backend must be one of {BACKENDS}, got {backend!r}")
+    if backend == "lmfit":
+        return _fit_lmfit(ct_us, float_B)
     x, y, err = prepare(ct_us)
     if y.sum() < 50:
         return None
@@ -106,8 +160,87 @@ def fit(ct_us, float_B):
     return out
 
 
+def _fit_lmfit(ct_us, float_B):
+    """The lmfit backend of fit(). Same model, window, bounds and weights.
+
+    Follows `ambe.plots.basic.AmBeNeutronAnalyzer.lmfit_analysis`:
+    lmfit.Model(NeutCapture), the same initial values and min/max on therm and
+    tau, and B held with vary=False when float_B is False (which is what that
+    method does, and what the 30.53 us anchor was measured with).
+
+    Weighting: lmfit minimises `(data - model) * weights`, so weights = 1/err
+    reproduces curve_fit's `sigma=err, absolute_sigma=True` chi2 exactly. With
+    `scale_covar=False` the reported stderr is then on the same footing as
+    curve_fit's absolute_sigma errors rather than rescaled by sqrt(redchi) --
+    without it the two backends' errors would differ by that factor alone and the
+    comparison against the anchor error would be meaningless.
+
+    ONE DELIBERATE DEVIATION FROM lmfit_analysis, AND WHY. method="least_squares"
+    rather than lmfit's default "leastsq". Default leastsq is MINPACK
+    Levenberg-Marquardt, which imposes min/max by transforming the parameters
+    internally; on the high-statistics positions that transform walks into a worse
+    local minimum and stops there. Measured on the 28-run box-cut sample, position
+    (0,-100,-75): leastsq returns therm = 0.33 us (all but pinned at the 0.1 bound)
+    and tau = 33.21 with NO error estimate, while the same data under
+    "least_squares" -- which is scipy.optimize.least_squares, the bounded TRF
+    solver curve_fit itself uses -- returns therm = 4.90 +- 0.58, tau =
+    31.65 +- 0.64, chi2/ndof 2.17. 2 of 26 positions failed outright that way. With
+    "least_squares" this backend reproduces the scipy backend to every digit it
+    prints, position by position, which is the point: the choice of library must not
+    be a physics choice.
+
+    Returns None on the same conditions as the scipy path (<50 counts in window,
+    or the minimiser not converging), so callers need no extra branch.
+    """
+    x, y, err = prepare(ct_us)
+    if y.sum() < 50:
+        return None
+    model = lmfit.Model(NeutCapture)
+    params = model.make_params(A=INIT["A"], therm=INIT["therm"], tau=INIT["tau"],
+                               B=1.0 if float_B else 0.0)
+    for k in ("A", "therm", "tau", "B"):
+        params[k].min = BOUNDS_LO[k]
+        params[k].max = BOUNDS_HI[k]
+    if not float_B:
+        params["B"].value = 0.0
+        params["B"].vary = False
+    try:
+        res = model.fit(y.astype(float), params, t=x, weights=1.0 / err,
+                        scale_covar=False, nan_policy="omit",
+                        method="least_squares")
+    except Exception as exc:                                # noqa: BLE001
+        print(f"    lmfit fit failed: {exc}")
+        return None
+    if not res.success or res.covar is None:
+        print("    lmfit fit did not converge / no covariance")
+        return None
+
+    def val(name):
+        p = res.params[name]
+        # stderr is None for a parameter lmfit could not error-estimate, and 0.0
+        # for one sitting on a bound. is_good() already rejects err == 0, so
+        # mapping None onto 0.0 routes both into the same existing quality gate
+        # instead of putting a NaN into the weighted average.
+        return float(p.value), float(p.stderr) if p.stderr is not None else 0.0
+
+    A, A_err = val("A")
+    therm, therm_err = val("therm")
+    tau, tau_err = val("tau")
+    B, B_err = val("B")
+    ndof = len(x) - int(res.nvarys)
+    chi2 = float(res.chisqr)
+    return dict(A=A, A_err=A_err, therm=therm, therm_err=therm_err,
+                tau=tau, tau_err=tau_err, chi2=chi2, ndof=ndof,
+                redchi=chi2 / ndof, N=int(y.sum()), B=B, B_err=B_err)
+
+
 def fit_expflat(ct_us):
-    """A*exp(-t/tau) + B on 10-67 us, B free.
+    """A*exp(-t/tau) + B on EXPFLAT_MIN-67 us (10-67), B free.
+
+    NOTE the window: this one function deliberately does NOT follow FIT_MIN. See the
+    comment on EXPFLAT_MIN -- a model with no rise term cannot be fitted across the
+    rise. Any number from here must be quoted as a 10-67 us result even though every
+    NeutCapture fit in the analysis is now 2-67.
 
     Why this variant exists: above 10 us the `(1-exp(-t/therm))` rise term of
     NeutCapture is already >=86% saturated for any therm in its (0.1, 10) box,
@@ -119,7 +252,7 @@ def fit_expflat(ct_us):
     pedestal instead gives a well-conditioned 3-parameter fit that answers the
     actual question: is there an excess flat (accidental) component?
     """
-    x, y, err = prepare(ct_us)
+    x, y, err = prepare(ct_us, fit_min=EXPFLAT_MIN)
     if y.sum() < 50:
         return None
     f = lambda t, A, tau, B: A * np.exp(-t / tau) + B      # noqa: E731
@@ -142,6 +275,20 @@ def fit_expflat(ct_us):
                 redchi=float((resid ** 2).sum() / ndof), N=int(y.sum()))
 
 
+def is_good(t):
+    """Drop fits that did not converge: parameter pinned at a bound (which
+    makes curve_fit report stderr exactly 0 and gives it infinite weight),
+    or a chi2/ndof that says the model does not describe the data.
+
+    Module-level because both --mode fpcompare and --mode tagset apply the same
+    quality gate; the weighted average is only ever taken over fits passing it.
+    """
+    return ((t.tau_err > 0) & (t.therm_err > 0)
+            & (t.tau > BOUNDS_LO["tau"] + 1e-6) & (t.tau < BOUNDS_HI["tau"] - 1e-6)
+            & (t.therm > BOUNDS_LO["therm"] + 1e-6)
+            & (t.redchi < 3.0))
+
+
 def load(tag, run):
     p = os.path.join(CAND_DIR, f"EventAmBeNeutronCandidates_{tag}_{run}.csv")
     if not os.path.exists(p):
@@ -152,7 +299,122 @@ def load(tag, run):
     return d
 
 
-def main():
+def load_tag(tag):
+    """Every per-run candidate CSV carrying `tag`, discovered from the filesystem.
+
+    Unlike load(), this does not need a hardcoded run list — which is the point:
+    the tagset mode is meant to be pointed at a campaign without editing the
+    module. Runs are parsed out of the filename so the returned frame keeps the
+    `run` column that the pooled fits ignore but the printout uses.
+    """
+    pat = os.path.join(CAND_DIR, f"EventAmBeNeutronCandidates_{tag}_*.csv")
+    frames = []
+    for p in sorted(glob.glob(pat)):
+        m = re.search(rf"EventAmBeNeutronCandidates_{re.escape(tag)}_(\d+)\.csv$", p)
+        if not m:
+            continue
+        d = load(tag, int(m.group(1)))
+        if d is not None and len(d):
+            frames.append(d)
+    if not frames:
+        raise SystemExit(f"[tagset] no candidate CSVs matched {pat} — refusing to "
+                         f"fit an empty sample")
+    out = pd.concat(frames, ignore_index=True)
+    print(f"  tag {tag:24s}: {out.run.nunique():3d} runs, {len(out):8,d} clusters, "
+          f"{out.groupby(['sourceX','sourceY','sourceZ']).ngroups:3d} positions")
+    return out
+
+
+def fit_per_position(d, backend):
+    """Per-(sourceX,sourceY,sourceZ) NeutCapture fit, B fixed at 0.
+
+    This is the recipe behind the published weighted-average tau: same 70-bin
+    histogram, same 10-67 us window, same bounds, B held at zero. Returned frame
+    matches the CaptureTimeFits_*.csv schema. `backend` is passed straight down to
+    fit() and is required for the same reason it is required there.
+    """
+    recs = []
+    for pos, grp in d.groupby(["sourceX", "sourceY", "sourceZ"]):
+        r = fit(grp.clusterTime.values, float_B=False, backend=backend)
+        if r is None:
+            print(f"    position {pos}: fit failed / <50 counts in window")
+            continue
+        r["pos"] = pos
+        recs.append(r)
+    return pd.DataFrame(recs)
+
+
+def weighted_tau(g):
+    """Inverse-variance weighted mean tau and its error, over converged fits."""
+    w = 1.0 / g.tau_err ** 2
+    wavg = (g.tau * w).sum() / w.sum()
+    werr = float(np.sqrt(1.0 / w.sum()))
+    scatter = (w * (g.tau - wavg) ** 2).sum() / (len(g) - 1) if len(g) > 1 else 0.0
+    return float(wavg), werr, float(scatter)
+
+
+def mode_tagset(tags, out_label, backend):
+    """Pool the named tags, fit per source position, write one CaptureTimeFits CSV.
+
+    Why this mode exists: the fpcompare mode below is hardwired to the
+    baseline-vs-fprompt question (two fixed tags, a fixed 20-run list, and an
+    eventID diff between them). Measuring the capture time of an arbitrary
+    campaign — e.g. all 28 v4 source runs spread over two Stage-1 tags — needs the
+    same fit recipe pointed at a different sample, not a second copy of it.
+    """
+    print("=" * 78)
+    print(f"TAGSET MODE — tags: {', '.join(tags)}   fit backend: {backend}")
+    print("=" * 78)
+    frames = [load_tag(t) for t in tags]
+    d = pd.concat(frames, ignore_index=True)
+
+    key = ["sourceX", "sourceY", "sourceZ"]
+    npos = d.groupby(key).ngroups
+    print(f"\n  POOLED: {d.run.nunique()} runs, {len(d):,} clusters, {npos} positions")
+    dup = d.groupby(key)["run"].nunique()
+    shared = dup[dup > 1]
+    if len(shared):
+        print(f"  note: {len(shared)} position(s) contributed by >1 run "
+              f"(expected where two runs sit at the same place):")
+        for pos, n in shared.items():
+            runs = sorted(d[(d.sourceX == pos[0]) & (d.sourceY == pos[1])
+                            & (d.sourceZ == pos[2])].run.unique())
+            print(f"    {pos}: {n} runs {runs}")
+
+    print(f"\n  Pooled fit (all positions together), B fixed at 0, {backend}:")
+    rp = fit(d.clusterTime.values, float_B=False, backend=backend)
+    if rp:
+        print(f"    tau = {rp['tau']:.3f} +- {rp['tau_err']:.3f} us   "
+              f"therm = {rp['therm']:.2f}   chi2/ndof = {rp['redchi']:.2f}   N = {rp['N']:,}")
+
+    print(f"\n  PER-POSITION FITS, B fixed at 0, {backend}:")
+    t = fit_per_position(d, backend)
+    if t.empty:
+        raise SystemExit("[tagset] no position produced a fit — nothing to write")
+    g = t[is_good(t)]
+    print(f"    positions fitted : {len(t)}  ({len(g)} converged, {len(t)-len(g)} rejected)")
+    for _, r in t[~is_good(t)].iterrows():
+        print(f"      REJECTED {str(r['pos']):16s} tau={r['tau']:.2f}+-{r['tau_err']:.2f} "
+              f"therm={r['therm']:.2f} chi2/ndof={r['redchi']:.2f} N={r['N']}")
+    if not g.empty:
+        wavg, werr, scatter = weighted_tau(g)
+        print(f"\n    weighted-avg tau  : {wavg:.3f} +- {werr:.3f} us  (converged only)")
+        print(f"    scale-factor err  : +- {werr*np.sqrt(max(scatter,1.0)):.3f} us  "
+              f"(chi2/ndof of the average = {scatter:.2f})")
+        print(f"    unweighted mean   : {g.tau.mean():.3f} +- "
+              f"{g.tau.std(ddof=1)/np.sqrt(len(g)):.3f} us")
+        print(f"    tau range         : {g.tau.min():.2f} - {g.tau.max():.2f} us")
+        print(f"    chi2/ndof range   : {t.redchi.min():.2f} - {t.redchi.max():.2f}")
+
+    p = os.path.join("TriggerSummary", f"CaptureTimeFits_{out_label}.csv")
+    if os.path.exists(p):
+        print(f"\n  NOTE: overwriting existing {p}")
+    t.to_csv(p, index=False)
+    print(f"\nwrote {p}  ({len(t)} rows)")
+    return 0
+
+
+def mode_fpcompare(backend):
     base, fp, rec = [], [], []
     print("Building samples (recovered = fprompt eventIDs absent from gated, per run)")
     for r in RUNS:
@@ -183,7 +445,7 @@ def main():
         hdr = f"{'sample':38s} {'N':>8s} {'tau (us)':>16s} {'therm (us)':>14s} {'B':>13s} {'chi2/ndof':>10s}"
         print(hdr)
         for name, d in samples:
-            r = fit(d.clusterTime.values, float_B)
+            r = fit(d.clusterTime.values, float_B, backend=backend)
             if r is None:
                 print(f"{name:38s}   fit failed / too few counts")
                 continue
@@ -200,21 +462,12 @@ def main():
     for name, d in samples:
         recs = []
         for pos, grp in d.groupby(key):
-            r = fit(grp.clusterTime.values, float_B=False)
+            r = fit(grp.clusterTime.values, float_B=False, backend=backend)
             if r is None:
                 continue
             r["pos"] = pos
             recs.append(r)
         per[name] = pd.DataFrame(recs)
-
-    def is_good(t):
-        """Drop fits that did not converge: parameter pinned at a bound (which
-        makes curve_fit report stderr exactly 0 and gives it infinite weight),
-        or a chi2/ndof that says the model does not describe the data."""
-        return ((t.tau_err > 0) & (t.therm_err > 0)
-                & (t.tau > BOUNDS_LO["tau"] + 1e-6) & (t.tau < BOUNDS_HI["tau"] - 1e-6)
-                & (t.therm > BOUNDS_LO["therm"] + 1e-6)
-                & (t.redchi < 3.0))
 
     for name, t in per.items():
         if t.empty:
@@ -363,6 +616,57 @@ def main():
         p = os.path.join(outdir, f"CaptureTimeFits_{slug}.csv")
         t.to_csv(p, index=False)
         print(f"\nwrote {p}")
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        prog="fit_capture_time_fprompt_compare",
+        description="Capture-time fits sharing one recipe (70 bins over 0-70 us, "
+                    "10-67 us window, NeutCapture with B fixed at 0).")
+    # No default on purpose. The two modes fit different samples and answer
+    # different questions; silently picking one would let a tagset measurement be
+    # read as the fprompt comparison, or vice versa.
+    ap.add_argument("--mode", required=True, choices=["fpcompare", "tagset"],
+                    help="fpcompare: the original IC-baseline vs fprompt2d vs "
+                         "recovered-only study, on the hardcoded 20-run list. "
+                         "tagset: pool --tags and fit per source position, "
+                         "writing CaptureTimeFits_<out-label>.csv.")
+    ap.add_argument("--tags", default=None,
+                    help="tagset mode only: comma-separated Stage-1 tags, e.g. "
+                         "AmBe2.0v4_gated,AmBe2.0v4_ext")
+    ap.add_argument("--out-label", default=None,
+                    help="tagset mode only: slug for TriggerSummary/"
+                         "CaptureTimeFits_<label>.csv. Must not be 'baseline', "
+                         "'fprompt2d' or 'recovered' — those belong to fpcompare.")
+    # Required, no default, for the same reason --mode is: the frozen
+    # tau = 30.53 +- 0.26 us anchor and every CaptureTimeFits_*.csv already on disk
+    # were produced with the scipy minimiser. A silent default would let an lmfit
+    # number be compared against, or written over, a scipy one without anyone
+    # having said so.
+    ap.add_argument("--fit-backend", required=True, choices=list(BACKENDS),
+                    help="minimiser for the NeutCapture fit. Same model, window, "
+                         "bounds and weights either way; 'scipy' is what the frozen "
+                         "anchor was measured with, 'lmfit' is what "
+                         "ambe.plots.basic.lmfit_analysis uses.")
+    args = ap.parse_args()
+
+    if args.mode == "fpcompare":
+        for flag in ("tags", "out_label"):
+            if getattr(args, flag) is not None:
+                ap.error(f"--{flag.replace('_','-')} is only meaningful with --mode tagset")
+        return mode_fpcompare(args.fit_backend)
+
+    if not args.tags or not args.out_label:
+        ap.error("--mode tagset requires both --tags and --out-label")
+    reserved = {"baseline", "fprompt2d", "recovered"}
+    if args.out_label in reserved:
+        ap.error(f"--out-label {args.out_label!r} is reserved for --mode fpcompare "
+                 f"output; pick another so the frozen anchor file is not overwritten")
+    tags = [t.strip() for t in args.tags.split(",") if t.strip()]
+    if not tags:
+        ap.error("--tags parsed to nothing")
+    return mode_tagset(tags, args.out_label, args.fit_backend)
 
 
 if __name__ == "__main__":
