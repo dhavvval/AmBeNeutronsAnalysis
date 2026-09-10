@@ -11,40 +11,50 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 
 
-# AmBe neutrons
-def AmBe(CPE, CCB, CT, CN, ETT, CH):
-    if(CPE<=0 or CPE>100):      # 0 < cluster PE < 100
-        return False
-    if(CCB>=0.45 or CCB<=0):   # Cluster Charge Balance < 0.4
-        return False
-    if(CT<2000):              # cluster time not in prompt window
-        return False
-    if(CN !=1):                # cluster multiplicity = 1
-        return False
-    #if (CH < 5):
-     #   return False       # cluster hits > 3
-    return True
+from .selection import BoxSelection, CutCriteria, cluster_key, get_selection
 
-def AmBeMultiple(CPE, CCB, CT, CN, ETT, CH):
-    if(CPE<=0 or CPE>100):      # 0 < cluster PE < 100
-        return False
-    if(CCB>=0.45 or CCB<=0):   # Cluster Charge Balance < 0.4
-        return False
-    if(CT<2000):              # cluster time not in prompt window
-        return False
-    if(CN ==1):                # cluster multiplicity > 1
-        return False 
-    #if(CH < 5):              # cluster hits > 3
-     #   return False
-    return True
+# ---------------------------------------------------------------------------
+# The neutron definition.
+#
+# These three used to spell the box out again by hand, independently of
+# data/processor.py:165-182, which meant two copies that had to agree and nothing
+# forcing them to. They now delegate to a selection object from selection.py, so
+# `--selection mva` swaps the definition here and in processor.py at once.
+#
+# NOTE the historical difference this refactor removes: the old bodies below had the
+# `CH < 5` hits requirement COMMENTED OUT, while processor.py applied
+# `chits >= 5`. The shared BoxSelection applies the hits cut, so eff.py now agrees
+# with processor.py and with the published box. That is a deliberate fix, not a
+# side effect -- the two stages disagreeing about the box was a real bug.
+# ---------------------------------------------------------------------------
+_SELECTION = BoxSelection(CutCriteria())
 
-# cosmic muon clusters
+
+def set_selection(selection):
+    """Swap the active neutron definition. Called by run() from --selection."""
+    global _SELECTION
+    _SELECTION = selection
+    print(f"[eff] neutron definition: {selection.label}")
+    return _SELECTION
+
+
+def active_selection():
+    return _SELECTION
+
+
+# AmBe neutrons. `key` identifies the cluster for the MVA score lookup; the box
+# ignores it. ETT is kept in the signature for call-site compatibility.
+def AmBe(CPE, CCB, CT, CN, ETT, CH, key=None):
+    return _SELECTION.single(CPE, CCB, CT, CN, CH, key)
+
+
+def AmBeMultiple(CPE, CCB, CT, CN, ETT, CH, key=None):
+    return _SELECTION.multiple(CPE, CCB, CT, CN, CH, key)
+
+
+# cosmic muon clusters -- identical under every selection, see selection.py
 def cosmic(CT, CPE):
-    if(CT<2000):              # any cluster in the prompt (2us) window
-        return True
-    if(CPE>100):              # any cluster > 100 PE in the prompt or ext window
-        return True
-    return False
+    return _SELECTION.cosmic(CT, CPE)
 
 # grab source location based on the run number
 def source_loc(run):
@@ -130,8 +140,22 @@ def source_loc(run):
     print('\n##### RUN NUMBER '+str(run)+' DOESNT HAVE A SOURCE LOCATION!!! ERROR #####\n')
     exit()
 
-waveformsample = input("Do you want to see samples of waveforms? (y/n): ")
-IC_plots = input('Do you want to plot IC values? (y/n): ')
+# These two used to be module-level input() calls, which meant that merely IMPORTING
+# this module blocked on a prompt -- and under the CLI (no tty) died with EOFError
+# before any code ran. They are the reason `ambe data eff` could never have worked
+# even once run() was written. Now defaults, overridable by prompt only when this
+# file is executed directly as a script.
+waveformsample = 'n'
+IC_plots = 'y'
+
+
+def prompt_for_options():
+    """Interactive override, for running this module directly rather than via the
+    CLI. Never called on import."""
+    global waveformsample, IC_plots
+    waveformsample = input("Do you want to see samples of waveforms? (y/n): ")
+    IC_plots = input('Do you want to plot IC values? (y/n): ')
+    return waveformsample, IC_plots
 
 def AmBePMTWaveforms(data_directory, waveform_dir, file_pattern, source_loc,
                       pulse_start=300, pulse_end=1200, pulse_gamma=400, lower_pulse=175,
@@ -416,7 +440,11 @@ def process_events(event_data, good_events, x_pos, y_pos, z_pos,
                    cosmic, AmBe, AmBeMultiple,
                    cluster_time, cluster_charge, cluster_QB, cluster_hits,
                    hit_times, hit_charges, hit_ids, source_position, event_ids, event_tank_time,
-                   prompt_cluster_time, prompt_cluster_charge, prompt_cluster_QB, efficiency_data=None):
+                   prompt_cluster_time, prompt_cluster_charge, prompt_cluster_QB,
+                   efficiency_data=None, run=None):
+    # `run` is needed only by the MVA selection, which identifies a cluster by
+    # (run, eventTimeTank, clusterTime) to look up its score. Optional so the
+    # box-only callers of this function are unaffected.
 
 
     EN = event_data["eventNumber"]
@@ -456,7 +484,12 @@ def process_events(event_data, good_events, x_pos, y_pos, z_pos,
                         efficiency_data[key][1] += 1 # cosmic_events
                     break
 
-                if AmBe(CPE[i][k], CCB[i][k], CT[i][k], CN[i], ETT[i], CH[i][k]):
+                # Cluster identity for the MVA score lookup; ignored by the box.
+                ckey = (cluster_key(run, ETT[i], CT[i][k])
+                        if run is not None else None)
+
+                if AmBe(CPE[i][k], CCB[i][k], CT[i][k], CN[i], ETT[i], CH[i][k],
+                        ckey):
                     if CPE[i][k] != float('-inf'):
                         cluster_time.append(CT[i][k])
                         cluster_charge.append(CPE[i][k])
@@ -474,7 +507,8 @@ def process_events(event_data, good_events, x_pos, y_pos, z_pos,
                         if efficiency_data is not None:
                             efficiency_data[key][2] += 1
                 
-                if AmBeMultiple(CPE[i][k], CCB[i][k], CT[i][k], CN[i], ETT[i], CH[i][k]):
+                if AmBeMultiple(CPE[i][k], CCB[i][k], CT[i][k], CN[i], ETT[i],
+                                CH[i][k], ckey):
                     if CPE[i][k] != float('-inf'):
                         cluster_time.append(CT[i][k])
                         cluster_charge.append(CPE[i][k])
@@ -513,11 +547,25 @@ def process_events(event_data, good_events, x_pos, y_pos, z_pos,
 # ambe CLI integration
 # ---------------------------------------------------------------------------
 def run(ctx, argv=None):
-    """Not yet ported to RunContext API. Run this script directly."""
-    raise NotImplementedError(
-        f"This module ({__name__}) has not been ported to the ambe CLI yet. "
-        "Run it directly as a Python script."
-    )
+    """Stage 1 + Stage 2 efficiency for one config and one neutron definition.
+
+    `ambe data eff --config <yaml> --selection {box,mva}`
+
+    WHY THIS DELEGATES. This module holds the pieces of the efficiency calculation
+    (AmBePMTWaveforms, LoadBeamCluster, process_events) but never had an
+    orchestrator -- there was no driver here to port, which is why run() used to
+    raise NotImplementedError. data/processor.py grew the orchestrated version of the
+    same three steps, and it is the stage that actually writes
+    TriggerSummary/AmBeTriggerSummary_<tag>.csv (processor.py:1209) -- the file the
+    efficiency heatmaps read. Giving this module a second orchestrator would mean two
+    code paths computing one published number and no mechanism keeping them equal.
+
+    So `ambe data eff` and `ambe data process` are deliberately the same computation.
+    Both honour --selection, and the cut functions at the top of this file now share
+    selection.py with processor.py, so the box is defined once.
+    """
+    from .processor import run as _process_run
+    return _process_run(ctx, argv)
 
 
 def cli(ctx, argv=None):

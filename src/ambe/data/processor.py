@@ -1,5 +1,6 @@
 import os
 import glob
+import pickle
 import numpy as np
 import uproot
 #from tqdm import trange
@@ -55,17 +56,11 @@ class WaveformConfig:
     width_threshold: float = 10.0       # ADC, for the diagnostic width variable
 
 
-@dataclass
-class CutCriteria:
-    """Event selection criteria."""
-    pe_min: float = 0
-    pe_max: float = 100
-    ccb_min: float = 0
-    ccb_max: float = 0.45
-    ct_min: float = 2000
-    chits_min: int = 5
-    cosmic_ct_threshold: float = 2000
-    cosmic_pe_threshold: float = 100
+# CutCriteria now lives in selection.py, next to the objects that consume it, and is
+# re-exported here because reprocess_ambe_v1.py, boxcut_v4_special.py and
+# run_waveform_gated_pipeline.py all do `from ambe.data.processor import CutCriteria`.
+from .selection import (CutCriteria, Selection, BoxSelection,  # noqa: E402,F401
+                        cluster_key, get_selection)
 
 
 class AmBeNeutronProcessing:
@@ -73,10 +68,19 @@ class AmBeNeutronProcessing:
     Efficient analyzer for AmBe neutron efficiency with memory management and modularity.
     """
     
-    def __init__(self, config: Optional[WaveformConfig] = None, 
-                 cuts: Optional[CutCriteria] = None):
+    def __init__(self, config: Optional[WaveformConfig] = None,
+                 cuts: Optional[CutCriteria] = None,
+                 selection: Optional[Selection] = None,
+                 extra_positions: Optional[Dict[int, Tuple[float, float, float]]] = None):
         self.config = config or WaveformConfig()
         self.cuts = cuts or CutCriteria()
+        # Per-run positions that must NOT join the campaign map. See
+        # get_source_location for why the special runs are kept out of it.
+        self.extra_positions = dict(extra_positions or {})
+        # Defaults to the box so every existing caller keeps its current behaviour
+        # -- summarize_ambe_neutrons.py, boxcut_v4_special.py, reprocess_ambe_v1.py
+        # and the rest construct this class without a selection and must not change.
+        self.selection = selection or BoxSelection(self.cuts)
         
         # Source position mapping
         self.source_positions = {
@@ -151,35 +155,55 @@ class AmBeNeutronProcessing:
             6247: (75, -50, 0), 6248: (75, 50, 0),                         ## Port 4 data
             6251: (0, -50, 0), 6252: (0, 50, 0),                          ## Port 5 data
 
+            ##AmBe v5sandi - September 2026
+            # Real source positions, so they live here rather than in a config's
+            # extra_source_positions. Supplied as "port 5, z = 0 / +100 / -100"; the
+            # height coordinate is this map's SECOND slot for Port 5 (every Port 5
+            # entry above is (0, y, 0) with y in 100/50/0/-50/-100), so z -> y here.
+            6273: (0, 0, 0), 6274: (0, 100, 0), 6275: (0, -100, 0),       ## Port 5 data
+
             ## LAPPD AmBe debug runs, Port 4, y=50 (same position as 6248)
             6249: (75, 50, 0), 6250: (75, 50, 0),
         }
 
     def get_source_location(self, run: int) -> Tuple[float, float, float]:
-        """Get source position for a given run number."""
+        """Get source position for a given run number.
+
+        `extra_positions` is consulted FIRST and is empty unless a config supplies
+        it. It exists for the labelled-no-source special runs (6264, 6265, 6266,
+        6270 and the pulser pair 6254/6256), which are deliberately NOT in
+        `source_positions`: that map drives the campaign efficiency heatmaps, and
+        adding them there would silently fold no-source runs into the published
+        efficiency. Keeping them per-run and per-config means they can be processed
+        and plotted without ever entering the campaign numbers.
+        """
+        if run in self.extra_positions:
+            return self.extra_positions[run]
         if run in self.source_positions:
             return self.source_positions[run]
-        
+
         raise ValueError(f'RUN NUMBER {run} DOESNT HAVE A SOURCE LOCATION!')
 
-    def ambe_single_cut(self, cpe: float, ccb: float, ct: float, cn: int, chits: int) -> bool:
-        """Apply AmBe single neutron selection cuts."""
-        return (self.cuts.pe_min < cpe <= self.cuts.pe_max and
-                self.cuts.ccb_min < ccb < self.cuts.ccb_max and
-                ct >= self.cuts.ct_min and chits >= self.cuts.chits_min and
-                cn == 1)
+    # The three cuts below delegate to self.selection, so the neutron definition can
+    # be swapped (box <-> mva) without touching the event loop. They keep their old
+    # names and signatures because several top-level scripts call them directly; the
+    # optional `key` is what the MVA needs to find a cluster's score and is ignored
+    # by the box.
+    def ambe_single_cut(self, cpe: float, ccb: float, ct: float, cn: int,
+                        chits: int, key=None) -> bool:
+        """Single-neutron selection under the active neutron definition."""
+        return self.selection.single(cpe, ccb, ct, cn, chits, key)
 
-    def ambe_multiple_cut(self, cpe: float, ccb: float, ct: float, cn: int, chits: int) -> bool:
-        """Apply AmBe multiple neutron selection cuts."""
-        return (self.cuts.pe_min < cpe <= self.cuts.pe_max and
-                self.cuts.ccb_min < ccb < self.cuts.ccb_max and
-                ct >= self.cuts.ct_min and chits >= self.cuts.chits_min and
-                cn != 1)
+    def ambe_multiple_cut(self, cpe: float, ccb: float, ct: float, cn: int,
+                          chits: int, key=None) -> bool:
+        """Multiple-neutron selection under the active neutron definition."""
+        return self.selection.multiple(cpe, ccb, ct, cn, chits, key)
 
     def cosmic_cut(self, ct: float, cpe: float) -> bool:
-        """Apply cosmic muon selection cuts."""
-        return (ct < self.cuts.cosmic_ct_threshold or 
-                cpe > self.cuts.cosmic_pe_threshold)
+        """Cosmic veto. Identical for every selection -- it is a Stage-1 cut that
+        sits upstream of the neutron definition, so it must not vary between the two
+        analyses or their efficiencies stop sharing a denominator."""
+        return self.selection.cosmic(ct, cpe)
 
     def pairwise_relative_direction(self, hitX, hitY, hitZ, hitPE, hitT) -> Tuple[np.ndarray]:
         """
@@ -800,18 +824,31 @@ class AmBeNeutronProcessing:
         
         return data
 
-    def process_events_efficient(self, event_data: Dict[str, np.ndarray], 
+    def process_events_efficient(self, event_data: Dict[str, np.ndarray],
                                 good_events: Set[int], x_pos: float, y_pos: float, z_pos: float,
-                                efficiency_data: Optional[Dict] = None) -> Tuple[List, Dict[str, int]]:
+                                efficiency_data: Optional[Dict] = None,
+                                run: Optional[int] = None,
+                                event_rows: Optional[List[Dict]] = None) -> Tuple[List, Dict[str, int]]:
         """
         Process events with memory-efficient vectorized operations where possible.
-        
+
         Args:
             event_data: Dictionary containing event data
             good_events: Set of good event timestamps
             x_pos, y_pos, z_pos: Source position coordinates
             efficiency_data: Optional efficiency tracking dictionary
-            
+            run: Run number. Required by the MVA selection, which identifies a
+                cluster by (run, eventTimeTank, clusterTime) to look up its score.
+                Optional so existing box-only callers are unaffected.
+            event_rows: Optional list to receive one dict per Stage-1-admitted
+                event, recording the cosmic-veto verdict and the accepted-cluster
+                counts. This is the per-event index that lets an offline consumer
+                re-tally the efficiency for a NARROWER IC window without
+                reprocessing: cosmic_events is the one ingredient the published
+                CSVs cannot supply, because PromptAmBeNeutronCandidates carries
+                no event key and so a cosmic event cannot be assigned an IC
+                value. None (the default) appends nothing.
+
         Returns:
             Tuple of (processed_data_lists, statistics_dict)
         """
@@ -884,13 +921,20 @@ class AmBeNeutronProcessing:
                             efficiency_data[key][1] += 1
                     break  # Skip other cuts for this event
                 
+                # Identify this cluster for the MVA score lookup. Built once and
+                # reused by both cuts; the box selection ignores it.
+                ckey = (cluster_key(run, ETT[i], CT[i][k])
+                        if run is not None else None)
+
                 # Check single neutron cuts
-                if self.ambe_single_cut(CPE[i][k], CCB[i][k], CT[i][k], CN[i], CH[i][k]):
+                if self.ambe_single_cut(CPE[i][k], CCB[i][k], CT[i][k], CN[i],
+                                        CH[i][k], ckey):
                     if CPE[i][k] != float('-inf'):
                         event_neutron_candidates.append(k)
-                
+
                 # Check multiple neutron cuts
-                if self.ambe_multiple_cut(CPE[i][k], CCB[i][k], CT[i][k], CN[i], CH[i][k]):
+                if self.ambe_multiple_cut(CPE[i][k], CCB[i][k], CT[i][k], CN[i],
+                                          CH[i][k], ckey):
                     if CPE[i][k] != float('-inf'):
                         event_multiple_candidates.append(k)
             
@@ -925,7 +969,27 @@ class AmBeNeutronProcessing:
                     repeated_event_id.add(ETT[i])
                     if efficiency_data is not None:
                         efficiency_data[key][3] += 1
-    
+
+            # Per-event index row. Appended last so event_has_cosmic and both
+            # candidate lists are final. Inside the good_events guard above, so
+            # the index holds exactly the events Stage 1 admitted in THIS pass's
+            # IC window -- which is why an offline window scan can only ever
+            # narrow that window, never widen it.
+            if event_rows is not None:
+                event_rows.append({
+                    'run': int(run) if run is not None else -1,
+                    'eventID': int(EN[i]),
+                    'eventTankTime': int(ETT[i]),
+                    'numberOfClusters': int(CN[i]),
+                    'is_cosmic': bool(event_has_cosmic),
+                    'n_accepted_single': len(event_neutron_candidates),
+                    'n_accepted_multiple': len(event_multiple_candidates),
+                    'sourceX': x_pos,
+                    'sourceY': y_pos,
+                    'sourceZ': z_pos,
+                })
+
+
         # Print statistics
         self._print_processing_stats(stats)
         
@@ -997,7 +1061,9 @@ class AmBeNeutronProcessing:
                                       runinfo: str = 'default', which_tree: int = 1,
                                       save_waveform_samples: bool = False,
                                       plot_ic_distributions: bool = True,
-                                      dump_features: bool = True) -> Dict[str, Any]:
+                                      dump_features: bool = True,
+                                      dump_good_events: bool = False,
+                                      dump_event_index: bool = False) -> Dict[str, Any]:
         """
         Complete analysis pipeline that replicates AnalysisRun.py functionality.
         This integrates waveform analysis, event processing, and CSV output generation.
@@ -1013,7 +1079,22 @@ class AmBeNeutronProcessing:
             plot_ic_distributions: Whether to plot IC distributions
             dump_features: Whether to write the per-waveform feature table for
                 each run to TriggerSummary/WaveformFeatures_<runinfo>_<run>.parquet
-                (input to tune_waveform_fprompt.py)
+            dump_good_events: Whether to write the Stage-1 IC-gated eventTimeTank set
+                for each run to TriggerSummary/GoodEvents_<runinfo>_<run>.pkl.
+                Off by default so existing callers write nothing new. `ambe leak
+                features` consumes these: without them it has to repeat Stage 1 and
+                re-read the whole waveform tree, which for a 3-run campaign is ~10 GB
+                off /pnfs for a set of integers this loop already has in hand.
+            dump_event_index: Whether to write the per-event Stage-2 index for each
+                run to TriggerSummary/EventIndex_<runinfo>_<run>.parquet. Off by
+                default so existing callers write nothing new. `ambe data icscan`
+                consumes these: joined to WaveformFeatures on
+                eventTankTime == timestamp, they carry the cosmic verdict and the
+                accepted-cluster counts per event, which is what makes the whole
+                IC-window scan a pandas groupby instead of one /pnfs pass per
+                window. total_events and unique_neutron_triggers are already
+                recoverable from the feature parquet and the candidate CSVs;
+                cosmic_events is not, and ambe_triggers needs it.
 
         Returns:
             Dictionary with complete analysis results
@@ -1104,13 +1185,22 @@ class AmBeNeutronProcessing:
             
             print(f"Source position: ({x_pos}, {y_pos}, {z_pos})")
             print(f"Good events from waveform analysis: {len(good_events)}")
+
+            if dump_good_events:
+                ge_path = f'TriggerSummary/GoodEvents_{runinfo}_{run}.pkl'
+                os.makedirs(os.path.dirname(ge_path), exist_ok=True)
+                with open(ge_path, 'wb') as _fh:
+                    pickle.dump(set(good_events), _fh)
+                print(f"Good events dumped -> {ge_path}")
             
             # Load event data for this specific run
             event_data = self.load_event_data(file_path, which_tree)
             
             # Process events for this run
+            event_rows = [] if dump_event_index else None
             processed_data, event_stats = self.process_events_efficient(
-                event_data, good_events, x_pos, y_pos, z_pos, efficiency_data
+                event_data, good_events, x_pos, y_pos, z_pos, efficiency_data,
+                run=int(run), event_rows=event_rows
             )
             
             print('----------------------------------------------------------------')
@@ -1164,9 +1254,30 @@ class AmBeNeutronProcessing:
             prompt_file = f'EventAmBeNeutronCandidatesData/PromptAmBeNeutronCandidates_{runinfo}_{run_int}.csv'
             prompt_df.to_csv(prompt_file, index=False)
             print(f"✓ Saved prompt neutron candidates to {prompt_file}")
-            
+
+            if event_rows is not None:
+                index_df = pd.DataFrame(event_rows)
+                index_df['n_accepted_clusters'] = (index_df['n_accepted_single']
+                                                   + index_df['n_accepted_multiple'])
+                index_path = f'TriggerSummary/EventIndex_{runinfo}_{run_int}.parquet'
+                os.makedirs(os.path.dirname(index_path) or '.', exist_ok=True)
+                try:
+                    index_df.to_parquet(index_path, index=False)
+                except (ImportError, ValueError) as e:
+                    # Same fallback as the feature dump: no pyarrow/fastparquet
+                    # should not cost us the index entirely.
+                    fallback = os.path.splitext(index_path)[0] + '.csv'
+                    print(f'Parquet write failed ({e}); falling back to {fallback}')
+                    index_df.to_csv(fallback, index=False)
+                    index_path = fallback
+                print(f"✓ Saved event index ({len(index_df)} events, "
+                      f"{int(index_df['is_cosmic'].sum())} cosmic, "
+                      f"{int((~index_df['is_cosmic'] & (index_df['n_accepted_clusters'] > 0)).sum())} "
+                      f"neutron-bearing) to {index_path}")
+                del index_df
+
             # Clear data to free memory
-            del processed_data, df, prompt_df, run_result, event_data, good_events
+            del processed_data, df, prompt_df, run_result, event_data, good_events, event_rows
             gc.collect()
         if plot_ic_distributions:
             pdf_file.close()
@@ -1209,8 +1320,10 @@ class AmBeNeutronProcessing:
         print(f"  - TriggerSummary/AmBeTriggerSummary_{runinfo}.csv")
         print(f"  - EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_{runinfo}_<run>.csv (for each run)")
         print(f"  - EventAmBeNeutronCandidatesData/PromptAmBeNeutronCandidates_{runinfo}_<run>.csv (for each run)")
+        if dump_event_index:
+            print(f"  - TriggerSummary/EventIndex_{runinfo}_<run>.parquet (for each run)")
 
-        
+
         return {
             'run_numbers': run_numbers,
             'file_names': file_names,
@@ -1219,7 +1332,9 @@ class AmBeNeutronProcessing:
                 'waveform_summary': f'TriggerSummary/AmBeWaveformResults_{runinfo}.csv',
                 'efficiency_summary': efficiency_file,
                 'neutron_candidates_pattern': f'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_{runinfo}_*.csv',
-                'prompt_candidates_pattern': f'EventAmBeNeutronCandidatesData/PromptAmBeNeutronCandidates_{runinfo}_*.csv'
+                'prompt_candidates_pattern': f'EventAmBeNeutronCandidatesData/PromptAmBeNeutronCandidates_{runinfo}_*.csv',
+                'event_index_pattern': (f'TriggerSummary/EventIndex_{runinfo}_*.parquet'
+                                        if dump_event_index else None)
             }
         }
 
@@ -1347,18 +1462,129 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------
 # ambe CLI integration
 # ---------------------------------------------------------------------------
-def run(ctx, argv=None):
-    """Run data processor with cuts from RunContext.
+# Tags whose output files back published numbers. Writing to any of them would
+# clobber the 20-run acceptance table the 57.30 % efficiency rests on, and the frozen
+# tau anchor -- AmBeWaveformResults_<tag>.csv and AmBeTriggerSummary_<tag>.csv are
+# written with a plain to_csv, so there is no append and no backup. Re-deriving these
+# is a deliberate act; it must not happen as a side effect of picking a config.
+# See configs/data_ambe2v4_all28.yaml, which exists because of exactly this hazard.
+PROTECTED_TAGS = {
+    "AmBe2.0v4_gated", "AmBe2.0v4_ext", "AmBe2.0v4_fprompt",
+    "AmBe2.0v1", "AmBe2.0v3", "baseline", "fprompt2d", "recovered",
+}
 
-    The legacy processor uses interactive prompts; this wrapper pre-sets cuts
-    from the config and calls run_analysis() directly on the processing object.
-    """
+
+def build_selection(ctx, name: str):
+    """Construct the neutron definition named by --selection from the config."""
     cuts = CutCriteria(
         pe_max=float(ctx.cuts.get("pe_max", 100)),
         ccb_max=float(ctx.cuts.get("charge_balance_max", 0.45)),
     )
-    processor = AmBeNeutronProcessing(cuts=cuts)
-    processor.run_analysis()
+    if name == "box":
+        return get_selection("box", cuts=cuts), cuts
+    mva = dict(ctx.extra.get("mva") or {})
+    if not mva:
+        raise SystemExit(
+            "--selection mva needs an `mva:` block in the config declaring "
+            "`scored` (one or more scored parquets), `threshold` and optionally "
+            "`score_col` / `point`.")
+    scored = mva.get("scored")
+    if isinstance(scored, str):
+        scored = [scored]
+    sel = get_selection("mva", cuts=cuts, scored=scored,
+                        threshold=float(mva["threshold"]),
+                        score_col=mva.get("score_col", "gbt_score"),
+                        point=mva.get("point", "eff80"))
+    return sel, cuts
+
+
+def run(ctx, argv=None):
+    """Stage 1 + Stage 2 for one config and one neutron definition.
+
+    Replaces a wrapper that called `processor.run_analysis()` -- a method that does
+    not exist on this class, so `ambe data process` raised AttributeError. The real
+    orchestrator is run_complete_analysis_pipeline(), driven here from the config
+    instead of from main()'s interactive prompts.
+    """
+    import argparse
+
+    p = argparse.ArgumentParser(prog="ambe data process")
+    # No default: the two selections write DIFFERENT candidate sets under different
+    # tags. Defaulting to either one is how a deck ends up labelled as the other.
+    p.add_argument("--selection", required=True, choices=["box", "mva"],
+                   help="neutron cluster definition to apply")
+    p.add_argument("--tag", default=None,
+                   help="output tag (runinfo). Defaults to stage1.tag in the config.")
+    p.add_argument("--allow-protected-tag", action="store_true",
+                   help="permit writing to a tag that backs a published number")
+    a = p.parse_args(list(argv) if argv else [])
+
+    st = dict(ctx.extra.get("stage1") or {})
+    if not st:
+        raise SystemExit("config needs a `stage1:` block with data_directory, "
+                         "waveform_dir and tag")
+
+    tag = a.tag or st.get("tag")
+    if not tag:
+        raise SystemExit("no output tag: pass --tag or set stage1.tag")
+    if tag in PROTECTED_TAGS and not a.allow_protected_tag:
+        raise SystemExit(
+            f"refusing to write tag {tag!r}: TriggerSummary/AmBeWaveformResults_{tag}"
+            f".csv and AmBeTriggerSummary_{tag}.csv back published numbers and are "
+            f"written with a plain to_csv (no append, no backup). Choose a new tag, "
+            f"or pass --allow-protected-tag if you really mean to re-derive them.")
+
+    selection, cuts = build_selection(ctx, a.selection)
+    print(f"[data.process] tag={tag}  selection={selection.name}  "
+          f"({selection.label})")
+
+    # Stage-1 waveform gate. selection_mode is pinned by the config rather than left
+    # to the dataclass default so it cannot drift: 'ic' is the historical cut (IC
+    # window + second-pulse veto) and the only one used for these decks. The
+    # 'ic+fprompt' / 'fprompt2d' modes exist for the fprompt study and must NOT be
+    # switched on here -- fprompt is computed and dumped as a diagnostic either way,
+    # which is why the log prints an fprompt median even in 'ic' mode.
+    wf = WaveformConfig(
+        pulse_gamma=int(st.get("ic_min", WaveformConfig.pulse_gamma)),
+        pulse_max=int(st.get("ic_max", WaveformConfig.pulse_max)),
+        selection_mode=str(st.get("selection_mode", "ic")),
+    )
+    if wf.selection_mode != "ic":
+        print(f"[data.process] WARNING: Stage-1 selection_mode={wf.selection_mode!r} "
+              f"applies an fprompt cut on top of the IC window")
+    print(f"[data.process] Stage-1 gate: {wf.pulse_gamma} < IC_adjusted < "
+          f"{wf.pulse_max}, mode={wf.selection_mode}, plus the second-pulse veto")
+
+    # Special-run positions, supplied per config so they never enter the campaign map.
+    extra = {int(k): tuple(float(x) for x in v)
+             for k, v in (st.get("extra_source_positions") or {}).items()}
+    if extra:
+        print(f"[data.process] extra source positions (not in the campaign map): "
+              f"{ {k: v for k, v in extra.items()} }")
+
+    processor = AmBeNeutronProcessing(config=wf, cuts=cuts, selection=selection,
+                                      extra_positions=extra)
+    result = processor.run_complete_analysis_pipeline(
+        data_directory=st["data_directory"],
+        waveform_dir=st.get("waveform_dir", st["data_directory"]),
+        file_pattern=re.compile(st.get("file_pattern",
+                                       r"BeamCluster_(\d+)\.root")),
+        campaign=int(st.get("campaign", 2)),
+        runinfo=tag,
+        which_tree=int(st.get("which_tree", 1)),
+        save_waveform_samples=bool(st.get("save_waveform_samples", False)),
+        plot_ic_distributions=bool(st.get("plot_ic", True)),
+        dump_good_events=bool(st.get("dump_good_events", False)),
+        dump_event_index=bool(st.get("dump_event_index", False)),
+    )
+
+    # For the MVA selection, say how much of THIS Stage-1 sample the scoring stage
+    # actually covered. Without this the run looks successful while quietly counting
+    # every unscored cluster as a rejection -- see MvaSelection.accepts.
+    if hasattr(selection, "report_coverage"):
+        print()
+        selection.report_coverage()
+    return result
 
 
 def cli(ctx, argv=None):
