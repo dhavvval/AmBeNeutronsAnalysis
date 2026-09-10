@@ -7,6 +7,7 @@ After `pip install -e .`, a user can run:
     ambe mc process --config configs/mc_trial01.yaml
     ambe mc optics  --config configs/mc_trial01.yaml
     ambe plots basic --config configs/data_amb2v4.yaml
+    ambe leak features --config configs/data_ambe2v5sandi_box.yaml
     ambe pipeline mc --config configs/mc_trial01.yaml
 
 Each subcommand dispatches to a function in the corresponding module that
@@ -40,6 +41,10 @@ COMMANDS: dict[tuple[str, str], str] = {
     ("mc", "hitcomp"):          "ambe.mc.hit_accounting:cli",
     ("data", "process"):        "ambe.data.processor:cli",
     ("data", "eff"):            "ambe.data.eff:cli",
+    ("data", "icscan"):         "ambe.data.icscan:cli",
+    ("data", "runtable"):       "ambe.data.runtable:cli",
+    ("leak", "features"):       "ambe.leak.features:cli",
+    ("leak", "pmtcharge"):      "ambe.leak.pmtcharge:cli",
     ("plots", "basic"):         "ambe.plots.basic:cli",
     ("plots", "combined"):      "ambe.plots.combined:cli",
     ("plots", "heatmap"):       "ambe.plots.heatmap:cli",
