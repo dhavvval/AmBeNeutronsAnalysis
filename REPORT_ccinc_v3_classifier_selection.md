@@ -1,5 +1,28 @@
 # CCinc v3 — Classifier Selection, Differential Background Lineage, and AmBe Closure
 
+> ## ⚠ CAPTURE-TIME FIT WINDOW CHANGED — 2026-08-27
+>
+> **Every capture-time number in this document was measured on a 10–67 µs fit window and
+> has been superseded.** The analysis now fits **2–67 µs** everywhere — 2 µs is where the
+> data starts (box cut `t ≥ 2 µs`, cosmic veto removes anything earlier), so the old
+> window discarded the whole thermalisation rise.
+>
+> | quantity | this document (10–67) | **current (2–67)** |
+> |---|---:|---:|
+> | anchor, 19 positions | 30.53 ± 0.26 | **29.417 ± 0.221** |
+> | campaign τ, 26 positions | 30.535 ± 0.228 | **29.477 ± 0.193** |
+> | campaign therm | 5.50 ± 0.22 | **6.52 ± 0.11** |
+> | MVA τ, 26 positions | 30.97 ± 0.26 | **29.33 ± 0.23** |
+> | box τ, matched set | 31.509 ± 0.250 | **30.444 ± 0.210** |
+> | MVA τ, matched set | 30.521 ± 0.263 | **28.898 ± 0.229** |
+> | matched shift box → MVA | −0.989 ± 0.363, 2.73σ | **−1.546 ± 0.311, 4.98σ** |
+>
+> Efficiencies, cut flows, multiplicities and background composition are **unaffected** —
+> only quantities derived from a capture-time fit moved. `REPORT_capturetime_maps_and_deck5.md`
+> §7 has the full list and the reasoning. Read the τ values below as historical.
+
+
+
 **Date produced:** 2026-08-05
 **Companion reports** (read for anything about the samples or the training itself):
 
@@ -7,6 +30,12 @@
   **Frozen. Nothing here recomputes or supersedes it.**
 - `REPORT_ccinc_v3_world_merged.md` — the world-volume campaign and the four merged
   tank+world trainings. §0 has the labelling rule, §0.0 the lineage method, §5 the AUCs.
+  **§4.4 (added 2026-08-06) is required reading before quoting any AUC in §2 below**: it
+  decomposes the merged AUC by background population and shows the dirt-neutron class is
+  the *easiest* part of the background (0.689–0.711) while the tank muon/pion background is
+  the hardest (0.579–0.604) — i.e. the merged gain is a change of question, not a better
+  answer to the old one. §4.5 explains why the tank side of the background carries neutron
+  light at all.
 
 This report answers the question the campaign was built for and the two above stop short
 of: **which classifier, in which streamline, with which clustering method** — and then
@@ -258,7 +287,28 @@ is led by multiplicity, geometry carries ~10–12% of the importance — and **d
 support the "the model is learning geometry" worry**. The differential view is the
 stronger test and it agrees with the importances.
 
-### 3.4 Context that stops this being over-read
+### 3.4 The background populations do not separate equally — see world report §4.4
+
+**Added 2026-08-06.** §3.1–§3.3 ask which *species* the discriminator removes. The
+complementary question — which *population* of the background it removes — is answered in
+`REPORT_ccinc_v3_world_merged.md` §4.4 and changes how §2's AUCs should be read. GBT AUC
+against each background population, common signal set:
+
+| | BKG tank (muon/pion) | BKG dirt neutrons | BKG world non-neutron |
+|---|---:|---:|---:|
+| truth-tag / OPTICS | **0.584** | **0.689** | 0.661 |
+| truth-tag / ClusterFinder | 0.595 | 0.701 | 0.643 |
+| reco-tag / OPTICS | 0.579 | 0.707 | 0.681 |
+| reco-tag / ClusterFinder | 0.604 | 0.711 | 0.659 |
+
+The out-of-tank capture background — the one that "should" be inseparable from signal —
+is the easiest part in every configuration, and the tank muon/pion background is the
+hardest, at 0.584 against the tank-only model's own 0.605. Two consequences for this
+report: the §2 model ranking is a ranking on a background that is 64% dirt neutrons by
+cluster count, and §3.1's finding that μ⁻ is the irreducible component is reproduced from
+a second direction. Reproduce with `python ccinc_v3_stats.py --do dirtn`.
+
+### 3.5 Context that stops this being over-read
 
 Across every axis, **52–68% of the light in the background class is genuine neutron
 capture** and **63–84% of background clusters come from out-of-tank interactions**. The
@@ -503,6 +553,8 @@ source /exp/annie/app/users/dajana/myboy/bin/activate
 python ccinc_v3_stats.py --do guard          # the AUC assertion alone
 python ccinc_v3_stats.py --do models         # §2  -> ccinc_v3_model_comparison.csv
 python ccinc_v3_stats.py --do truthreco      # §4  -> ccinc_v3_truthreco_*.csv
+python ccinc_v3_stats.py --do dirtn          # §3.4 + world report §4.4/§4.5
+                                             #     -> ccinc_v3_dirtn_*.csv
 python ccinc_v3_bg_differential.py --config all      # §3 -> ccinc_v3_bg_*.csv
 
 bash run_ccinc_v3_ambe_stage3.sh all         # §5 scoring (~4 min, 8 passes)
@@ -517,7 +569,10 @@ is the only compute and trains nothing.
 `ccinc_v3_truthreco_discrepancy.csv`, `ccinc_v3_truthreco_overlap_breakdown.csv`,
 `ccinc_v3_truthreco_disagreement_composition.csv`, `ccinc_v3_bg_differential.csv`,
 `ccinc_v3_bg_dominance_summary.csv`, `ccinc_v3_ambe_agreement.csv`,
-`ccinc_v3_ambe_closure.csv`. Figures in `slide_plots_ccinc_v3_merged/` as
+`ccinc_v3_ambe_closure.csv`, and from `--do dirtn`: `ccinc_v3_dirtn_budget.csv`,
+`ccinc_v3_dirtn_census.csv`, `ccinc_v3_dirtn_separability.csv`,
+`ccinc_v3_dirtn_feature_separation.csv`, `ccinc_v3_dirtn_tankbkg_neutron_light.csv`.
+Figures in `slide_plots_ccinc_v3_merged/` as
 `V3STATS__*` (4), `V3BG__*` (45), `V3AMBE__*` (3) — same standalone PDF+PNG format and
 palette as the existing `V3MERGED__*` set. Scored AmBe parquets under
 `<BASE>/ccinc_v3_ambe_stage3/<stream>_<method>/`. Log: `logs_ccinc_v3_ambe_stage3.log`.

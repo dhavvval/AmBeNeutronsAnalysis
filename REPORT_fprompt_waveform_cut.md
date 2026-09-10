@@ -1,5 +1,28 @@
 # fprompt pulse-shape cut for AmBe Stage-1 — report (2026-07-27)
 
+> ## ⚠ CAPTURE-TIME FIT WINDOW CHANGED — 2026-08-27
+>
+> **Every capture-time number in this document was measured on a 10–67 µs fit window and
+> has been superseded.** The analysis now fits **2–67 µs** everywhere — 2 µs is where the
+> data starts (box cut `t ≥ 2 µs`, cosmic veto removes anything earlier), so the old
+> window discarded the whole thermalisation rise.
+>
+> | quantity | this document (10–67) | **current (2–67)** |
+> |---|---:|---:|
+> | anchor, 19 positions | 30.53 ± 0.26 | **29.417 ± 0.221** |
+> | campaign τ, 26 positions | 30.535 ± 0.228 | **29.477 ± 0.193** |
+> | campaign therm | 5.50 ± 0.22 | **6.52 ± 0.11** |
+> | MVA τ, 26 positions | 30.97 ± 0.26 | **29.33 ± 0.23** |
+> | box τ, matched set | 31.509 ± 0.250 | **30.444 ± 0.210** |
+> | MVA τ, matched set | 30.521 ± 0.263 | **28.898 ± 0.229** |
+> | matched shift box → MVA | −0.989 ± 0.363, 2.73σ | **−1.546 ± 0.311, 4.98σ** |
+>
+> Efficiencies, cut flows, multiplicities and background composition are **unaffected** —
+> only quantities derived from a capture-time fit moved. `REPORT_capturetime_maps_and_deck5.md`
+> §7 has the full list and the reasoning. Read the τ values below as historical.
+
+
+
 Adds a second, orthogonal axis to the Stage-1 AmBe waveform selection: `fprompt`,
 a pulse-*shape* variable, alongside the existing `IC_adjusted` pulse-*size* cut.
 
@@ -215,9 +238,9 @@ MPLBACKEND=Agg PYTHONPATH=src python -m ambe.cli plots heatmap --config configs/
 MPLBACKEND=Agg PYTHONPATH=src python -m ambe.cli plots heatmap --config configs/data_ambe2v4.yaml
 ```
 
-→ `AmBeNeutronAnalysis/ambe_output/ambe_data/AmBe2.0v4_{fprompt,gated}/plots/`
+→ `AmBeNeutronsAnalysis/ambe_output/ambe_data/AmBe2.0v4_{fprompt,gated}/plots/`
 (`efficiency_`, `statistics_`, `residual_efficiency_heatmap__*.{pdf,png}`).
-Note `output_root` is the sibling **AmBeNeutronAnalysis** dir, no "s".
+Note `output_root` is the sibling **AmBeNeutronsAnalysis** dir, no "s".
 
 Plus a like-for-like three-panel comparison the CLI cannot produce — its
 residual panel only compares against the hardcoded `REFERENCE_DATA`

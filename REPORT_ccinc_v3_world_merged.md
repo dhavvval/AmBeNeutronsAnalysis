@@ -401,6 +401,173 @@ not a wall-proximity artifact.**
 Separation tables for all four configurations:
 `slide_plots_ccinc_v3_merged/table_merged_feature_separation.csv`.
 
+### 4.4 The dirt-neutron background — composition, and why it separates at all
+
+**Added 2026-08-06.** §4.2 says 64% of the merged background is neutron-dominated
+out-of-tank capture light. The obvious objection is that a capture is a capture: if the
+background is mostly the same 2.2 MeV capture the signal is, the model should not be able
+to separate it, and an AUC that improves when that population is added looks suspicious.
+This section answers that objection with measurements rather than argument. Everything
+here is `python ccinc_v3_stats.py --do dirtn`, read-only over the merged score tables and
+behind the same 16-AUC guard as §2–§4 of the classifier-selection report.
+
+**The normalised background budget.** §4.2 quotes two tables with different denominators
+(neutron light as a % of all hits; species as a % of *traced non-neutron* hits), which
+cannot be added together. This one puts everything on one denominator — 100% of the
+background light — and splits the tank and world contributions. Truth-tag / OPTICS,
+36,008 clusters / 550,006 hits:
+
+| component | from tank | from world | total |
+|---|---:|---:|---:|
+| **neutron-capture light** | 6.06% | **53.45%** | **59.52%** |
+| μ⁻ | 6.29% | 5.03% | **11.32%** |
+| π⁺ | 4.74% | 0.68% | 5.42% |
+| π⁰ | 1.43% | 0.09% | 1.53% |
+| p | 0.79% | 0.45% | 1.24% |
+| π⁻ | 0.66% | 0.32% | 0.98% |
+| μ⁺ | 0.63% | 0.09% | 0.72% |
+| K± / other | 0.02% | 0.03% | 0.05% |
+| non-neutron, no complete non-EM chain (pure EM / untraced) | 1.46% | 4.65% | 6.11% |
+| dark noise / other | 2.50% | 10.60% | 13.11% |
+| **total** | **24.6%** | **75.4%** | **100%** |
+
+So: **muons are 11.3% of the background light, split 6.3% tank / 5.0% world; all pions
+together are 7.9%, of which 6.8 points are tank-side; dirt neutrons are 53.5%.** By
+clusters instead of light the concentration is sharper — tank background 8,392 (23.3%),
+world neutron-dominated 22,949 (**63.7%**), world non-neutron 4,667 (13.0%). The budget
+is asserted to close to 100% in code; it exits non-zero if the components ever leak or
+overlap. `ccinc_v3_dirtn_budget.csv` has all four configurations.
+
+**Dirt-neutron clusters are not contaminated — they are purer than signal.** Median hit
+composition:
+
+| population | clusters | frac_neutron | frac_nonneutron | frac_darknoise |
+|---|---:|---:|---:|---:|
+| SIGNAL (in-tank capture) | 34,978 | 0.773 | 0.125 | 0.091 |
+| **BKG dirt neutrons** | 22,949 | **0.846** | **0.000** | 0.133 |
+| BKG world non-neutron | 4,667 | 0.038 | 0.800 | 0.111 |
+| BKG tank | 8,392 | 0.250 | 0.636 | 0.091 |
+
+The median dirt-neutron cluster contains **zero** non-neutron hits. Signal clusters are
+the dirtier ones — they live in a CC event where a muon has just crossed the tank, so an
+eighth of their light is muon and pion. Any explanation of the merged gain that relies on
+the world background being *mixed* with other particles is wrong.
+
+**What separates them is light yield, not light type.** Signal vs dirt neutrons only,
+pooled-σ separation (`ccinc_v3_dirtn_feature_separation.csv`):
+
+| feature | signal median | dirt-n median | signal mean | dirt-n mean | sep |
+|---|---:|---:|---:|---:|---:|
+| n_hits_early | 14 | 11 | 14.07 | 11.58 | **0.476σ** |
+| n_fit_hits | 9 | 7 | 9.42 | 7.83 | 0.450σ |
+| n_hits | 17 | 14 | 17.27 | 14.88 | 0.397σ |
+| pe_total | 22.70 | 17.64 | 24.45 | 20.42 | 0.357σ |
+| charge_bal_legacy | 0.284 | 0.312 | 0.299 | 0.321 | 0.259σ |
+| beta1 | −0.089 | −0.111 | −0.097 | −0.115 | 0.255σ |
+| sigma_t_mad | 4.53 | 5.44 | 9.91 | 30.70 | 0.051σ |
+| d_wall | 0.820 | 0.804 | 0.812 | 0.796 | 0.048σ |
+
+A dirt-neutron cluster carries **~15% fewer hits and ~20% less charge** than an in-tank
+capture, and is slightly less charge-balanced and less isotropic. Geometry is again
+nowhere (`d_wall` 0.048σ), consistent with §4.3.
+
+> **Do not quote the `sigma_t_mad` means as a timing difference.** Means 9.9 vs 30.7 ns
+> look like a factor 3; the medians are 4.5 vs 5.4 ns and the separation is 0.051σ. It is
+> a heavy tail in a subpopulation, not a typical difference. GBT still assigns it 14.2%
+> importance because a tree can cut on a tail that a mean-difference metric cannot see.
+
+**The control that rules out "it is learning which file the cluster came from."** World
+events deposit far less light overall (mean `nhits` 40 vs tank 90), so "dimmer" could
+simply mean "from the world sample". The world sample supplies its own control: 1,030
+**in-tank signal** clusters — same file, same processing, same event-level light
+environment, but an in-tank interaction.
+
+| group | n_hits | n_hits_early | pe_total | median GBT score |
+|---|---:|---:|---:|---:|
+| SIGNAL tank | 17.27 | 14.07 | 24.45 | 0.571 |
+| **SIGNAL world in-tank** | **17.21** | **14.05** | **24.59** | **0.570** |
+| BKG dirt neutrons | 14.88 | 11.58 | 20.42 | 0.446 |
+| BKG world non-neutron | 15.69 | 12.39 | 25.37 | 0.473 |
+| BKG tank | 16.12 | 12.93 | 25.33 | 0.519 |
+
+World in-tank signal is indistinguishable from tank signal — features agree to within
+0.5%, median score to 0.001. **The discriminant tracks where the neutron came from, not
+which sample the cluster came from.** That closes the sample-artifact worry the same way
+§4.3 closed the geometry worry.
+
+**And the part that reframes §5.** Per-population AUC against a common signal set, GBT:
+
+| | BKG tank | BKG dirt neutrons | BKG world non-neutron |
+|---|---:|---:|---:|
+| truth-tag / OPTICS | **0.584** | **0.689** | 0.661 |
+| truth-tag / ClusterFinder | 0.595 | 0.701 | 0.643 |
+| reco-tag / OPTICS | 0.579 | 0.707 | 0.681 |
+| reco-tag / ClusterFinder | 0.604 | 0.711 | 0.659 |
+
+The population that "should" be inseparable is in every configuration the **easiest** part
+of the background, and the old tank background — muon and pion light — is in every
+configuration the **hardest**. On truth-tag/OPTICS the merged model scores 0.584 against
+the tank background, slightly *worse* than the tank-only model's 0.605.
+
+**So the honest reading of the +0.082 mean gain is that the question changed, not that the
+model got better at the old question.** 64% of the merged background is now a population
+that separates at ~0.70, and the mixture pulls the overall AUC to 0.66–0.69. The
+muon-and-pion problem is exactly as hard as it was, which is consistent with the
+classifier-selection report §3.1 finding that μ⁻ sits flat at ratio 1.12–1.15 along the
+discriminator and is the component nothing removes. Read the merged AUCs in §5 with that
+decomposition in mind before presenting them as an improvement in neutron identification.
+
+*Two caveats.* The **mechanism behind the reduced light yield is not established** — the
+captures collect ~20% less charge at essentially identical `d_wall`, so it is not simple
+wall proximity. Candidates to check: capture-position distribution relative to PMT
+coverage, the arrival-energy spectrum of neutrons that survive the dirt, or capture on a
+different nucleus. Until that is measured, "dirt-neutron captures are dimmer" is an
+observation, not an explanation. And the per-population AUCs share a common signal set but
+sit on unbalanced subsets — they rank difficulty against each other and are **not**
+standalone performance figures for a selection.
+
+### 4.5 Why the tank side of the background carries neutron light
+
+**Added 2026-08-06.** The budget above gives the tank component 6.06% neutron light, and
+§4.2 gives 24.65% of the tank component's light as neutron — yet the tank background
+contains **no neutron-dominated cluster by construction**. That is not a contradiction and
+not a bug; it is what the label rule does. `dominant_class` is the most frequent single
+`truth_class` among a cluster's hits, so a cluster moves to background as soon as neutron
+hits stop being the plurality, and it carries whatever neutron light it had with it.
+
+Tank background, truth-tag/OPTICS — 8,392 clusters, 135,239 hits, 33,343 neutron (24.65%),
+split 8,162 `dominant_class = −5` (non-neutron physics) and 230 `= 0` (dark noise):
+
+| frac_neutron | clusters | % of tank-bkg clusters | % of its neutron light |
+|---|---:|---:|---:|
+| 0 exactly | 1,564 | 18.6% | 0% |
+| 0.001–0.1 | 768 | 9.2% | 2.8% |
+| 0.1–0.2 | 1,141 | 13.6% | 8.0% |
+| 0.2–0.3 | 1,174 | 14.0% | 14.4% |
+| 0.3–0.4 | 1,394 | 16.6% | 22.6% |
+| 0.4–0.5 | 1,334 | 15.9% | 28.3% |
+| ≥0.5 | 1,017 | 12.1% | 23.9% |
+
+**81% of tank background clusters contain at least one neutron hit**, and the light
+concentrates in clusters that are 30–50% neutron, just under the majority line. This is
+the same population §2.2 of the streamlines report calls *spurious* (93.4% contain ≥1
+neutron hit, mean neutron fraction 0.554). Split by time: prompt clusters — kept in the
+background on purpose via `--keep-prompt-bkg` — are 4,713 clusters at 15.5% neutron light
+with 66.8% containing a neutron hit; **delayed** tank background clusters are 3,679 at
+35.7% neutron light and **100.0%** contain a neutron hit, because in a delayed window the
+only things making light are captures and residual hadronic activity.
+
+**One real labelling artifact, worth knowing before anyone re-derives a label.** Neutron
+light is split across four class codes (1 primary, 2 secondary n←p, 3 secondary n←n,
+4 secondary n←other), so a cluster can be majority-neutron overall and still have a
+non-neutron *plurality*. **1,176 tank background clusters (14.0%) have more neutron light
+than non-neutron light and are labelled background anyway, carrying 27.9% of the tank
+background's neutron light** (1,017 clusters, 12.1%, are outright `frac_neutron ≥ 0.5`).
+Defining signal on `frac_neutron` instead of `dominant_class` would move those out of the
+background. That is worth *testing*, not assuming: it also shrinks a background class that
+§5 shows is already the limiting one. Full table:
+`ccinc_v3_dirtn_tankbkg_neutron_light.csv`.
+
 ## 5. Merged MVA results
 
 Tank-only baseline → merged, test-set AUC. **All four merged trainings finished on
@@ -572,7 +739,18 @@ bash /exp/annie/data/users/dajana/ccinc_v3_streamlines/run_world_full.sh
 
 # audit + the four merged trainings (the deliverable)
 bash /exp/annie/data/users/dajana/ccinc_v3_streamlines/run_world_merged.sh
+
+# §4.4 / §4.5 — read-only over the merged score tables, trains nothing (~1 min)
+source /exp/annie/app/users/dajana/myboy/bin/activate
+python ccinc_v3_stats.py --do dirtn
 ```
+
+§4.4 / §4.5 outputs: `ccinc_v3_dirtn_budget.csv` (background light budget, one
+denominator, tank vs world), `ccinc_v3_dirtn_census.csv` (the five populations incl. the
+world in-tank signal control), `ccinc_v3_dirtn_separability.csv` (per-population AUC),
+`ccinc_v3_dirtn_feature_separation.csv`, `ccinc_v3_dirtn_tankbkg_neutron_light.csv`. The
+mode runs the 16-AUC guard first, like every other mode of that script, and has no silent
+default.
 
 Configs: `configs/cc_neutrino_v3world_{truthtag,recotag}{,_pilot}.yaml`
 Logs: `logs_full_v3world_{truthtag,recotag,BOTH}.log`, `logs_merged_tankworld.log`
@@ -642,7 +820,7 @@ the June deck used. `--figures-dir` writes each page as its own PDF + PNG as wel
 the multi-page `*_ALL.pdf`.
 
 ```bash
-B=/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output
+B=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
 python make_presentable_optics_rf_plots.py \
   --mc-scores $B/cc_neutrino_v3_recotag/parquet/cc_neutrino_v3_recotag__mva_scores__keepprompt__merged__cf.parquet \
   --frozen    $B/cc_neutrino_v3_recotag/parquet/cc_neutrino_v3_recotag__mva_frozen__keepprompt__merged__cf.pkl \
