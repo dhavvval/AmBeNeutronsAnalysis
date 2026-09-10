@@ -1,0 +1,47 @@
+run_name: AmBe2.0v4_all28
+display_label: "AmBe v4 real data (waveform-gated, all 28 source runs)"
+campaign: "AmBe 2.0v4"
+description: >
+  Real AmBe source-calibration data, v4 campaign, ALL 28 source runs across 26
+  source positions and all five ports. This is data_ambe2v4.yaml (the 20 runs
+  under tag AmBe2.0v4_gated) PLUS the 8 runs that were Stage-1 processed later
+  under tag AmBe2.0v4_ext (6243, 6244, 6246, 6247, 6249, 6250, 6251, 6252).
+
+  Traditional box cuts only -- no MVA, no MC. Stage 1 is the IC waveform gate
+  (700 < IC_adjusted < 1200 plus the second-pulse veto); Stage 2 is
+  ambe_single_cut / ambe_multiple_cut from src/ambe/data/processor.py
+  (0 < clusterPE <= 100, 0 < CB < 0.45, clusterTime >= 2000 ns,
+  clusterHits >= 5) after the cosmic veto.
+
+  WHY TWO TAGS AND NOT ONE GLOB. AmBeWaveformResults_<tag>.csv is written with a
+  plain to_csv, so re-running the 8 extra runs under AmBe2.0v4_gated would have
+  overwritten the 20-run acceptance table the published 57.30% efficiency rests
+  on. The tags are therefore kept separate on disk and merged here, at config
+  level, by listing both.
+
+  DO NOT replace these lists with AmBeTriggerSummary_AmBe2.0v4_*.csv. That glob
+  also matches _fprompt, which covers the SAME 20 runs as _gated, and would
+  double-count 19 of the 26 positions. The two tags listed below share no source
+  position: 19 rows + 7 rows = 26 unique positions.
+
+  Run 6248 is absent on purpose -- it is in processor.py source_positions at
+  (75, 50, 0) but has no BeamCluster ntuple and no waveform directory anywhere on
+  disk, so it has never been acquired. Position (75, 50, 0) is therefore covered
+  only by the LAPPD debug pair 6249/6250.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data
+
+inputs:
+  trigger_summary:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_AmBe2.0v4_gated.csv
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_AmBe2.0v4_ext.csv
+  candidate_csvs:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBe2.0v4_gated_*.csv
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBe2.0v4_ext_*.csv
+
+# Identical to data_ambe2v4.yaml so the box is provably the same box.
+cuts:
+  pe_max: 100
+  charge_balance_max: 0.45
+
+fit_params: {}

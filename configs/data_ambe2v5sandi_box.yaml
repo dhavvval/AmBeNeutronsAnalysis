@@ -1,0 +1,90 @@
+run_name: AmBe2.0v5sandi_box
+display_label: "AmBe v5sandi, 3 runs, traditional box cuts"
+campaign: "AmBe 2.0v5sandi"
+description: >
+  Real AmBe source-calibration data, the new v5sandi campaign (runs 6273, 6274, 6275),
+  selected with the TRADITIONAL BOX CUTS -- the same deck-2 selection as
+  data_ambe2v4_all28_box.yaml, so the two campaigns can be compared cell for cell.
+
+  The neutron cluster definition is
+      0 < clusterPE <= 100,  0 < chargeBalance < 0.45,
+      clusterTime >= 2000 ns,  clusterHits >= 5
+  applied after the Stage-1 IC waveform gate (700 < IC_adjusted < 1200 plus the
+  second-pulse veto) and the cosmic veto (any cluster with clusterTime < 2 us or
+  clusterPE > 100 drops the whole event). No MVA and no MC anywhere.
+
+  IC WINDOW IS DELIBERATELY THE v4 PRODUCTION WINDOW (700-1200). It is carried over
+  unchanged so this campaign is measured on the same Stage-1 gate as the 28-run v4
+  box analysis. The window has NOT been re-tuned on v5sandi -- if the IC plots this
+  config writes show the peak sitting differently than in v4, the window is the first
+  thing to revisit, not the efficiency.
+
+  SOURCE POSITIONS. All three runs are Port 5: 6273 at z=0, 6274 at z=+100, 6275 at
+  z=-100. They are in processor.py source_positions under "AmBe v5sandi" -- real
+  positions belong in the shared campaign map, not in a per-config override, so that
+  anyone can process this campaign without knowing about a config-level exception.
+  Note the height coordinate is the map's SECOND slot for Port 5, i.e. (0, y, 0), so
+  the supplied z becomes y: (0, 0, 0) / (0, 100, 0) / (0, -100, 0). All three are
+  already in plots/heatmap.py PORT_INFO as Port 5, so the port maps label correctly.
+
+  Waveforms come from the run-keyed subdirectories produced on 2026-09-09
+  (waveform_dir/<run>/AmBeWaveforms_<run>_pN_pM.root, 6 chunks per run, all three
+  runs verified complete). data_directory is a staging directory of symlinks to the
+  three BeamCluster files so the glob cannot pick up anything else that later lands
+  in the campaign directory.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data
+
+stage1:
+  data_directory: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/stage_v5sandi/source
+  waveform_dir: /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v5sandi
+  file_pattern: 'BeamCluster_(\d+)\.root'
+  # 1 = read the RWM_ TDirectories, 2 = BRF_. The v5sandi waveform files contain
+  # both (FitRWMWaveform still writes the Booster RF channel too); the 700-1200 IC
+  # window was tuned on RWM_, so campaign 1 / which_tree 1 as in v4.
+  campaign: 1
+  which_tree: 1
+  # 'ic' = IC window + second-pulse veto and NOTHING else. Do NOT set 'ic+fprompt'
+  # or 'fprompt2d': fprompt is not used for any part of this analysis. The processor
+  # still computes and dumps it into the feature parquet, but nothing here cuts on
+  # it, reports it, or reasons from it.
+  selection_mode: ic
+  ic_min: 700
+  ic_max: 1200
+  plot_ic: true
+  save_waveform_samples: false
+  # Dump the Stage-1 IC-gated eventTimeTank set per run, so `ambe leak features`
+  # does not have to repeat Stage 1 and re-read ~10 GB of waveforms off /pnfs for
+  # integers this stage already has in hand.
+  dump_good_events: true
+  tag: AmBe2.0v5sandi_box
+  # No extra_source_positions: 6273/6274/6275 are in processor.py source_positions.
+  # The three positions are distinct, which matters because sourceX/Y/Z are written
+  # per row into the candidate CSVs and plots/basic.py load_and_group_data groups by
+  # (x, y, z) -- three distinct positions give three per-position capture-time fits,
+  # where a shared coordinate would silently pool them into one.
+
+inputs:
+  trigger_summary:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_AmBe2.0v5sandi_box.csv
+  candidate_csvs:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBe2.0v5sandi_box_*.csv
+
+cuts:
+  pe_max: 100
+  charge_balance_max: 0.45
+  # Plot-only cut inside src/ambe/plots/basic.py prepare_data. 0 here to match the
+  # v4 box/MVA decks, so the campaigns stay comparable.
+  plot_min_cluster_hits: 0
+  selection_label: "box cuts PE ≤ 100, CB < 0.45, t ≥ 2 µs, hits ≥ 5"
+
+fit_params: {}
+
+reference:
+  # v4 is the most recent campaign, so it is the comparison for this one. The
+  # AmBe 2.0v4 block in plots/heatmap.py REFERENCE_DATA is read out of the frozen
+  # AmBeTriggerSummary_AmBe2.0v4_all28_box.csv -- same box cuts, same 700-1200 IC
+  # gate -- so the residual measures the campaign difference, not a selection
+  # difference. (Default would be "AmBe 1.0", which is neither recent nor the same
+  # selection.)
+  comparison_campaign: "AmBe 2.0v4"

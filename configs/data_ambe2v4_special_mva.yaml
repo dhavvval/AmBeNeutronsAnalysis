@@ -1,0 +1,81 @@
+run_name: AmBe2.0v4_special_mva
+display_label: "AmBe v4 special runs, MVA neutron definition"
+campaign: "AmBe 2.0v4"
+description: >
+  The six labelled-no-source special runs under the MVA NEUTRON DEFINITION INSTEAD OF
+  THE BOX CUTS -- the twin of data_ambe2v4_special_box.yaml. Reported SEPARATELY and
+  NEVER merged into the campaign; no efficiency and no capture time is quoted.
+
+  Same six runs, same Stage-1 IC gate, same cosmic veto, same plot chain as the box
+  version. The only difference is that a cluster is a neutron iff
+  gbt_score > 0.423621, with no PE / charge-balance / time / hits box.
+
+  THE 6264 DISCREPANCY IS EXPECTED AND MUST NOT BE AVERAGED AWAY. This route re-derives
+  cluster features in a (-5, +20) ns delayed-residual window, so its clusterPE differs
+  from the box route's and the >100 PE cosmic veto flips on a handful of events: 93.3 %
+  vetoed here against ~98.0 % on the box path. Both give zero candidates for 6264. The
+  difference is real; quote each route's own number.
+
+  6270 is still the corrupted merge (11,279 duplicated events of 46,211, FIX_6270.md).
+  Deduplicate on eventTimeTank or its gated count reads 2,941 instead of 2,312.
+
+  Scored parquet is the v4special one, NOT the 28-run v4neutron file -- the special
+  runs were extracted and scored under their own campaign tag precisely so they could
+  never be pooled with the source runs.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data
+
+stage1:
+  data_directory: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/stage_v4/special6
+  waveform_dir: /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4
+  file_pattern: 'BeamCluster_(\d+)\.root'
+  # 1 = read the RWM_ TDirectories, 2 = BRF_. The v4 waveform files contain
+  # BOTH, and the 700-1200 IC window was tuned on RWM_: reading BRF_ instead
+  # accepts 0 of 38,451 waveforms on run 6062 and puts fprompt at 0.016
+  # against the expected 0.22. Verified on 6062: campaign 1 gives 39.57 %
+  # accepted, cosmic 19.06 %, fprompt median 0.219.
+  campaign: 1
+  which_tree: 1
+  # Stage-1 gate, pinned so it cannot drift. 'ic' = IC window + second-pulse
+  # veto and NOTHING else -- in particular no fprompt cut. fprompt is still
+  # computed and dumped as a diagnostic, so the log prints its median; that is
+  # a report, not a cut. Do not set 'ic+fprompt' or 'fprompt2d' for these decks.
+  selection_mode: ic
+  ic_min: 700
+  ic_max: 1200
+  plot_ic: true
+  save_waveform_samples: false
+  tag: AmBe2.0v4_special_mva
+  extra_source_positions:
+    6254: [0.0, 0.0, 0.0]
+    6256: [0.0, 0.0, 0.0]
+    6264: [0.0, 0.0, 0.0]
+    6265: [0.0, 0.0, 0.0]
+    6266: [0.0, 100.0, 0.0]
+    6270: [75.0, 0.0, 0.0]
+
+mva:
+  scored:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data/ccinc_v3_ambe_v4special/scored/truthtag_cf_gated/ambev4special_truthtag_cf_gated__scored.parquet
+  score_col: gbt_score
+  threshold: 0.423621
+  point: eff80
+
+inputs:
+  trigger_summary:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_AmBe2.0v4_special_mva.csv
+  candidate_csvs:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBe2.0v4_special_mva_*.csv
+
+cuts:
+  # Cosmic-veto thresholds only; no neutron box is applied. See the MVA note above.
+  pe_max: 100
+  charge_balance_max: 0.45
+  # Plot-only cut inside src/ambe/plots/basic.py prepare_data. Set to 0 here on
+  # purpose: it is NOT part of either selection, and the MVA deck has no hits
+  # requirement at all, so a hidden >=10 would make the two decks incomparable
+  # AND misrepresent deck 3 as having a hits cut. Same value in both configs.
+  plot_min_cluster_hits: 0
+  selection_label: "Special runs, MVA neutron (GBT eff80, score > 0.423621)"
+
+fit_params: {}

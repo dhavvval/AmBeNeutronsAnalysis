@@ -1,0 +1,85 @@
+run_name: AmBe2.0v4_all28_mva
+display_label: "AmBe v4 real data, 28 source runs, MVA neutron definition"
+campaign: "AmBe 2.0v4"
+description: >
+  Real AmBe source-calibration data, v4 campaign, all 28 source runs, selected with
+  the MVA NEUTRON DEFINITION INSTEAD OF THE BOX CUTS. This is the deck-3 analysis and
+  the twin of data_ambe2v4_all28_box.yaml -- same runs, same Stage 1, same cosmic
+  veto, same plot chain, different neutron definition.
+
+  THE BOX IS DELIBERATELY ABSENT. A cluster is a neutron iff gbt_score > 0.423621.
+  There is no PE, charge-balance, time or hits requirement. This is what makes the
+  two analyses independent rather than one nested inside the other: of the 245,973
+  scored clusters, 20,028 FAIL the box cuts, and they are eligible here. The earlier
+  study in ANALYSIS_ccinc_v3_FULL.md 6.6 applied the MVA on top of the box and kept
+  178,409 clusters; applied instead of the box it keeps 182,444. Those are different
+  measurements and must not be quoted interchangeably.
+
+  The `cuts:` block below still carries pe_max / charge_balance_max because the
+  cosmic veto is defined in the same CutCriteria object (clusterTime < 2 us or
+  clusterPE > 100). Those two numbers are the COSMIC thresholds here, not a neutron
+  box -- the neutron box is not applied. selection_label is what appears on plots.
+
+  THRESHOLD PROVENANCE. 0.423621 is the truth-tag / ClusterFinder GBT cut at the MC
+  80 % signal-efficiency working point, derived by boxcut_v4_campaign._thresholds
+  from the frozen merged tank+world model. It is recorded literally here rather than
+  recomputed at run time so this config is reproducible on its own; assert it against
+  _thresholds if the model is ever refrozen.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data
+
+stage1:
+  # Identical to the box config -- same runs, same gate, same staging directory.
+  # Only the `mva:` block below changes what counts as a neutron.
+  data_directory: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/stage_v4/source28
+  waveform_dir: /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4
+  file_pattern: 'BeamCluster_(\d+)\.root'
+  # 1 = read the RWM_ TDirectories, 2 = BRF_. The v4 waveform files contain
+  # BOTH, and the 700-1200 IC window was tuned on RWM_: reading BRF_ instead
+  # accepts 0 of 38,451 waveforms on run 6062 and puts fprompt at 0.016
+  # against the expected 0.22. Verified on 6062: campaign 1 gives 39.57 %
+  # accepted, cosmic 19.06 %, fprompt median 0.219.
+  campaign: 1
+  which_tree: 1
+  # Stage-1 gate, pinned so it cannot drift. 'ic' = IC window + second-pulse
+  # veto and NOTHING else -- in particular no fprompt cut. fprompt is still
+  # computed and dumped as a diagnostic, so the log prints its median; that is
+  # a report, not a cut. Do not set 'ic+fprompt' or 'fprompt2d' for these decks.
+  selection_mode: ic
+  ic_min: 700
+  ic_max: 1200
+  plot_ic: true
+  save_waveform_samples: false
+  tag: AmBe2.0v4_all28_mva
+
+mva:
+  scored:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data/ccinc_v3_ambe_v4neutron/scored/truthtag_cf_gated/ambev4neutron_truthtag_cf_gated__scored.parquet
+  score_col: gbt_score
+  threshold: 0.423621
+  point: eff80
+
+inputs:
+  trigger_summary:
+    # COVERED triggers only -- every box cluster in the event has an MVA score.
+    # The unrestricted _mva.csv includes events with unscored clusters, which the
+    # selection cannot tell from rejected ones; that pushed the efficiency to
+    # 44.87 % against 46.15 % here. Deck 2 keeps its FULL sample (57.25 %); only
+    # this deck and the deck-4 residual use the covered denominator, so the two
+    # selections are compared on exactly the same 370,389 triggers.
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_AmBe2.0v4_all28_mva_covered.csv
+  candidate_csvs:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBe2.0v4_all28_mva_*.csv
+
+cuts:
+  # Cosmic-veto thresholds only. See the note above: no neutron box is applied.
+  pe_max: 100
+  charge_balance_max: 0.45
+  # Plot-only cut inside src/ambe/plots/basic.py prepare_data. Set to 0 here on
+  # purpose: it is NOT part of either selection, and the MVA deck has no hits
+  # requirement at all, so a hidden >=10 would make the two decks incomparable
+  # AND misrepresent deck 3 as having a hits cut. Same value in both configs.
+  plot_min_cluster_hits: 0
+  selection_label: "MVA neutron (GBT eff80, score > 0.423621)"
+
+fit_params: {}
