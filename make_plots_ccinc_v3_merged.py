@@ -13,7 +13,7 @@ background / the tank-only baseline. The selection cut-flow and the streamline
 overlap are TABLES, not bar charts.
 
 Every number is read live from
-    /exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output/<run>/{csv,parquet}
+    /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/<run>/{csv,parquet}
 and from the training logs in this directory. The only hardcoded thing is the
 labelling rule, which is a physics decision documented in
 REPORT_ccinc_v3_world_merged.md §0.
@@ -35,6 +35,7 @@ Output:
 """
 from __future__ import annotations
 
+import argparse
 import re
 from pathlib import Path
 
@@ -90,7 +91,7 @@ HIST_SIG = dict(color=BLUE, alpha=0.85)
 LINE_COLORS = [BLUE, ORANGE, GREEN, PURPLE]
 
 HERE = Path(__file__).parent
-BASE = Path("/exp/annie/app/users/dajana/AmBeNeutronAnalysis/ambe_output")
+BASE = Path("/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output")
 OUTD = HERE / "slide_plots_ccinc_v3_merged"
 PREFIX = "V3MERGED__"
 
@@ -878,6 +879,114 @@ def fig_bkg_of_training(frames):
     save(fig, "training_background_by_particle")
 
 
+# ── containment view of the delayed-background budget ───────────────────────
+# fig_bkg_world() and fig_bkg_of_training() both normalise to the NON-NEUTRON
+# light, which answers "which particle" but hides that most of the delayed
+# background is real neutron capture from outside the tank. This figure keeps
+# the out-of-tank capture component IN the normalisation: every bar is a share
+# of the same denominator, the total delayed background light, split by where
+# it was produced. Numbers come from ccinc_v3_stats.dirtn_budget(), which
+# already checks that the components close to 100%.
+BUDGET_CSV = HERE / "ccinc_v3_dirtn_budget.csv"
+
+BUDGET_PRETTY = {
+    "neutron-capture light": "Neutron capture",
+    "non-neutron: muminus": r"$\mu^-$",
+    "non-neutron: piplus": r"$\pi^+$",
+    "non-neutron: pizero": r"$\pi^0$",
+    "non-neutron: proton": "p",
+    "non-neutron: piminus": r"$\pi^-$",
+    "non-neutron: muplus": r"$\mu^+$",
+    # No physics hit in this campaign is untraced (n_lineage_complete ==
+    # n_hits - n_darknoise for every cluster), so this row is genuine pure-EM
+    # light and the dark-noise row is exactly the dark noise. Labelling them
+    # "untraced" / "other" understated what is known about them.
+    "non-neutron: no complete non-EM chain (pure EM / untraced)":
+        r"pure EM ($\gamma$/$e^\pm$)",
+    "dark noise / other": "dark noise",
+}
+# Below the per-species floor these are individually invisible on the axis; they
+# are summed rather than dropped so the bars still add to 100%.
+BUDGET_MINOR = ["non-neutron: kplus", "non-neutron: kminus", "non-neutron: other"]
+BUDGET_MINOR_LABEL = r"$K^\pm$ + other"
+
+
+def budget_table(stream: str, method: str) -> pd.DataFrame:
+    """The dirtn budget for one configuration, collapsed to plottable rows."""
+    b = pd.read_csv(BUDGET_CSV)
+    d = b[(b["streamline"] == stream) & (b["method"] == method)]
+    if d.empty:
+        raise SystemExit(f"[containment] no {stream}/{method} rows in {BUDGET_CSV}"
+                         f" — rerun `python ccinc_v3_stats.py --do dirtn`")
+    rows = []
+    for comp, label in BUDGET_PRETTY.items():
+        r = d[d["component"] == comp]
+        if r.empty:
+            continue
+        rows.append(dict(label=label, pct_tank=float(r["pct_tank"].iat[0]),
+                         pct_world=float(r["pct_world"].iat[0]),
+                         hits=float(r["hits_total"].iat[0])))
+    m = d[d["component"].isin(BUDGET_MINOR)]
+    if len(m):
+        rows.append(dict(label=BUDGET_MINOR_LABEL,
+                         pct_tank=float(m["pct_tank"].sum()),
+                         pct_world=float(m["pct_world"].sum()),
+                         hits=float(m["hits_total"].sum())))
+    out = pd.DataFrame(rows)
+    out["pct_total"] = out["pct_tank"] + out["pct_world"]
+    return out.sort_values("pct_total", ascending=False).reset_index(drop=True)
+
+
+def fig_bkg_containment(stream: str, method: str):
+    t = budget_table(stream, method)
+    n_hits = int(t["hits"].sum())
+    world_tot = float(t["pct_world"].sum())
+    capture_world = float(t.loc[t["label"] == "Neutron capture", "pct_world"].iat[0])
+
+    fig, ax = plt.subplots(figsize=(9.2, 5.4))
+    yy = np.arange(len(t))[::-1]
+    ax.barh(yy, t["pct_tank"], height=0.62,
+            label="Produced in the tank", **BAR_A)
+    ax.barh(yy, t["pct_world"], height=0.62, left=t["pct_tank"],
+            label="Produced outside the tank", **BAR_W)
+    ax.set_yticks(yy)
+    ax.set_yticklabels(t["label"], fontsize=12)
+    ax.set_xlabel("% of all delayed background light", fontsize=11)
+    ax.legend(fontsize=10, frameon=False, loc="lower right")
+    bare(ax)
+    ax.set_title("Where the Delayed Background Light Is Made — "
+                 f"{stream.replace('tag', '-tag')} / {METHODS[method]}\n"
+                 "{:,} background hits, normalised to 100%;  outside the tank "
+                 "{:.1f}%, of which neutron capture {:.1f}%".format(
+                     n_hits, world_tot, capture_world),
+                 fontsize=12)
+    fig.tight_layout()
+    save(fig, f"bkg_containment_normalized__{stream}_{MSFX[method]}")
+
+    print(f"[containment] {stream}/{method} — % of all delayed background light")
+    print(t[["label", "pct_tank", "pct_world", "pct_total"]]
+          .to_string(index=False, float_format=lambda v: f"{v:6.2f}"))
+
+
+def fig_bkg_containment_table(stream: str, method: str):
+    """The same budget as the figure above, as the numbers, for the backup slide."""
+    t = budget_table(stream, method)
+    cell = [[r.label, f"{r.pct_tank:.2f}", f"{r.pct_world:.2f}",
+             f"{r.pct_total:.2f}"] for r in t.itertuples()]
+    cell.append(["total", f"{t.pct_tank.sum():.1f}", f"{t.pct_world.sum():.1f}",
+                 f"{t.pct_total.sum():.0f}"])
+    cols = ["light source", "made in\nthe tank [%]", "made outside\nthe tank [%]",
+            "total [%]"]
+    fig, ax = plt.subplots(figsize=(8.6, 0.46 * len(cell) + 1.4))
+    table_axes(ax, cell, cols, fs=10.5)
+    ax.set_title("Delayed Background Budget — "
+                 f"{stream.replace('tag', '-tag')} / {METHODS[method]}\n"
+                 "{:,} background hits; every row is a share of the same total".format(
+                     int(t["hits"].sum())), fontsize=12.5, pad=14)
+    fig.tight_layout()
+    save(fig, f"bkg_containment_table__{stream}_{MSFX[method]}")
+
+
 def fig_training_sizes(frames):
     d = frames[("truthtag", "optics")]
     n_sig, n_bkg = int((d["label"] == 1).sum()), int((d["label"] == 0).sum())
@@ -1244,8 +1353,27 @@ def fig_roc():
 
 # ════════════════════════════════════════════════════════════════════════════
 def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--do", choices=["all", "containment"], default="all",
+                    help="'all' rebuilds every figure (needs the ambe_output "
+                         "parquets); 'containment' draws only the normalised "
+                         "background-containment figure from the dirtn budget CSV")
+    ap.add_argument("--stream", choices=STREAMS,
+                    help="streamline for --do containment (required for it)")
+    ap.add_argument("--method", choices=list(METHODS),
+                    help="clustering for --do containment (required for it)")
+    a = ap.parse_args()
+
     OUTD.mkdir(exist_ok=True)
     print(f"[plots] output -> {OUTD}")
+
+    if a.do == "containment":
+        if not a.stream or not a.method:
+            ap.error("--do containment needs both --stream and --method; the "
+                     "budget differs between them, there is no safe default")
+        fig_bkg_containment(a.stream, a.method)
+        fig_bkg_containment_table(a.stream, a.method)
+        return
 
     print("[plots] rebuilding merged frames …")
     frames = {}
@@ -1272,6 +1400,9 @@ def main():
     fig_overlap_table()
     fig_bkg_streams()
     fig_bkg_world()
+    for meth in METHODS:
+        fig_bkg_containment("truthtag", meth)
+        fig_bkg_containment_table("truthtag", meth)
     fig_training_sizes(frames)
     fig_bkg_of_training(frames)
     fig_feature_sep(frames)

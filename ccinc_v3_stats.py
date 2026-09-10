@@ -37,11 +37,16 @@ Run (no silent default — pick a section):
     python ccinc_v3_stats.py --do guard        # label guard only
     python ccinc_v3_stats.py --do models       # + working points, loss, figures
     python ccinc_v3_stats.py --do truthreco    # + cluster-level streamline overlap
+    python ccinc_v3_stats.py --do dirtn        # + dirt-neutron decomposition
+    python ccinc_v3_stats.py --do spurious     # + is a background cluster one particle?
     python ccinc_v3_stats.py --do all
 Output:
     ccinc_v3_model_comparison.csv
     ccinc_v3_truthreco_discrepancy.csv
+    ccinc_v3_dirtn_*.csv
+    ccinc_v3_spurious_{purity,byspecies,cooccurrence}.csv
     slide_plots_ccinc_v3_merged/V3STATS__*.{pdf,png}
+    slide_plots_ccinc_v3_merged/V3SPUR__*.{pdf,png}
 """
 from __future__ import annotations
 
@@ -664,10 +669,925 @@ def fig_verdict_table(cmp, vd):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# Step 5 — the dirt-neutron background: composition and separability
+# ════════════════════════════════════════════════════════════════════════════
+# Species columns are the per-cluster origin counts: background hits whose
+# lineage walk reached a first non-EM ancestor. Pure-EM and untraced chains are
+# in neither numerator nor denominator, which is why the budget below carries an
+# explicit "no complete non-EM chain" row rather than folding that light into a
+# species. frac_bg_* is never used — it can exceed 1 (n_bg_photon counts capture
+# gammas). See REPORT_ccinc_v3_world_merged.md §4.2.
+ORIGIN_SPECIES = ["muminus", "piplus", "pizero", "proton", "piminus", "muplus",
+                  "kplus", "kminus", "other"]
+# Features the budget/census reports. The first block is what actually separates
+# signal from dirt neutrons; d_wall and vtx_y are carried to keep the geometry
+# question answerable from this table alone.
+CENSUS_FEATURES = ["n_hits", "n_hits_early", "n_fit_hits", "pe_total",
+                   "charge_bal_legacy", "beta1", "sigma_t_mad",
+                   "t_window_80pct", "d_wall", "vtx_y"]
+FRAC_COLS = ["frac_neutron", "frac_nonneutron", "frac_darknoise", "frac_untraced"]
+
+
+def dirtn_groups(d: pd.DataFrame) -> pd.Series:
+    """
+    Split the merged frame into the five populations the label rule creates.
+
+    The background splits into three physically different things that the class
+    label alone hides: tank background (muon and pion light), world background
+    that is neutron-dominated (the dirt neutrons), and world background that is
+    not. `SIGNAL world in-tank` is the control — same sample and processing as
+    the dirt neutrons, in-tank interaction — so anything that separates signal
+    from dirt neutrons but does NOT separate it from this group is a property of
+    the world sample, not of where the neutron came from.
+    """
+    is_tank = d["_source_run"] == d["_source_run"].mode().iat[0]
+    neu = d["dominant_class"].isin(NEUTRON_CLASSES)
+    sig = d["y"].astype(bool)
+    g = pd.Series(index=d.index, dtype=object)
+    g[sig & is_tank] = "SIGNAL tank"
+    g[sig & ~is_tank] = "SIGNAL world in-tank"
+    g[~sig & is_tank] = "BKG tank"
+    g[~sig & ~is_tank & neu] = "BKG world neutron-dominated (dirt n)"
+    g[~sig & ~is_tank & ~neu] = "BKG world non-neutron"
+    return g
+
+
+def dirtn_budget(d: pd.DataFrame, stream: str, method: str) -> pd.DataFrame:
+    """
+    The background light budget, normalised to 100% of all background hits and
+    split by tank vs world contribution.
+
+    This is the table to quote for "what fraction of the background is muons /
+    dirt neutrons". Every row is a percentage of the SAME denominator (total
+    background hits), so the tank and world columns add to the total column and
+    the whole table adds to 100.
+    """
+    g = dirtn_groups(d)
+    b = d[~d["y"].astype(bool)].copy()
+    b["side"] = np.where(g[b.index].str.startswith("BKG tank"), "tank", "world")
+    tot = float(b["n_hits"].sum())
+
+    def split(series_name, mask=None):
+        sub = b if mask is None else b[mask]
+        by = sub.groupby("side")[series_name].sum()
+        return (float(by.get("tank", 0.0)), float(by.get("world", 0.0)))
+
+    rows = []
+
+    def add(label, tank_hits, world_hits):
+        rows.append(dict(streamline=stream, method=method, component=label,
+                         hits_tank=tank_hits, hits_world=world_hits,
+                         hits_total=tank_hits + world_hits,
+                         pct_tank=100 * tank_hits / tot,
+                         pct_world=100 * world_hits / tot,
+                         pct_total=100 * (tank_hits + world_hits) / tot))
+
+    add("neutron-capture light", *split("n_neutron"))
+    traced_t = traced_w = 0.0
+    for sp in ORIGIN_SPECIES:
+        col = f"n_origin_{sp}"
+        if col not in b.columns:
+            continue
+        t, w = split(col)
+        traced_t += t
+        traced_w += w
+        add(f"non-neutron: {sp}", t, w)
+    nn_t, nn_w = split("n_nonneutron")
+    add("non-neutron: no complete non-EM chain (pure EM / untraced)",
+        nn_t - traced_t, nn_w - traced_w)
+    h_t, h_w = split("n_hits")
+    add("dark noise / other", h_t - nn_t - split("n_neutron")[0],
+        h_w - nn_w - split("n_neutron")[1])
+    out = pd.DataFrame(rows)
+    add_tot = out["pct_total"].sum()
+    if abs(add_tot - 100.0) > 0.5:                 # rounding aside, this must close
+        sys.exit(f"[dirtn] budget does not close for {stream}/{method}: "
+                 f"{add_tot:.2f}% — the component definitions overlap or leak")
+    return out
+
+
+def dirtn_census(d: pd.DataFrame, stream: str, method: str) -> pd.DataFrame:
+    """Per-population cluster counts, hit composition, features and median score."""
+    g = dirtn_groups(d)
+    agg = {c: "mean" for c in CENSUS_FEATURES + FRAC_COLS}
+    out = d.groupby(g).agg(agg)
+    out.insert(0, "clusters", d.groupby(g).size())
+    for c in FRAC_COLS:
+        out[c + "_median"] = d.groupby(g)[c].median()
+    out["gbt_score_median"] = d.groupby(g)["gbt_score"].median()
+    out.insert(0, "method", method)
+    out.insert(0, "streamline", stream)
+    return out.reset_index(names="population")
+
+
+def dirtn_separability(d: pd.DataFrame, stream: str, method: str) -> pd.DataFrame:
+    """
+    How well the trained model separates signal from EACH background population,
+    and which features do it for the dirt neutrons specifically.
+
+    The per-population AUCs share a common signal set but sit on unbalanced
+    subsets, so they rank difficulty against each other — they are not standalone
+    performance figures for a selection.
+    """
+    g = dirtn_groups(d)
+    te = d[d["in_test"].astype(bool)]
+    gte = g[te.index]
+    sig = te[gte.str.startswith("SIGNAL")]
+    rows = []
+    for pop in ["BKG tank", "BKG world neutron-dominated (dirt n)",
+                "BKG world non-neutron"]:
+        bkg = te[gte == pop]
+        if len(bkg) < 50:                          # too few to quote an AUC
+            continue
+        y = np.r_[np.ones(len(sig)), np.zeros(len(bkg))]
+        for col, model in SCORE_COLS.items():
+            if col not in te.columns:
+                continue
+            s = np.r_[sig[col].to_numpy(float), bkg[col].to_numpy(float)]
+            rows.append(dict(streamline=stream, method=method, population=pop,
+                             model=model, n_signal=len(sig), n_background=len(bkg),
+                             auc=roc_auc_score(y, s),
+                             bkg_median_score=float(bkg[col].median()),
+                             sig_median_score=float(sig[col].median())))
+    auc = pd.DataFrame(rows)
+
+    # Feature-by-feature separation, signal vs dirt neutrons only.
+    S = d[d["y"].astype(bool)]
+    D = d[g == "BKG world neutron-dominated (dirt n)"]
+    frows = []
+    for f in CENSUS_FEATURES:
+        a, b = S[f].astype(float), D[f].astype(float)
+        sd = float(np.sqrt((a.var() + b.var()) / 2))
+        frows.append(dict(streamline=stream, method=method, feature=f,
+                          signal_median=float(a.median()),
+                          dirtn_median=float(b.median()),
+                          signal_mean=float(a.mean()), dirtn_mean=float(b.mean()),
+                          sep_sigma=abs(a.mean() - b.mean()) / sd if sd > 0 else 0.0))
+    return auc, pd.DataFrame(frows).sort_values("sep_sigma", ascending=False)
+
+
+def dirtn_tank_neutron_light(d: pd.DataFrame, stream: str,
+                             method: str) -> pd.DataFrame:
+    """
+    Why the TANK side of the background carries neutron light at all, given that
+    it contains no neutron-dominated cluster by construction.
+
+    `dominant_class` is the most frequent single truth_class in the cluster, so a
+    cluster goes to background as soon as neutron hits stop being the plurality —
+    it keeps whatever neutron light it had. Neutron light is also split across
+    four class codes (1,2,3,4), so a cluster can be majority-neutron overall and
+    still have a non-neutron plurality; the last row of the returned table counts
+    exactly those.
+    """
+    g = dirtn_groups(d)
+    b = d[g == "BKG tank"]
+    edges = [0, 0.001, 0.1, 0.2, 0.3, 0.4, 0.5, 1.01]
+    cut = pd.cut(b["frac_neutron"], edges, right=False)
+    t = b.groupby(cut, observed=False).agg(clusters=("n_hits", "size"),
+                                           hits=("n_hits", "sum"),
+                                           neutron_hits=("n_neutron", "sum"))
+    t["pct_of_tank_bkg_clusters"] = 100 * t["clusters"] / len(b)
+    t["pct_of_tank_bkg_neutron_light"] = 100 * t["neutron_hits"] / b["n_neutron"].sum()
+    t = t.reset_index(names="frac_neutron_bin")
+    t["frac_neutron_bin"] = t["frac_neutron_bin"].astype(str)
+    maj = b[b["frac_neutron"] > b["frac_nonneutron"]]
+    t = pd.concat([t, pd.DataFrame([dict(
+        frac_neutron_bin="TOTAL", clusters=len(b), hits=int(b["n_hits"].sum()),
+        neutron_hits=int(b["n_neutron"].sum()), pct_of_tank_bkg_clusters=100.0,
+        pct_of_tank_bkg_neutron_light=100.0)]), pd.DataFrame([dict(
+        frac_neutron_bin="of which majority-neutron (mislabelled by plurality)",
+        clusters=len(maj), hits=int(maj["n_hits"].sum()),
+        neutron_hits=int(maj["n_neutron"].sum()),
+        pct_of_tank_bkg_clusters=100 * len(maj) / len(b),
+        pct_of_tank_bkg_neutron_light=100 * maj["n_neutron"].sum()
+        / b["n_neutron"].sum())])], ignore_index=True)
+    t.insert(0, "method", method)
+    t.insert(0, "streamline", stream)
+    return t
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Step 6 — background spuriousness: is a background cluster ONE particle?
+# ════════════════════════════════════════════════════════════════════════════
+# The reports quote the background composition INTEGRATED over all clusters
+# (world report §4.2: mu- 53.3%, pi+ 25.5%, ...). That is a statement about the
+# light, not about the clusters, and the two are only the same thing if a typical
+# background cluster is made by a single particle. This section measures that
+# directly, because the answer decides how the per-species feature plots may be
+# read: if clusters are single-species, a per-species curve is the distribution of
+# a physically distinct population; if they are mixtures, it is the distribution of
+# clusters that particle merely dominates.
+#
+# The axis is `n_origin_<species>` — BACKGROUND hits (truth_class == -5) whose
+# lineage walk reached a first non-EM ancestor, per cluster. Neutron-capture light
+# (classes 1-4) is NOT on this axis by construction, so a cluster can have
+# n_origin_traced == 0 and still be full of light. Those clusters are a real and
+# large population, not a tracing failure, and get their own class below.
+SPUR_MIN_CLUSTERS = 200        # below this a per-species row is noise, not a result
+SPUR_SINGLE_CUT = 0.9          # top-species share at or above which we call it "one particle"
+
+# The class label shared by this section and make_presentable_optics_rf_plots.py's
+# --bkg-split origin. Defined once, here, so the plots and the tables cannot drift.
+NO_ORIGIN_LABEL = "no non-EM origin"
+SPUR_SPECIES_ORDER = ["muminus", "piplus", "pizero", "proton", "piminus",
+                      "muplus", "kplus", "kminus", "neutron", "other"]
+SPUR_PRETTY = {"muminus": r"$\mu^-$", "muplus": r"$\mu^+$",
+               "piplus": r"$\pi^+$", "piminus": r"$\pi^-$",
+               "pizero": r"$\pi^0$", "proton": "p", "neutron": "n",
+               "kplus": r"$K^+$", "kminus": r"$K^-$", "other": "other",
+               NO_ORIGIN_LABEL: "no non-EM origin"}
+# The integrated shares this section must reproduce — REPORT_ccinc_v3_world_merged.md
+# §4.2, as percentages of the traced non-neutron background light. Same role as
+# REPORTED_AUC: a reference to check against, never an input.
+REPORTED_SPECIES_PCT = {"muminus": 53.3, "piplus": 25.5, "pizero": 7.2,
+                        "proton": 5.8, "piminus": 4.6, "muplus": 3.4}
+SPECIES_PCT_TOL = 0.5          # the report quotes one decimal
+
+
+def origin_class(d: pd.DataFrame) -> pd.Series:
+    """
+    One background-particle class per cluster, for tables and for plotting.
+
+    `origin_dominant_species` where the cluster has traced non-EM background light;
+    NO_ORIGIN_LABEL where it has none. The residual class is not a leftover bin to
+    be dropped — it is ~65-70% of background clusters and is median ~84%
+    neutron-capture light, i.e. it is where the out-of-tank captures live. Dropping
+    it would delete the majority of the background from every per-species figure.
+    """
+    s = d["origin_dominant_species"].astype("object")
+    return s.where(d["n_origin_traced"].to_numpy(int) > 0,
+                   NO_ORIGIN_LABEL).fillna(NO_ORIGIN_LABEL)
+
+
+def _origin_matrix(d: pd.DataFrame):
+    """(n_clusters x n_species) count matrix and its row sums, in a fixed order."""
+    cols = [f"n_origin_{s}" for s in SPUR_SPECIES_ORDER
+            if f"n_origin_{s}" in d.columns]
+    m = d[cols].to_numpy(float)
+    return m, m.sum(axis=1), [c.removeprefix("n_origin_") for c in cols]
+
+
+# ── the same question asked over ALL the light in the cluster ───────────────
+# _origin_matrix() only carries charged-parent light, so 70% of background
+# clusters have nothing on it and drop out of every figure built on it. That is
+# a correct answer to "how mixed is the charged-particle light" and a misleading
+# one to "how mixed is the cluster". _light_matrix() partitions every hit into
+# exactly one bucket:
+#     neutron capture (truth_class 1-4)  |  charged parent (n_origin_<species>)
+#     gamma/e+- with no non-EM ancestor  |  dark noise (truth_class 0)
+# There is no untraced bucket: n_lineage_complete == n_hits - n_darknoise holds
+# for every cluster in this campaign, i.e. every physics hit has a complete
+# chain, so the EM bucket is genuine pure-EM light and not a tracing failure.
+# The closure below enforces that; if a future sample breaks it the figures stop
+# rather than quietly renormalising.
+CAPTURE_LABEL = "neutron capture"
+PUREEM_LABEL = r"$\gamma$/$e^\pm$ (no non-EM ancestor)"
+DARKNOISE_LABEL = "dark noise"
+
+
+def _light_matrix(d: pd.DataFrame):
+    """(n_clusters x n_sources) hit-count matrix over ALL light, and its row sums."""
+    cols = [f"n_origin_{s}" for s in SPUR_SPECIES_ORDER
+            if f"n_origin_{s}" in d.columns]
+    names = [CAPTURE_LABEL] + [SPUR_PRETTY.get(c.removeprefix("n_origin_"),
+                                               c.removeprefix("n_origin_"))
+                               for c in cols] + [PUREEM_LABEL, DARKNOISE_LABEL]
+    pure_em = (d["n_nonneutron"] - d["n_origin_traced"]).to_numpy(float)
+    m = np.column_stack([d["n_neutron"].to_numpy(float),
+                         d[cols].to_numpy(float),
+                         pure_em,
+                         d["n_darknoise"].to_numpy(float)])
+    tot = d["n_hits"].to_numpy(float)
+    if np.abs(m.sum(axis=1) - tot).max() > 0:
+        sys.exit("[spurious] the light buckets do not partition n_hits — "
+                 "capture / charged / pure-EM / dark noise overlap or leak")
+    incomplete = (d["n_hits"] - d["n_darknoise"] - d["n_lineage_complete"])
+    if int((incomplete != 0).sum()):
+        sys.exit("[spurious] physics hits without a complete lineage chain: the "
+                 f"pure-EM bucket is not pure EM for {int((incomplete != 0).sum())} "
+                 "clusters — regenerate the MC or split the bucket")
+    return m, tot, names
+
+
+def light_purity(d: pd.DataFrame, stream: str, method: str) -> pd.DataFrame:
+    """
+    "Is a cluster one thing or several?" over all its light, signal and background.
+
+    Companion to spurious_purity(), which asks the same on the charged-parent axis
+    only. Both are needed: this one says what the cluster IS, that one says what
+    its charged-particle content is made of.
+    """
+    # Reported for the whole capped frame AND for the train and test halves
+    # separately. The composition is a property of the sample, not of the fit, so
+    # the three should agree; showing them is what makes that checkable instead of
+    # assumed, and it is the split the audience will ask about.
+    te = d["in_test"].astype(bool)
+    sig = d["y"].astype(bool)
+    rows = []
+    for (pop, pmask), (split, smask) in [
+            (p, s) for p in (("SIGNAL", sig), ("BKG", ~sig))
+            for s in (("all", np.ones(len(d), bool)), ("train", ~te), ("test", te))]:
+        sub = d[pmask & smask]
+        m, tot, names = _light_matrix(sub)
+        share = m / tot[:, None]
+        top1 = share.max(axis=1)
+        nsrc = (m > 0).sum(axis=1)
+        dom = pd.Series(np.take(names, m.argmax(axis=1)))
+        rows.append(dict(
+            streamline=stream, method=method, population=pop, split=split,
+            clusters=len(sub),
+            median_hits=float(np.median(tot)),
+            median_top1=float(np.median(top1)),
+            pct_top1_ge90=100.0 * float((top1 >= 0.9).mean()),
+            pct_top1_ge50=100.0 * float((top1 >= 0.5).mean()),
+            mean_n_sources=float(nsrc.mean()),
+            pct_one_source=100.0 * float((nsrc == 1).mean()),
+            dominant_source=dom.value_counts().index[0],
+            pct_dominant_source=100.0 * float(dom.value_counts(normalize=True).iat[0]),
+            mean_share_capture=float(share[:, 0].mean()),
+            mean_share_charged=float(share[:, 1:-2].sum(axis=1).mean()),
+            mean_share_pureem=float(share[:, -2].mean()),
+            mean_share_darknoise=float(share[:, -1].mean()),
+        ))
+    return pd.DataFrame(rows)
+
+
+def spurious_purity(d: pd.DataFrame, stream: str, method: str) -> pd.DataFrame:
+    """
+    Per-population answer to "is a cluster one particle or several?".
+
+    Signal is carried as the control. The claim "background clusters are made of one
+    particle" means nothing on its own — it only becomes a result next to how mixed
+    the signal clusters are on the same axis.
+    """
+    g = dirtn_groups(d)
+    pops = {"SIGNAL": g.str.startswith("SIGNAL"),
+            "BKG tank": g == "BKG tank",
+            "BKG world (dirt n)": g == "BKG world neutron-dominated (dirt n)",
+            "BKG world non-neutron": g == "BKG world non-neutron",
+            "BKG all": ~d["y"].astype(bool)}
+    rows = []
+    for pop, mask in pops.items():
+        sub = d[mask]
+        if not len(sub):
+            continue
+        m, tr, _ = _origin_matrix(sub)
+        has = tr > 0
+        mm, tt = m[has], tr[has]
+        if len(tt):
+            share = mm / tt[:, None]
+            top1 = share.max(axis=1)
+            srt = np.sort(share, axis=1)[:, ::-1]
+            top2 = srt[:, 1] if srt.shape[1] > 1 else np.zeros(len(srt))
+            nsp = (mm > 0).sum(axis=1)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                h = -np.where(share > 0, share * np.log(share), 0.0).sum(axis=1)
+            hmax = np.log(max(len(SPUR_SPECIES_ORDER), 2))
+        else:
+            top1 = top2 = nsp = h = np.array([np.nan])
+            hmax = 1.0
+        rows.append(dict(
+            streamline=stream, method=method, population=pop,
+            clusters=len(sub),
+            clusters_no_traced=int((~has).sum()),
+            pct_no_traced=100.0 * float((~has).mean()),
+            clusters_with_traced=int(has.sum()),
+            median_purity_top1=float(np.median(top1)),
+            mean_purity_top1=float(np.mean(top1)),
+            median_share_top2=float(np.median(top2)),
+            pct_single_species=100.0 * float(np.mean(top1 >= SPUR_SINGLE_CUT)),
+            pct_exactly_one_species=100.0 * float(np.mean(nsp == 1)),
+            mean_n_species=float(np.mean(nsp)),
+            median_entropy_norm=float(np.median(h) / hmax),
+            median_frac_neutron=float(sub["frac_neutron"].median()),
+        ))
+    return pd.DataFrame(rows)
+
+
+def spurious_by_species(d: pd.DataFrame, stream: str, method: str) -> pd.DataFrame:
+    """
+    Per dominant-species census of the background, plus the one-vs-signal GBT AUC.
+
+    The AUC is what turns the per-species feature plots into a statement about the
+    selection: it says which species the trained model already removes and which it
+    does not. Like §4.4's per-population AUCs these share one signal set on
+    unbalanced subsets, so they rank difficulty against each other and are not
+    standalone performance figures.
+    """
+    cls = origin_class(d)
+    te = d[d["in_test"].astype(bool)]
+    cls_te = cls[te.index]
+    sig = te[te["y"].astype(bool)]
+    bkg_all = d[~d["y"].astype(bool)]
+    rows = []
+    for sp in SPUR_SPECIES_ORDER + [NO_ORIGIN_LABEL]:
+        sub = bkg_all[cls[bkg_all.index] == sp]
+        if not len(sub):
+            continue
+        m, tr, _ = _origin_matrix(sub)
+        has = tr > 0
+        top1 = (m[has].max(axis=1) / tr[has]) if has.any() else np.array([np.nan])
+        nsp = (m[has] > 0).sum(axis=1) if has.any() else np.array([np.nan])
+        r = dict(streamline=stream, method=method, species=sp,
+                 clusters=len(sub),
+                 pct_of_background=100.0 * len(sub) / len(bkg_all),
+                 median_purity_top1=float(np.median(top1)),
+                 pct_single_species=100.0 * float(np.mean(top1 >= SPUR_SINGLE_CUT)),
+                 mean_n_species=float(np.mean(nsp)),
+                 median_frac_neutron=float(sub["frac_neutron"].median()),
+                 median_n_hits=float(sub["n_hits"].median()),
+                 median_pe_total=float(sub["pe_total"].median()),
+                 median_d_wall=float(sub["d_wall"].median()),
+                 median_gbt_score=float(sub["gbt_score"].median()))
+        b_te = te[(cls_te == sp) & ~te["y"].astype(bool)]
+        if len(b_te) >= 50 and len(sig):
+            y = np.r_[np.ones(len(sig)), np.zeros(len(b_te))]
+            for col, model in SCORE_COLS.items():
+                if col not in te.columns:
+                    continue
+                s = np.r_[sig[col].to_numpy(float), b_te[col].to_numpy(float)]
+                r[f"auc_{SHORT[model].lower()}"] = float(roc_auc_score(y, s))
+            r["n_test_background"] = len(b_te)
+            r["n_test_signal"] = len(sig)
+        rows.append(r)
+    return pd.DataFrame(rows)
+
+
+def spurious_cooccurrence(d: pd.DataFrame, stream: str, method: str,
+                          basis: str = "origin") -> pd.DataFrame:
+    """
+    Which sources actually share a cluster, among the mixed ones.
+
+    Counting mixtures says only that they exist; this says what they are made of,
+    which is the difference between "the background is dirty" and "pi+ light rides
+    on mu- light". Hit-weighted, so a species contributing one hit to a large
+    mu- cluster does not count the same as an even split.
+
+    basis="origin" is the charged-parent axis, _origin_matrix. Neutron-capture light
+    is not on it by construction (capture hits are truth_class 1-4, never -5), so the
+    `tr > 0` filter below drops every cluster with no traced charged parent -- 27,393
+    of 39,133 on truth-tag / ClusterFinder, about 70%. That is the right answer to
+    "what is the charged-particle light made of" and a misleading one to "what is a
+    background cluster made of", because neutron capture is in fact the single
+    largest background source (61.1% of the light, dominating 76.8% of clusters).
+
+    basis="light" asks the second question, on _light_matrix -- the same partition
+    the light-source census uses, over ALL the light: neutron capture, each charged
+    parent, pure EM, dark noise. No cluster drops out, because every cluster has
+    hits, so the denominator is the whole background. Both are kept: the tables and
+    figures downstream of the charged-parent axis (spurious_by_species, D1/D2/D4)
+    still want "origin".
+    """
+    if basis not in ("origin", "light"):
+        raise ValueError(f"basis must be 'origin' or 'light', got {basis!r}")
+    b = d[~d["y"].astype(bool)]
+    if basis == "light":
+        m, tr, names = _light_matrix(b)
+        has = tr > 0          # every cluster has hits; kept for shape symmetry only
+    else:
+        m, tr, names = _origin_matrix(b)
+        has = tr > 0
+    mm, tt = m[has], tr[has]
+    share = mm / tt[:, None]
+    mixed = share.max(axis=1) < SPUR_SINGLE_CUT
+    mx = share[mixed]
+    rows = []
+    for i, a_ in enumerate(names):
+        for j, b_ in enumerate(names):
+            if j <= i:
+                continue
+            both = (mx[:, i] > 0) & (mx[:, j] > 0)
+            if not both.any():
+                continue
+            rows.append(dict(streamline=stream, method=method,
+                             species_a=a_, species_b=b_,
+                             clusters=int(both.sum()),
+                             pct_of_mixed=100.0 * float(both.mean()),
+                             mean_share_a=float(mx[both, i].mean()),
+                             mean_share_b=float(mx[both, j].mean())))
+    out = pd.DataFrame(rows).sort_values("clusters", ascending=False)
+    out.insert(3, "n_mixed_clusters", int(mixed.sum()))
+    # Carried so the figure can say what the mixed count is a fraction OF. On the
+    # origin basis that denominator is not the background -- it is the ~30% of it with
+    # traced charged light -- and a figure that only prints the mixed count reads as
+    # if it were the whole thing.
+    out.insert(4, "n_axis_clusters", int(has.sum()))
+    out.insert(5, "n_bkg_clusters", int(len(b)))
+    out.insert(6, "basis", basis)
+    return out
+
+
+def spurious_species_shares(d: pd.DataFrame, stream: str,
+                            method: str) -> pd.DataFrame:
+    """
+    Hit-weighted share of the traced non-neutron background light, per species.
+
+    On (truthtag, optics) this is asserted against world report §4.2 — that is the
+    single configuration §4.2 was measured on, and the four configurations select
+    genuinely different cluster sets, so the others are reported, not checked. Same
+    discipline as `dirtn_budget`'s closing check: if the species axis has moved
+    under this script, every per-species figure downstream is wrong and it must fail
+    loudly rather than produce a plausible new composition.
+    """
+    b = d[~d["y"].astype(bool)]
+    m, tr, names = _origin_matrix(b)
+    tot = m.sum(axis=0)
+    T = tot.sum()
+    got = {n: 100.0 * v / T for n, v in zip(names, tot)}
+
+    if (stream, method) == ("truthtag", "optics"):
+        bad = [f"{sp}: got {got.get(sp, 0.0):.2f}%, report says {want:.1f}%"
+               for sp, want in REPORTED_SPECIES_PCT.items()
+               if abs(got.get(sp, 0.0) - want) > SPECIES_PCT_TOL]
+        if bad:
+            print("[spurious] species closure FAILED for truthtag/optics:")
+            for x in bad:
+                print("   ", x)
+            sys.exit("[spurious] the origin-species axis no longer matches "
+                     "REPORT_ccinc_v3_world_merged.md §4.2 — refusing to continue")
+        print("[spurious] species closure PASS — truth-tag/OPTICS reproduces "
+              "world report §4.2")
+
+    return pd.DataFrame([dict(streamline=stream, method=method, species=n,
+                              hits=float(v), pct_of_traced_bkg_light=got[n])
+                         for n, v in zip(names, tot)])
+
+
+def save_spur(fig, name):
+    OUTD.mkdir(exist_ok=True)
+    for ext in ("pdf", "png"):
+        fig.savefig(OUTD / f"V3SPUR__{name}.{ext}",
+                    dpi=200 if ext == "png" else None)
+    plt.close(fig)
+    print(f"  [fig] V3SPUR__{name}.pdf/.png")
+
+
+def fig_spur_n_species(frames):
+    """How many distinct particles make the traced light in one background cluster."""
+    fig, axes = plt.subplots(2, 2, figsize=(10.5, 8.6))
+    for ax, cfg in zip(axes.ravel(), CONFIGS):
+        d = frames[cfg]
+        b = d[~d["y"].astype(bool)]
+        s = d[d["y"].astype(bool)]
+        for sub, c, lbl in ((s, BLUE, "Signal"), (b, GREY, "Background")):
+            m, tr, _ = _origin_matrix(sub)
+            has = tr > 0
+            if not has.any():
+                continue
+            nsp = (m[has] > 0).sum(axis=1)
+            k = np.arange(1, 7)
+            frac = [100.0 * float((nsp == i).mean()) for i in k]
+            ax.plot(k, frac, "o-", lw=1.8, ms=5, color=c,
+                    label=f"{lbl}  ({int(has.sum()):,} clusters)")
+        ax.set_xlabel("Distinct particles making the traced light", fontsize=10)
+        ax.set_ylabel("Clusters [%]", fontsize=10)
+        ax.set_title(CFG_LBL[cfg], fontsize=11)
+        ax.legend(fontsize=9, frameon=False)
+        ax.tick_params(labelsize=9)
+        bare(ax)
+    fig.suptitle("Particles per cluster — clusters with traced non-EM light only",
+                 fontsize=12.5)
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    save_spur(fig, "n_species")
+
+
+def fig_spur_purity(frames):
+    """Distribution of the leading species' share of the traced light."""
+    fig, axes = plt.subplots(2, 2, figsize=(10.5, 8.6))
+    edges = np.linspace(0, 1, 21)
+    for ax, cfg in zip(axes.ravel(), CONFIGS):
+        d = frames[cfg]
+        for sub, c, lbl in ((d[d["y"].astype(bool)], BLUE, "Signal"),
+                            (d[~d["y"].astype(bool)], GREY, "Background")):
+            m, tr, _ = _origin_matrix(sub)
+            has = tr > 0
+            if not has.any():
+                continue
+            top1 = m[has].max(axis=1) / tr[has]
+            ax.hist(top1, bins=edges, histtype="step", lw=1.8, color=c,
+                    density=True, label=f"{lbl}  median {np.median(top1):.2f}")
+        ax.set_xlabel("Leading particle's share of the traced light", fontsize=10)
+        ax.set_ylabel("Clusters (normalised)", fontsize=10)
+        ax.set_title(CFG_LBL[cfg], fontsize=11)
+        ax.legend(fontsize=9, frameon=False, loc="upper left")
+        ax.tick_params(labelsize=9)
+        bare(ax)
+    fig.suptitle("Leading-particle purity of a cluster — single-particle clusters "
+                 "sit at 1.0", fontsize=12.5)
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    save_spur(fig, "purity")
+
+
+def fig_light_n_sources(frames):
+    """How many distinct light sources make up a cluster — ALL light, not just charged."""
+    fig, axes = plt.subplots(2, 2, figsize=(10.5, 8.6))
+    for ax, cfg in zip(axes.ravel(), CONFIGS):
+        d = frames[cfg]
+        for sub, c, lbl in ((d[d["y"].astype(bool)], BLUE, "Signal"),
+                            (d[~d["y"].astype(bool)], GREY, "Background")):
+            m, _, _ = _light_matrix(sub)
+            nsrc = (m > 0).sum(axis=1)
+            k = np.arange(1, 7)
+            ax.plot(k, [100.0 * float((nsrc == i).mean()) for i in k], "o-",
+                    lw=1.8, ms=5, color=c,
+                    label=f"{lbl}  ({len(sub):,} clusters, mean {nsrc.mean():.2f})")
+        ax.set_xlabel("Distinct light sources in the cluster", fontsize=10)
+        ax.set_ylabel("Clusters [%]", fontsize=10)
+        ax.set_title(CFG_LBL[cfg], fontsize=11)
+        ax.legend(fontsize=9, frameon=False)
+        ax.tick_params(labelsize=9)
+        bare(ax)
+    fig.suptitle("Light sources per cluster — every cluster, all of its light "
+                 "(capture / charged parent / pure EM / dark noise)", fontsize=12.5)
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    save_spur(fig, "n_sources_alllight")
+
+
+def fig_light_purity(frames):
+    """Distribution of the leading source's share of ALL the light in a cluster."""
+    fig, axes = plt.subplots(2, 2, figsize=(10.5, 8.6))
+    edges = np.linspace(0, 1, 21)
+    for ax, cfg in zip(axes.ravel(), CONFIGS):
+        d = frames[cfg]
+        for sub, c, lbl in ((d[d["y"].astype(bool)], BLUE, "Signal"),
+                            (d[~d["y"].astype(bool)], GREY, "Background")):
+            m, tot, _ = _light_matrix(sub)
+            top1 = m.max(axis=1) / tot
+            ax.hist(top1, bins=edges, histtype="step", lw=1.8, color=c,
+                    density=True, label=f"{lbl}  median {np.median(top1):.2f}")
+        ax.set_xlabel("Leading source's share of the cluster's light", fontsize=10)
+        ax.set_ylabel("Clusters (normalised)", fontsize=10)
+        ax.set_title(CFG_LBL[cfg], fontsize=11)
+        ax.legend(fontsize=9, frameon=False, loc="upper left")
+        ax.tick_params(labelsize=9)
+        bare(ax)
+    fig.suptitle("Leading-source purity of a cluster — all light, so dark noise "
+                 "and in-time EM light count against it", fontsize=12.5)
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    save_spur(fig, "purity_alllight")
+
+
+def fig_light_sources_census(frames):
+    """Share of the light and share of the clusters it dominates, per source."""
+    d = frames[("truthtag", "clusterfinder")]
+    b = d[~d["y"].astype(bool)]
+    m, tot, names = _light_matrix(b)
+    pct_light = 100.0 * m.sum(axis=0) / m.sum()
+    dom = np.take(names, m.argmax(axis=1))
+    pct_clu = np.array([100.0 * float((dom == nm).mean()) for nm in names])
+    keep = [i for i in range(len(names)) if pct_light[i] >= 0.1 or pct_clu[i] >= 0.1]
+    idx = sorted(keep, key=lambda i: -pct_light[i])
+
+    fig, ax = plt.subplots(figsize=(9.2, 5.4))
+    yy = np.arange(len(idx))[::-1]
+    ax.barh(yy + 0.19, [pct_light[i] for i in idx], height=0.36,
+            color=GREY, alpha=0.85, edgecolor="none",
+            label="% of all background hits")
+    ax.barh(yy - 0.19, [pct_clu[i] for i in idx], height=0.36,
+            color=BLUE, alpha=0.85, edgecolor="none",
+            label="% of background clusters it dominates")
+    ax.set_yticks(yy)
+    ax.set_yticklabels([names[i] for i in idx], fontsize=11)
+    ax.set_xlabel("%", fontsize=11)
+    ax.legend(fontsize=10, frameon=False, loc="lower right")
+    bare(ax)
+    # "light" reads as an intensity and "leads" as a ranking; the quantity is a HIT
+    # COUNT and the claim is that neutron capture is the largest single BACKGROUND
+    # source. Say both literally -- this figure is read in a technical report where
+    # "61.1% of the light" is the sort of phrase that gets requoted as a PE fraction.
+    ax.set_title("What Makes the Background Light — truth-tag / ClusterFinder\n"
+                 "{:,} clusters, {:,} hits;  neutron capture (background) is "
+                 "{:.1f}% of the background hits and dominates {:.1f}% of the "
+                 "clusters".format(len(b), int(m.sum()), pct_light[0], pct_clu[0]),
+                 fontsize=12)
+    fig.tight_layout()
+    save_spur(fig, "light_sources_census")
+
+
+def fig_light_sources_table(frames):
+    """The all-light census as numbers: what the light is, and what it dominates."""
+    d = frames[("truthtag", "clusterfinder")]
+    b = d[~d["y"].astype(bool)]
+    m, tot, names = _light_matrix(b)
+    pct_light = 100.0 * m.sum(axis=0) / m.sum()
+    share = m / tot[:, None]
+    dom = np.take(names, m.argmax(axis=1))
+    rows = []
+    for i, nm in enumerate(names):
+        sel = dom == nm
+        if pct_light[i] < 0.1 and not sel.any():
+            continue
+        led = share[sel, i] if sel.any() else np.array([np.nan])
+        # The full pure-EM label is a sentence; it overruns the cell at this width.
+        short = r"pure EM ($\gamma$/$e^\pm$)" if nm == PUREEM_LABEL else nm
+        rows.append([short, f"{pct_light[i]:.2f}", f"{int(sel.sum()):,}",
+                     f"{100.0 * sel.mean():.2f}",
+                     "—" if not sel.any() else f"{np.median(led):.2f}",
+                     "—" if not sel.any() else f"{100.0 * (led >= 0.9).mean():.1f}"])
+    rows.sort(key=lambda r: -float(r[1]))
+    rows.append(["total", f"{pct_light.sum():.0f}", f"{len(b):,}", "100", "—", "—"])
+    # "hits" not "light", matching the census figure this table is the numbers for.
+    cols = ["light source", "% of all\nbkg hits", "clusters it\ndominates",
+            "% of bkg\nclusters", "median share\nwhere it leads",
+            "% of those\n≥90% pure"]
+    fig, ax = plt.subplots(figsize=(10.4, 0.46 * len(rows) + 1.5))
+    table_axes(ax, rows, cols, fs=10.0)
+    ax.set_title("What Makes the Background Light — truth-tag / ClusterFinder\n"
+                 "{:,} clusters, {:,} hits; every hit is in exactly one row".format(
+                     len(b), int(m.sum())), fontsize=12.5, pad=14)
+    fig.tight_layout()
+    save_spur(fig, "light_sources_table")
+
+
+def fig_light_purity_table(lp):
+    """Signal against background on the all-light mixture metrics."""
+    t = lp.query("streamline=='truthtag' and method=='clusterfinder' "
+                 "and split=='all'").set_index("population")
+    spec = [("clusters", "clusters", lambda v: f"{int(v):,}"),
+            ("median hits per cluster", "median_hits", lambda v: f"{v:.0f}"),
+            ("median share held by the leading source", "median_top1",
+             lambda v: f"{v:.2f}"),
+            ("clusters ≥90% from one source [%]", "pct_top1_ge90",
+             lambda v: f"{v:.1f}"),
+            ("clusters ≥50% from one source [%]", "pct_top1_ge50",
+             lambda v: f"{v:.1f}"),
+            ("mean number of sources present", "mean_n_sources",
+             lambda v: f"{v:.2f}"),
+            ("clusters with exactly one source [%]", "pct_one_source",
+             lambda v: f"{v:.1f}"),
+            ("mean share: neutron capture", "mean_share_capture",
+             lambda v: f"{v:.3f}"),
+            ("mean share: charged parent", "mean_share_charged",
+             lambda v: f"{v:.3f}"),
+            ("mean share: dark noise", "mean_share_darknoise",
+             lambda v: f"{v:.3f}"),
+            (r"mean share: pure EM $\gamma$/$e^\pm$", "mean_share_pureem",
+             lambda v: f"{v:.3f}")]
+    cell = [[lbl, fmt(t.loc["SIGNAL", col]), fmt(t.loc["BKG", col])]
+            for lbl, col, fmt in spec]
+    fig, ax = plt.subplots(figsize=(8.8, 0.46 * len(cell) + 1.5))
+    table_axes(ax, cell, ["", "signal", "background"], fs=10.5,
+               emphasise_last=False)
+    ax.set_title("Is a Cluster One Thing or Several? — all light, "
+                 "truth-tag / ClusterFinder\n"
+                 "composition purity is nearly the same for both classes",
+                 fontsize=12.5, pad=14)
+    fig.tight_layout()
+    save_spur(fig, "light_purity_table")
+
+
+def fig_light_split_table(lp):
+    """The same composition numbers on the train half and the test half separately.
+
+    Every other figure in this block is quoted on the whole capped frame. That is
+    the right denominator for "what is the background made of", but it invites the
+    question of whether the test half looks like what the model was fitted on. This
+    table answers it with numbers instead of an assurance.
+    """
+    t = lp.query("streamline=='truthtag' and method=='clusterfinder'")
+    cell = []
+    for pop in ("SIGNAL", "BKG"):
+        for split in ("all", "train", "test"):
+            r = t[(t["population"] == pop) & (t["split"] == split)].iloc[0]
+            cell.append([f"{'signal' if pop == 'SIGNAL' else 'background'}"
+                         f" — {split}", f"{int(r.clusters):,}",
+                         f"{r.median_hits:.0f}", f"{r.median_top1:.2f}",
+                         f"{r.pct_top1_ge90:.1f}", f"{r.mean_n_sources:.2f}",
+                         f"{r.mean_share_capture:.3f}",
+                         f"{r.mean_share_charged:.3f}"])
+    cols = ["population", "clusters", "median\nhits", "median\ntop-1 share",
+            "≥90% from\none source [%]", "mean\nsources",
+            "mean share\ncapture", "mean share\ncharged"]
+    fig, ax = plt.subplots(figsize=(11.2, 0.46 * len(cell) + 1.6))
+    table_axes(ax, cell, cols, fs=10.0, emphasise_last=False)
+    ax.set_title("Composition on the Train and Test Halves — "
+                 "truth-tag / ClusterFinder\n"
+                 "80/20 split of the 1:1-capped frame; the halves agree, so the "
+                 "block may be quoted on either", fontsize=12.5, pad=14)
+    fig.tight_layout()
+    save_spur(fig, "light_split_table")
+
+
+def fig_spur_census(bysp):
+    """Per-species census as a table: how much of the background, how pure, how hard."""
+    t = bysp.query("streamline=='truthtag' and method=='clusterfinder'")
+    t = t[t["clusters"] >= SPUR_MIN_CLUSTERS]
+    # The mixture columns are undefined for the no-non-EM-origin class by
+    # construction (it has no traced light to be a mixture of). Print an em dash,
+    # not a NaN or a 0 — a 0 in "% single" reads as "never single-particle".
+    def _mix(v, fmt):
+        return "—" if not np.isfinite(v) else format(v, fmt)
+
+    cell = [[SPUR_PRETTY.get(r.species, r.species), f"{r.clusters:,}",
+             f"{r.pct_of_background:.1f}",
+             _mix(r.median_purity_top1, ".2f"),
+             ("—" if not np.isfinite(r.mean_n_species)
+              else f"{r.pct_single_species:.0f}"),
+             _mix(r.mean_n_species, ".2f"),
+             f"{r.median_frac_neutron:.2f}", f"{r.median_gbt_score:.3f}",
+             (f"{r.auc_gbt:.3f}" if pd.notna(getattr(r, "auc_gbt", np.nan))
+              else "—")]
+            for r in t.itertuples()]
+    cols = ["particle", "clusters", "% of bkg", "median\npurity", "% single",
+            "mean\nspecies", "median\nfrac n", "median\nGBT", "GBT AUC\nvs signal"]
+    fig, ax = plt.subplots(figsize=(11.0, 0.52 * len(cell) + 1.5))
+    table_axes(ax, cell, cols, fs=10.0, emphasise_last=False)
+    ax.set_title("Background by dominant particle — truth-tag / ClusterFinder",
+                 fontsize=12.5, pad=14)
+    fig.tight_layout()
+    save_spur(fig, "species_census")
+
+
+def _co_tt_cf(co):
+    """The truth-tag / ClusterFinder rows, with the denominators the title needs."""
+    t = co.query("streamline=='truthtag' and method=='clusterfinder'")
+    if not len(t):
+        return None, {}
+    r0 = t.iloc[0]
+    return t, dict(mixed=int(r0["n_mixed_clusters"]),
+                   axis=int(r0["n_axis_clusters"]),
+                   bkg=int(r0["n_bkg_clusters"]))
+
+
+def fig_spur_cooccurrence(co):
+    """The commonest source pairs inside mixed background clusters.
+
+    Fed the ALL-LIGHT co-occurrence table (basis="light"), so neutron capture, dark
+    noise and pure EM are eligible as partners. On the charged-parent basis this
+    figure described only the ~30% of background clusters that have traced charged
+    light, while printing a bare mixed-cluster count that read as if it covered the
+    background -- and it structurally could not show the largest background source.
+    """
+    t, n = _co_tt_cf(co)
+    if t is None:
+        return
+    t = t.head(10)
+    lbl = [f"{SPUR_PRETTY.get(r.species_a, r.species_a)} + "
+           f"{SPUR_PRETTY.get(r.species_b, r.species_b)}" for r in t.itertuples()]
+    fig, ax = plt.subplots(figsize=(9.0, 0.42 * len(t) + 2.2))
+    ypos = np.arange(len(t))[::-1]
+    ax.barh(ypos, t["pct_of_mixed"].to_numpy(float), color=GREY, height=0.62)
+    ax.set_yticks(ypos)
+    ax.set_yticklabels(lbl, fontsize=10)
+    ax.set_xlabel("Share of mixed background clusters containing both [%]",
+                  fontsize=10)
+    ax.tick_params(labelsize=9)
+    bare(ax)
+    ax.set_title(f"Commonest source pairs in mixed background clusters — "
+                 f"{n['mixed']:,} mixed of {n['bkg']:,} background clusters, "
+                 f"all light, truth-tag / ClusterFinder", fontsize=12)
+    fig.tight_layout()
+    save_spur(fig, "cooccurrence")
+
+
+def fig_spur_cooccurrence_matrix(co):
+    """Every source pair at once, as a matrix. Backup for fig_spur_cooccurrence.
+
+    The top-10 bar chart is the slide; this is the thing to put up when someone asks
+    about a pair that is not in the top 10. Same long-form table, pivoted -- the
+    matrix is symmetric and only the upper triangle is populated, so it is mirrored
+    here rather than drawn half-empty.
+    """
+    t, n = _co_tt_cf(co)
+    if t is None:
+        return
+    names = sorted(set(t.species_a) | set(t.species_b),
+                   key=lambda s: -t.loc[(t.species_a == s) | (t.species_b == s),
+                                        "pct_of_mixed"].sum())
+    idx = {s: i for i, s in enumerate(names)}
+    M = np.full((len(names), len(names)), np.nan)
+    for r in t.itertuples():
+        i, j = idx[r.species_a], idx[r.species_b]
+        M[i, j] = M[j, i] = r.pct_of_mixed
+
+    fig, ax = plt.subplots(figsize=(1.0 * len(names) + 3.0,
+                                    1.0 * len(names) + 2.2))
+    im = ax.imshow(np.ma.masked_invalid(M), cmap="YlOrBr", aspect="equal")
+    for i in range(len(names)):
+        for j in range(len(names)):
+            if np.isfinite(M[i, j]):
+                ax.text(j, i, f"{M[i, j]:.1f}", ha="center", va="center",
+                        fontsize=8)
+    pretty = [SPUR_PRETTY.get(s, s) for s in names]
+    ax.set_xticks(range(len(names)))
+    ax.set_xticklabels(pretty, rotation=45, ha="right", fontsize=9)
+    ax.set_yticks(range(len(names)))
+    ax.set_yticklabels(pretty, fontsize=9)
+    fig.colorbar(im, ax=ax, label="% of mixed background clusters with both",
+                 fraction=0.046)
+    ax.set_title(f"Source co-occurrence in mixed background clusters — "
+                 f"{n['mixed']:,} mixed of {n['bkg']:,},\nall light, "
+                 f"truth-tag / ClusterFinder", fontsize=11.5)
+    fig.tight_layout()
+    save_spur(fig, "cooccurrence_matrix")
+
+
+# ════════════════════════════════════════════════════════════════════════════
 def main():
     ap = argparse.ArgumentParser(prog="ccinc_v3_stats")
     ap.add_argument("--do", required=True,
-                    choices=["guard", "models", "truthreco", "all"],
+                    choices=["guard", "models", "truthreco", "dirtn", "spurious",
+                             "all"],
                     help="Which section to run. No default on purpose.")
     a = ap.parse_args()
 
@@ -712,6 +1632,112 @@ def main():
         print("[csv] ccinc_v3_truthreco_discrepancy.csv, "
               "ccinc_v3_truthreco_overlap_breakdown.csv, "
               "ccinc_v3_truthreco_disagreement_composition.csv")
+
+    if a.do in ("dirtn", "all"):
+        print("\n=== dirt-neutron background: composition and separability ===")
+        bud, cen, auc, sep, tnk = [], [], [], [], []
+        for stream, method in CONFIGS:
+            d = frames[(stream, method)]
+            bud.append(dirtn_budget(d, stream, method))
+            cen.append(dirtn_census(d, stream, method))
+            a_, s_ = dirtn_separability(d, stream, method)
+            auc.append(a_)
+            sep.append(s_)
+            tnk.append(dirtn_tank_neutron_light(d, stream, method))
+        pd.concat(bud).to_csv(HERE / "ccinc_v3_dirtn_budget.csv", index=False)
+        pd.concat(cen).to_csv(HERE / "ccinc_v3_dirtn_census.csv", index=False)
+        pd.concat(auc).to_csv(HERE / "ccinc_v3_dirtn_separability.csv", index=False)
+        pd.concat(sep).to_csv(HERE / "ccinc_v3_dirtn_feature_separation.csv",
+                              index=False)
+        pd.concat(tnk).to_csv(HERE / "ccinc_v3_dirtn_tankbkg_neutron_light.csv",
+                              index=False)
+        print("[csv] ccinc_v3_dirtn_{budget,census,separability,"
+              "feature_separation,tankbkg_neutron_light}.csv")
+
+        b0 = pd.concat(bud).query("streamline=='truthtag' and method=='optics'")
+        print("\n  truth-tag/OPTICS background light budget "
+              "(% of all background hits):")
+        for _, r in b0.iterrows():
+            print(f"    {r.component:60s} tank {r.pct_tank:5.2f}  "
+                  f"world {r.pct_world:5.2f}  total {r.pct_total:5.2f}")
+        a0 = pd.concat(auc).query("streamline=='truthtag' and method=='optics' "
+                                  "and model=='GBT'")
+        print("\n  GBT AUC against each background population:")
+        for _, r in a0.iterrows():
+            print(f"    signal vs {r.population:40s} n={r.n_background:6d}  "
+                  f"AUC={r.auc:.3f}")
+
+    if a.do in ("spurious", "all"):
+        print("\n=== background spuriousness: one particle, or several? ===")
+        pur, bysp, co, col, shr = [], [], [], [], []
+        for stream, method in CONFIGS:
+            d = frames[(stream, method)]
+            shr.append(spurious_species_shares(d, stream, method))
+            pur.append(spurious_purity(d, stream, method))
+            bysp.append(spurious_by_species(d, stream, method))
+            co.append(spurious_cooccurrence(d, stream, method))
+            # The all-light basis is written alongside the charged-parent one, not
+            # over it: spurious_by_species and the D1/D2/D4 figures still read the
+            # charged-parent table, and the two answer different questions.
+            col.append(spurious_cooccurrence(d, stream, method, basis="light"))
+        pur = pd.concat(pur, ignore_index=True)
+        bysp = pd.concat(bysp, ignore_index=True)
+        co = pd.concat(co, ignore_index=True)
+        col = pd.concat(col, ignore_index=True)
+        pd.concat(shr, ignore_index=True).to_csv(
+            HERE / "ccinc_v3_spurious_species_shares.csv", index=False)
+        pur.to_csv(HERE / "ccinc_v3_spurious_purity.csv", index=False)
+        bysp.to_csv(HERE / "ccinc_v3_spurious_byspecies.csv", index=False)
+        co.to_csv(HERE / "ccinc_v3_spurious_cooccurrence.csv", index=False)
+        col.to_csv(HERE / "ccinc_v3_spurious_cooccurrence_alllight.csv",
+                   index=False)
+        print("[csv] ccinc_v3_spurious_{species_shares,purity,byspecies,"
+              "cooccurrence,cooccurrence_alllight}.csv")
+
+        p0 = pur.query("streamline=='truthtag' and method=='clusterfinder'")
+        print("\n  truth-tag/ClusterFinder — composition of a cluster:")
+        print(f"    {'population':24s} {'clusters':>9s} {'no non-EM':>10s} "
+              f"{'median':>8s} {'% single':>9s} {'mean':>6s}")
+        print(f"    {'':24s} {'':>9s} {'origin':>10s} {'purity':>8s} "
+              f"{'species':>9s} {'nsp':>6s}")
+        for _, r in p0.iterrows():
+            print(f"    {r.population:24s} {r.clusters:9,d} "
+                  f"{r.pct_no_traced:9.1f}% {r.median_purity_top1:8.2f} "
+                  f"{r.pct_single_species:8.1f}% {r.mean_n_species:6.2f}")
+
+        b0 = bysp.query("streamline=='truthtag' and method=='clusterfinder'")
+        b0 = b0[b0["clusters"] >= SPUR_MIN_CLUSTERS]
+        print("\n  GBT AUC against each background particle "
+              "(signal vs that particle only):")
+        for _, r in b0.iterrows():
+            auc_s = (f"{r.auc_gbt:.3f}" if "auc_gbt" in b0.columns
+                     and pd.notna(r.auc_gbt) else "  --")
+            print(f"    signal vs {r.species:22s} n={int(r.clusters):6d} "
+                  f"({r.pct_of_background:5.1f}% of bkg)  AUC={auc_s}")
+
+        lp = pd.concat([light_purity(frames[c], *c) for c in CONFIGS],
+                       ignore_index=True)
+        lp.to_csv(HERE / "ccinc_v3_light_purity.csv", index=False)
+        print("\n  all-light view — is a CLUSTER one thing or several?")
+        l0 = lp.query("streamline=='truthtag' and method=='clusterfinder'")
+        for _, r in l0.iterrows():
+            print(f"    {r.population:6s} {r.split:5s} {r.clusters:8,d}  median top-1 "
+                  f"{r.median_top1:.2f}  >=90% {r.pct_top1_ge90:5.1f}%  "
+                  f">=50% {r.pct_top1_ge50:5.1f}%  mean sources "
+                  f"{r.mean_n_sources:.2f}  led by {r.dominant_source} "
+                  f"({r.pct_dominant_source:.1f}%)")
+
+        fig_spur_n_species(frames)
+        fig_spur_purity(frames)
+        fig_light_n_sources(frames)
+        fig_light_purity(frames)
+        fig_light_sources_census(frames)
+        fig_light_sources_table(frames)
+        fig_light_purity_table(lp)
+        fig_light_split_table(lp)
+        fig_spur_census(bysp)
+        fig_spur_cooccurrence(col)
+        fig_spur_cooccurrence_matrix(col)
 
 
 if __name__ == "__main__":
