@@ -1,0 +1,181 @@
+run_name: AmBe2.0v4_effpair_box
+display_label: "AmBe v4 efficiency pair 6264 / 6265 (+6266 cross-check), box cuts"
+campaign: "AmBe 2.0v4"
+description: >
+  Runs 6264, 6265 and 6266 staged for the THESIS CHAPTER 8 EFFICIENCY EXTRACTION --
+  the multiplicity-fit method (Pershing thesis section 8.6), not the naive counting
+  ratio that the campaign heatmaps quote.
+
+      6265   SOURCE run.      Position (0, 0, 0), Port 5, y = 0.
+      6264   BACKGROUND run.  Same position as 6265.
+      6266   CROSS-CHECK.     Position (0, 100, 0). Independent replication at a
+                              different position; NOT the background for 6265.
+
+  WHY THIS CONFIG EXISTS RATHER THAN REUSING special_box OR refpair.
+  The efficiency fit needs, per run and per event: the Stage-1 admitted trigger
+  count, the cosmic-veto flag, and the delayed-candidate multiplicity. Only
+  EventIndex_<tag>_<run>.parquet carries all three, and neither the special_box nor
+  the refpair deck was run with dump_event_index. Without it:
+
+    * the per-run denominators for 6264 can only be recovered by SUBTRACTING the
+      refpair (0,0,0) row from the special_box (0,0,0) row, because special_box
+      gives 6254/6256/6264/6265 the same position and aggregates them into one row;
+    * the cosmic-veto flag cannot be recovered AT ALL. The
+      PromptAmBeNeutronCandidates_*.csv files have exactly the right row counts
+      (567 for 6264, 5336 for 6265, matching cosmic_events) but carry NO event key,
+      so a cosmic-vetoed event cannot be matched to a candidate-bearing one.
+
+  THE COSMIC-VETO LEAK IS WHY THE FLAG MATTERS. src/ambe/data/icscan.py:368-406
+  documents that the production accumulator counts a cosmic-vetoed event in the
+  NUMERATOR while subtracting it from the DENOMINATOR: a box-passing cluster ordered
+  before the cosmic cluster is banked before the loop's cosmic `break` fires. On run
+  6062, the one run with an EventIndex parquet, that is 410 of 14,638 AmBe triggers
+  and moves the efficiency 61.69 % -> 58.89 %, i.e. 2.8 PERCENTAGE POINTS -- larger
+  than the entire systematic budget of thesis table 8.6. The fit reports both
+  conventions ("production" and "noncosmic") so the size of the effect stays visible.
+
+  EXPECTED STAGE-1 TOTALS. Assert these after every run of this config; they are
+  established three independent ways that close to the event (see the plan file):
+      6264 -> total 589,    cosmic 567,   ambe_triggers 22
+      6265 -> total 20,964, cosmic 5,336, ambe_triggers 15,628
+      6266 -> total 39,391, cosmic 8,710, ambe_triggers 30,681
+  6265's total is also exactly the refpair deck's (0,0,0) total_events, and each
+  run's total equals WaveformFeatures_..._<run>.parquet .accepted.sum().
+
+  DO NOT TRUST THE 149 / 2,150 GATED-TRIGGER FIGURES in data_ambe2v4_special_box.yaml
+  for this analysis. Those are the MVA/ccinc route's numbers, derived in a different
+  delayed window with different cluster features. On the box path the same runs give
+  589 and 20,964. Using 149/2,150 here would shrink the 6265 denominator by ~7x and
+  produce a nonsense efficiency. The two routes genuinely disagree on these runs and
+  that disagreement is unresolved; quote each route's own number and never mix them.
+
+  6264 AND 6265 SHARE A POSITION, so they are staged with distinct sentinel positions
+  below to keep the per-position trigger summary from collapsing them into one row --
+  the same collision that motivated the refpair deck. The fit reads per-run
+  EventIndex parquets and does not depend on the summary's positions, but the summary
+  is still written and must stay readable.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data
+
+stage1:
+  data_directory: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/stage_v4/effpair
+  waveform_dir: /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4
+  file_pattern: 'BeamCluster_(\d+)\.root'
+  # 1 = read the RWM_ TDirectories, 2 = BRF_. The v4 waveform files contain BOTH and
+  # the 700-1200 IC window was tuned on RWM_. Identical to special_box/refpair so the
+  # Stage-1 sample is the same one those decks produced.
+  campaign: 1
+  which_tree: 1
+  selection_mode: ic
+  ic_min: 700
+  ic_max: 1200
+  plot_ic: true
+  save_waveform_samples: false
+  # THE REASON THIS DECK EXISTS. dump_event_index writes one row per Stage-1-admitted
+  # event with is_cosmic and the accepted-cluster counts, which is what the
+  # multiplicity fit consumes. dump_good_events is the Stage-1 timestamp set, kept
+  # for the denominator cross-check against the waveform parquets.
+  dump_event_index: true
+  dump_good_events: true
+  tag: AmBe2.0v4_effpair_box
+  # Sentinel positions: 6264 is given z = -999 purely to stop the per-position
+  # summary aggregating it with 6265. It is NOT a physical coordinate and nothing
+  # downstream reads it -- the fit keys on run number. 6265 and 6266 keep their real
+  # positions, matching special_box and refpair exactly.
+  extra_source_positions:
+    6264: [0.0, 0.0, -999.0]
+    6265: [0.0, 0.0, 0.0]
+    6266: [0.0, 100.0, 0.0]
+    6046: [0.0, 0.0, -998.0]   # sentinel: 6046 is also (0,0,0) but staged in its own pass below
+
+inputs:
+  trigger_summary:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_AmBe2.0v4_effpair_box.csv
+  candidate_csvs:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBe2.0v4_effpair_box_*.csv
+  event_index:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/EventIndex_AmBe2.0v4_effpair_box_*.parquet
+
+cuts:
+  pe_max: 100
+  charge_balance_max: 0.45
+  # Plot-only cut inside src/ambe/plots/basic.py prepare_data. Zero on purpose: it is
+  # NOT part of the box selection, and a hidden >= 10 here would silently change the
+  # multiplicity histogram the efficiency is fit to.
+  plot_min_cluster_hits: 0
+  selection_label: "box cuts PE ≤ 100, CB < 0.45, t ≥ 2 µs, hits ≥ 5"
+
+# ---------------------------------------------------------------------------
+# Thesis chapter 8 multiplicity-fit parameters. Consumed by
+# src/ambe/stats/efficiency_fit.py (ambe stats efficiency --config <this file>).
+# ---------------------------------------------------------------------------
+fit_params:
+  source_run: 6265
+  background_run: 6264
+  crosscheck_run: 6266
+
+  # Multiplicity histogram binning. 6265's observed maximum is 7 candidates in one
+  # acquisition, so 8 bins (0..7) covers the data with no overflow. np.histogram with
+  # range=(0, n_bins) CLIPS rather than discards, so a wider tail would pile into the
+  # last bin rather than vanish -- assert the observed max is < n_bins instead of
+  # relying on that.
+  n_bins: 8
+
+  # Both are computed and both are reported. ambe_triggers = total - cosmic is the
+  # thesis definition (section 8.6) and the headline; total_events is carried because
+  # the choice moves 6265's naive efficiency from 66.9 % to 49.9 % and that
+  # sensitivity must be explicit rather than buried in a denominator.
+  denominator: ambe_triggers        # ambe_triggers | total_events
+  numerator_mode: noncosmic         # noncosmic | production
+
+  # Acquisition window. 6265's candidates span 2,002 -> 66,490 ns, consistent with
+  # 67 us. The code asserts no candidate exceeds this rather than trusting it.
+  acquisition_window_ns: 67000
+  signal_window_start_ns: 2000
+  bkg_window_start_ns: 2000
+  # => background_scale_factor = (67000-2000)/(67000-2000) = 1 here. Kept explicit
+  # because thesis phase2.py:169 rescales the background rate whenever the source and
+  # background windows differ, and that must not silently become wrong if they do.
+
+  # Scan grids. Bracket the measured naive values (0.669 for 6265, 0.227 for 6264)
+  # with wide margin. The driver asserts the chi2 minimum is INTERIOR to both grids
+  # and refuses to quote an edge-pinned best fit.
+  eff_grid:    {min: 0.30, max: 0.95, step: 0.001}
+  lambda_grid: {min: 0.00, max: 0.60, step: 0.002}
+
+  n_throws: 1000000
+  seed: 20260910
+
+  # analytic: closed-form pmf P(M=k) = eps*Pois(k-1;lam) + (1-eps)*Pois(k;lam).
+  # Exact, instant, and free of the MC noise that destabilises delta-chi2 contour
+  # extraction. 'mc' reproduces Teal's toy-throw path and is kept as a cross-check;
+  # the two are asserted to agree.
+  engine: analytic                  # analytic | mc
+
+  # Whether to fluctuate the data-driven background TEMPLATE within its own
+  # per-bin uncertainty on each throw. Teal does NOT (BuildMCProfileBkgDist accepts
+  # BkgDistUnc and ignores it), so false reproduces the thesis. With 6264 at 22 AmBe
+  # triggers the template uncertainty is large, so true is reported alongside.
+  template_fluctuate: false
+
+systematics:
+  # delta_m is computed from the two background models and needs no input.
+  #
+  # delta_bt (thesis eq. 8.9) needs post-cut trigger RATES, i.e. livetime per run.
+  # Livetime is not in any file in this repo: the waveform parquets' `timestamp`
+  # column is absolute epoch with a zero minimum, so its span is not a livetime.
+  # Supply seconds per run here to get delta_bt as the thesis defines it; leave null
+  # and the code falls back to the trigger-COUNT ratio and labels the result as such
+  # rather than silently passing counts off as rates.
+  livetime_s:
+    6264: null
+    6265: null
+    6266: null
+
+  # delta_h, neutron captures on the AmBe source housing (thesis 8.7.2), is
+  # MC-derived: Teal counted 31 of 10k simulated AmBe neutrons capturing on the
+  # housing. No equivalent number exists for this campaign yet. NULL means the code
+  # reports "delta_h: NOT EVALUATED" -- it must never substitute zero, which would
+  # understate the systematic budget while looking complete.
+  delta_h_housing_fraction: null
+  delta_h_housing_fraction_unc: null

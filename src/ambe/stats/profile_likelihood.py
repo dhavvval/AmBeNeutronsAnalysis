@@ -23,9 +23,10 @@ class ProfileLikelihoodBuilder(object):
         Returns a Chi-squared profile given the input profile variables, the background mean neutron rate
         defined with the SetBkgMean method, and a signal distribution.
         '''
-        if self.bkg_pois_mean is None:
-            print("You have to set your background distribution's mean neutron count per window!")
-            return None
+        # NB: the guard on bkg_pois_mean lives in BuildMCProfile, which is the only
+        # method that reads it. BuildMCProfileBkgDist -- the path this method
+        # actually calls -- samples the measured histogram and needs no mean, so
+        # requiring one here rejected perfectly valid data-driven fits.
         ChiSquares = []
         LowestChiSq = 1E12
         LowestChiSqProfile = None
@@ -44,6 +45,9 @@ class ProfileLikelihoodBuilder(object):
         Given the probability of returning a 1 in the signal distribution and the defined background mean in
         self.bkg_pois_mean, build a Monte Carlo-based data distribution.
         '''
+        if self.bkg_pois_mean is None:
+            raise ValueError("BuildMCProfile needs SetBkgMean() -- it samples a "
+                             "Poisson background about that mean.")
         Profile = np.zeros(len(SignalDistribution))
         poisson_means = np.random.normal(self.bkg_pois_mean,self.bkg_pois_mean_unc,randShoots)
         poisson_means = poisson_means[np.where(poisson_means>0)[0]]
@@ -61,13 +65,24 @@ class ProfileLikelihoodBuilder(object):
 
     def BuildMCProfileBkgDist(self,variable,SignalDistribution,BkgDistribution,randShoots,BkgDistUnc=None):
         '''
-        Given the probability of returning a 1 in the signal distribution and the defined background mean in
-        self.bkg_pois_mean, build a Monte Carlo-based data distribution.
+        Given the probability of returning a 1 in the signal distribution and a
+        MEASURED background multiplicity histogram, build a Monte Carlo data
+        distribution.
+
+        BkgDistUnc IS ACCEPTED AND DELIBERATELY UNUSED. The background template's own
+        per-bin uncertainty enters only the chi-square denominator (CalcChiSquare),
+        not the throw. That is the thesis behaviour and is preserved here so this
+        class stays a faithful reference implementation. To fluctuate the template
+        itself, use ambe.stats.efficiency_fit.mc_profile_datadriven(bkg_unc=...).
         '''
         Profile = np.zeros(len(SignalDistribution))
         Bin_values = np.arange(0,len(SignalDistribution),1)
         neutron_counts = np.zeros(int(randShoots))
-        neutron_counts += np.random.choice(Bin_values, int(randShoots),p=BkgDistribution)
+        # np.random.choice demands p sum to exactly 1; counts/sum can land at
+        # 1 +/- 1e-16 and raise. Renormalise defensively.
+        _p = np.asarray(BkgDistribution, dtype=float)
+        _p = _p / _p.sum()
+        neutron_counts += np.random.choice(Bin_values, int(randShoots),p=_p)
         randos = np.random.random(int(randShoots))
         saw_neutrons = np.where(randos<=variable)[0]
         neutron_counts[saw_neutrons]+=1
@@ -75,11 +90,16 @@ class ProfileLikelihoodBuilder(object):
         Profile_normed = Profile/np.sum(Profile)
         return Profile_normed
 
-    def CalcChiSquare(self,MCProfile,SignalDistribution,SignalDistribution_unc,BkgDistUnc):
+    def CalcChiSquare(self,MCProfile,SignalDistribution,SignalDistribution_unc,BkgDistUnc=None):
         '''
         Given a hypothesis profile (MCProfile), calculate the chi-square relative to the
         input signal distribution.
+
+        BkgDistUnc defaults to None because BuildLikelihoodProfile's signature lets it
+        be omitted; without this guard that path raised TypeError on None**2.
         '''
+        if BkgDistUnc is None:
+            BkgDistUnc = np.zeros_like(np.asarray(SignalDistribution_unc))
         return np.sum(((MCProfile-SignalDistribution)/np.sqrt(SignalDistribution_unc**2 + BkgDistUnc**2))**2)
 
 
@@ -154,11 +174,14 @@ class ProfileLikelihoodBuilder2D(object):
 # ambe CLI integration
 # ---------------------------------------------------------------------------
 def run(ctx, argv=None):
-    """Not yet ported to RunContext API. Run this script directly."""
-    raise NotImplementedError(
-        f"This module ({__name__}) has not been ported to the ambe CLI yet. "
-        "Run it directly as a Python script."
-    )
+    """This module is a library, not a command.
+
+    The CLI entry point for the chapter 8 extraction is
+    `ambe stats efficiency`, implemented in ambe.stats.efficiency_fit.
+    """
+    raise SystemExit(
+        "ambe.stats.profile_likelihood is a reference library, not a command. "
+        "Use: ambe stats efficiency --config <config>")
 
 
 def cli(ctx, argv=None):

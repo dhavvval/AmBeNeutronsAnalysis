@@ -40,6 +40,10 @@ COMMANDS: dict[tuple[str, str], str] = {
     ("mc", "timespread"):       "ambe.mc.time_spread:cli",
     ("mc", "hitcomp"):          "ambe.mc.hit_accounting:cli",
     ("data", "process"):        "ambe.data.processor:cli",
+    # Same Stage 2 as `data process`, with no Stage 1. MC has no waveforms, so every
+    # cluster is treated as having passed the good-waveform selection. Separate command
+    # rather than a flag so neither config kind can be run through the wrong path.
+    ("data", "processmc"):      "ambe.data.processor:cli_mc",
     ("data", "eff"):            "ambe.data.eff:cli",
     ("data", "icscan"):         "ambe.data.icscan:cli",
     ("data", "runtable"):       "ambe.data.runtable:cli",
@@ -49,7 +53,9 @@ COMMANDS: dict[tuple[str, str], str] = {
     ("plots", "combined"):      "ambe.plots.combined:cli",
     ("plots", "heatmap"):       "ambe.plots.heatmap:cli",
     ("plots", "phase2"):        "ambe.plots.phase2:cli",
+    ("plots", "efficiency"):    "ambe.plots.efficiency_thesis:cli",
     ("stats", "core"):          "ambe.stats.core:cli",
+    ("stats", "efficiency"):    "ambe.stats.efficiency_fit:cli",
     ("pipeline", "mc"):         "ambe.pipeline:run_mc",
     ("pipeline", "data"):       "ambe.pipeline:run_data",
 }

@@ -1,0 +1,92 @@
+run_name: AmBe2.0v4_effpair_box_6046
+display_label: "AmBe v4 efficiency for run 6046 (the actual run behind the campaign 71.8% at (0,0,0)), box cuts"
+campaign: "AmBe 2.0v4"
+description: >
+  Same deck as data_ambe2v4_effpair_box.yaml (shares its Stage-1 outputs, tag
+  AmBe2.0v4_effpair_box) but points the multiplicity fit at run 6046 as the SOURCE
+  run instead of 6265.
+
+  WHY 6046. It is the run that actually composes the all28_box campaign's (0,0,0)
+  row -- verified 2026-09-10: 6046 alone under the all28_box Stage-1 gate gives
+  total_events=27,987 and unique_neutron_triggers=15,567, matching that row EXACTLY
+  (naive eff 15,567/21,676 = 71.82 %). The processor.py source_positions map lists
+  five other run numbers at (0,0,0) (4499, 4496, 5682, 5740, 6273) but none of them
+  are staged in ambe_output/stage_v4/source28/ -- they belong to older v1/v3/v5
+  campaigns. So THE 71.8% CAMPAIGN NUMBER AT PORT 5 CENTRE IS RUN 6046 ALONE, not a
+  blend of runs.
+
+  BACKGROUND RUN. There is no dedicated no-source run at 6046's exact position in
+  this campaign. 6264 is used here for consistency with the 6265 fit (same
+  background run, so delta_m and the systematic budget are on the same footing), but
+  6264 was taken at Port 5 during the 6265 deployment window, not during 6046's. This
+  is a REAL gap, not an oversight: quote it as "background run 6264 used for both
+  6046 and 6265 for lack of a run-specific background" rather than implying they
+  were taken together.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data
+
+# Reuses the SAME Stage-1 outputs as the primary effpair deck -- do not reprocess
+# separately, just point the fit at a different source_run against the same
+# EventIndex parquets (which now include 6046, staged alongside 6264/6265/6266).
+stage1:
+  data_directory: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/stage_v4/effpair
+  waveform_dir: /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4
+  file_pattern: 'BeamCluster_(\d+)\.root'
+  campaign: 1
+  which_tree: 1
+  selection_mode: ic
+  ic_min: 700
+  ic_max: 1200
+  plot_ic: true
+  save_waveform_samples: false
+  dump_event_index: true
+  dump_good_events: true
+  tag: AmBe2.0v4_effpair_box
+  extra_source_positions:
+    6264: [0.0, 0.0, -999.0]
+    6265: [0.0, 0.0, 0.0]
+    6266: [0.0, 100.0, 0.0]
+    6046: [0.0, 0.0, -998.0]
+
+inputs:
+  trigger_summary:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_AmBe2.0v4_effpair_box.csv
+  candidate_csvs:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBe2.0v4_effpair_box_*.csv
+  event_index:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/EventIndex_AmBe2.0v4_effpair_box_*.parquet
+
+cuts:
+  pe_max: 100
+  charge_balance_max: 0.45
+  plot_min_cluster_hits: 0
+  selection_label: "box cuts PE ≤ 100, CB < 0.45, t ≥ 2 µs, hits ≥ 5"
+
+fit_params:
+  source_run: 6046
+  background_run: 6264
+  crosscheck_run: 6265
+
+  n_bins: 8
+  denominator: ambe_triggers
+  numerator_mode: noncosmic
+
+  acquisition_window_ns: 67000
+  signal_window_start_ns: 2000
+  bkg_window_start_ns: 2000
+
+  eff_grid:    {min: 0.30, max: 0.95, step: 0.001}
+  lambda_grid: {min: 0.00, max: 0.60, step: 0.002}
+
+  n_throws: 1000000
+  seed: 20260910
+  engine: analytic
+  template_fluctuate: false
+
+systematics:
+  livetime_s:
+    6264: null
+    6046: null
+    6265: null
+  delta_h_housing_fraction: null
+  delta_h_housing_fraction_unc: null
