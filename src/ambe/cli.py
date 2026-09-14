@@ -39,6 +39,7 @@ COMMANDS: dict[tuple[str, str], str] = {
     ("mc", "match"):            "ambe.mc.cluster_matching:cli",
     ("mc", "timespread"):       "ambe.mc.time_spread:cli",
     ("mc", "hitcomp"):          "ambe.mc.hit_accounting:cli",
+    ("mc", "timewindows"):      "ambe.mc.hit_time_windows:cli",
     ("data", "process"):        "ambe.data.processor:cli",
     # Same Stage 2 as `data process`, with no Stage 1. MC has no waveforms, so every
     # cluster is treated as having passed the good-waveform selection. Separate command
@@ -54,6 +55,10 @@ COMMANDS: dict[tuple[str, str], str] = {
     ("plots", "heatmap"):       "ambe.plots.heatmap:cli",
     ("plots", "phase2"):        "ambe.plots.phase2:cli",
     ("plots", "efficiency"):    "ambe.plots.efficiency_thesis:cli",
+    # Waveform-stage companion to `plots efficiency`: the Stage-1 AmBe small-PMT
+    # selection, and whether the no-source run's flat background can be subtracted
+    # there rather than in the multiplicity fit.
+    ("plots", "waveformcuts"):  "ambe.plots.waveform_cuts:cli",
     ("stats", "core"):          "ambe.stats.core:cli",
     ("stats", "efficiency"):    "ambe.stats.efficiency_fit:cli",
     ("pipeline", "mc"):         "ambe.pipeline:run_mc",
