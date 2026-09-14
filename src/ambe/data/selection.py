@@ -4,9 +4,13 @@ The neutron cluster definition, as a swappable object.
 WHY THIS MODULE EXISTS. The AmBe analysis is run twice over the same data, changing
 only what counts as a neutron cluster:
 
-    box   0 < clusterPE <= 100,  0 < chargeBalance < 0.45,
-          clusterTime >= 2000 ns,  clusterHits >= 5
-    mva   gbt_score > threshold, and NO PE / CB / time / hits box at all
+    box   0 < clusterPE <= 100,  0 < chargeBalance < 0.45,  clusterHits >= 5
+    mva   gbt_score > threshold, and NO PE / CB / hits box at all
+
+Both are additionally confined to the delayed search window 2000 <= clusterTime <=
+67000 ns. That window is NOT part of either neutron definition -- see
+`Selection.in_window` -- it is the span the efficiency is defined over, and it is
+shared for the same reason the cosmic veto is.
 
 Before this module the box was written out twice, in two files that had to agree and
 had no mechanism forcing them to:
@@ -67,6 +71,13 @@ class CutCriteria:
     ccb_min: float = 0
     ccb_max: float = 0.45
     ct_min: float = 2000
+    # Upper edge of the delayed search window. The efficiency is only DEFINED over
+    # [ct_min, ct_max]: the fitter normalises the background rate over exactly this
+    # span (see stats/efficiency_fit.background_scale_factor), so a candidate
+    # accepted outside it enters the numerator without livetime backing it. Before
+    # this existed the bound was only ever enforced by the input files happening to
+    # stop at 67 us, which is not an enforcement.
+    ct_max: float = 67000
     chits_min: int = 5
     cosmic_ct_threshold: float = 2000
     cosmic_pe_threshold: float = 100
@@ -91,6 +102,19 @@ class Selection:
         return (ct < self.cuts.cosmic_ct_threshold or
                 cpe > self.cuts.cosmic_pe_threshold)
 
+    def in_window(self, ct: float) -> bool:
+        """Is this cluster inside the delayed search window? Closed at both ends.
+
+        LIVES ON THE BASE CLASS, LIKE THE COSMIC VETO, AND FOR THE SAME REASON. The
+        window is not part of the neutron definition -- it is the span over which the
+        efficiency is defined and over which the fitter normalises the background
+        rate. If `box` and `mva` searched different windows their efficiencies would
+        not be comparable, which is the entire point of running both. Note this
+        matters more for `mva`, which has no time cut of its own at all and would
+        otherwise inherit whatever span the scoring stage happened to cover.
+        """
+        return self.cuts.ct_min <= ct <= self.cuts.ct_max
+
     def accepts(self, cpe, ccb, ct, chits, key) -> bool:
         raise NotImplementedError
 
@@ -109,14 +133,17 @@ class BoxSelection(Selection):
     def __init__(self, cuts: Optional[CutCriteria] = None):
         super().__init__(cuts)
         c = self.cuts
+        # Derived from the cut values, never hand-written, so the label cannot drift
+        # from what is actually applied.
         self.label = (f"box cuts PE ≤ {c.pe_max:g}, CB < {c.ccb_max:g}, "
-                      f"t ≥ {c.ct_min/1000:g} µs, hits ≥ {c.chits_min:g}")
+                      f"{c.ct_min/1000:g} ≤ t ≤ {c.ct_max/1000:g} µs, "
+                      f"hits ≥ {c.chits_min:g}")
 
     def accepts(self, cpe, ccb, ct, chits, key=None) -> bool:
         c = self.cuts
         return (c.pe_min < cpe <= c.pe_max and
                 c.ccb_min < ccb < c.ccb_max and
-                ct >= c.ct_min and chits >= c.chits_min)
+                self.in_window(ct) and chits >= c.chits_min)
 
 
 class MvaSelection(Selection):
@@ -183,6 +210,12 @@ class MvaSelection(Selection):
                 "cluster_key(run, eventTankTime, clusterTime_ns). A box-style call "
                 "with key=None would silently accept everything.")
         self.n_queried += 1
+        # The search WINDOW still applies even though the box does not. See
+        # Selection.in_window: this is the span the efficiency is defined over, not
+        # part of the neutron definition. Checked before the score so that a cluster
+        # outside the window is never counted as "scored and rejected" below.
+        if not self.in_window(ct):
+            return False
         if key in self.accepted:
             return True
         # CRITICAL BOOKKEEPING. A cluster this pipeline finds but the scoring stage
