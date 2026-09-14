@@ -18,7 +18,7 @@ from scipy.optimize import curve_fit
 from scipy.stats import chi2
 
 from ..context import RunContext
-from ..io import inputs_from_ctx, load_csvs
+from ..io import inputs_from_ctx, load_csvs, event_key_columns as _event_key
 from ..plotting import save_plot, set_style
 
 
@@ -58,12 +58,23 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     # (A `sel = (pe < pe_max) & (ccb < cb_max)` mask used to be computed here and
     # never used anywhere -- removed rather than left to imply a cut is applied.)
 
-    event_counts = df.groupby("eventTankTime")["clusterTime"].transform("count")
+    # THE EVENT KEY IS (run, eventTankTime), NEVER eventTankTime ALONE.
+    # In data, eventTankTime is a globally unique ns timestamp and the run column is
+    # redundant -- grouping on the pair is a strict refinement that changes nothing.
+    # In MC it is eventNumber (0-999, because the MC's eventTimeTank is identically 0),
+    # so grouping on it alone would merge one event from EVERY run into a single group:
+    # the multiplicity histogram would peak near the number of runs instead of near 1,
+    # and every delta_t would be a difference between clusters in unrelated runs. That
+    # failure produces a plausible-looking plot, not an error, which is why the key is
+    # built here rather than assumed.
+    ekey = _event_key(df, "plots.combined")
+    event_counts = df.groupby(ekey)["clusterTime"].transform("count")
     multi = df[event_counts > 1].copy()
-    multi["first_cluster_time"] = multi.groupby("eventTankTime")["clusterTime"].transform("min")
+    multi["first_cluster_time"] = multi.groupby(_event_key(multi, "plots.combined"))[
+        "clusterTime"].transform("min")
     multi["delta_t"] = multi["clusterTime"] - multi["first_cluster_time"]
     delta_t_values = multi.loc[multi["delta_t"] > 0, "delta_t"]
-    neutron_multiplicity = df["eventTankTime"].value_counts()
+    neutron_multiplicity = df.groupby(ekey).size()
 
     # 1. Delta-t between first and subsequent clusters
     fig, ax = plt.subplots()

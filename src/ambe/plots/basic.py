@@ -30,9 +30,13 @@ class AmBeNeutronAnalyzer:
                  output_pdf: str = 'AmBevtestv4ch10.pdf',
                  campaign_label: str = 'AmBe 2.0v4',
                  min_cluster_hits: int = 10,
-                 selection_label: str = ''):
+                 selection_label: str = '',
+                 apply_hitid_swap: bool = True):
         self.data_directory = data_directory
         self.output_pdf = output_pdf
+        # The 453/455 hitID swap is a DATA-specific PMT correction; see load_and_group_data.
+        # Default True so every existing data caller is unaffected; MC configs set false.
+        self.apply_hitid_swap = bool(apply_hitid_swap)
         # Plot-only hits cut applied in prepare_data. See the note there: it is not
         # part of any published selection, so it has to be stated, not assumed.
         self.min_cluster_hits = min_cluster_hits
@@ -142,8 +146,13 @@ class AmBeNeutronAnalyzer:
                 continue
 
             ###### Correct hitID swap as per johannes' suggestion ########
+            # DATA-SPECIFIC PMT correction, and a blunt one: the test below matches any
+            # hitID string merely CONTAINING "453" or "455", so 1453 and 4553 trip it
+            # too. MC detector IDs would be silently relabelled by it, so the MC configs
+            # set cuts.apply_hitid_swap: false. Default stays True for every data caller.
             id1, id2 = 453, 455
-            if df['hitID'].astype(str).str.contains(f'{id1}|{id2}').any():
+            if self.apply_hitid_swap and \
+                    df['hitID'].astype(str).str.contains(f'{id1}|{id2}').any():
                 original_hitids = df['hitID'].copy()
                 df['hitID'] = (df['hitID'].astype(str)
                               .str.replace(f'{id1}', 'TEMP', regex=False)
@@ -152,6 +161,15 @@ class AmBeNeutronAnalyzer:
                 
                 if (df['hitID'] != original_hitids).any():
                     print(f"Swapped hitID {id1} and {id2} in file: {filename}")
+
+            # The run number is parsed above and was then thrown away. Keep it: pooled
+            # per-position frames span many runs, and the event key must be
+            # (run, eventTankTime). In MC eventTankTime is eventNumber (0-999), so
+            # without this every one of the 50 files at a position would contribute an
+            # event to the same group -- drop_duplicates below would keep 1,000 of
+            # 50,000 events and the multiplicity would read ~50 for every event.
+            if 'run' not in df.columns:
+                df['run'] = run_number
 
             x, y, z = df["sourceX"].iloc[0], df["sourceY"].iloc[0], df["sourceZ"].iloc[0]
             source_key = (round(x, 3), round(y, 3), round(z, 3))
@@ -183,9 +201,27 @@ class AmBeNeutronAnalyzer:
             print(f"  plot cut clusterHits >= {self.min_cluster_hits}: "
                   f"{n_before:,} -> {len(combined_df):,} clusters")
 
+        # THE EVENT KEY IS (run, eventTankTime), NEVER eventTankTime ALONE.
+        # These per-position frames pool every run at that position. In data
+        # eventTankTime is a globally unique ns timestamp and adding run changes
+        # nothing; in MC it is eventNumber (0-999), so eventTankTime alone would merge
+        # one event from each of the 50 files at this position into a single group --
+        # drop_duplicates would keep 1,000 of 50,000 events and every multiplicity would
+        # read ~50. A single string key is used so groupby / unique / isin /
+        # drop_duplicates all work unchanged below.
+        if 'run' in combined_df.columns:
+            combined_df = combined_df.copy()
+            combined_df['_evkey'] = (combined_df['run'].astype(str) + ':'
+                                     + combined_df['eventTankTime'].astype(str))
+        else:
+            print("[plots.basic] WARNING: no `run` column; keying events on "
+                  "eventTankTime alone. Correct only for real data.")
+            combined_df = combined_df.copy()
+            combined_df['_evkey'] = combined_df['eventTankTime'].astype(str)
+
         EventID = combined_df['eventID'].value_counts()
-        EventTime = combined_df['eventTankTime'].value_counts()
-        event_counts = combined_df.groupby('eventTankTime')['clusterTime'].transform('count')
+        EventTime = combined_df['_evkey'].value_counts()
+        event_counts = combined_df.groupby('_evkey')['clusterTime'].transform('count')
         PE = combined_df['clusterPE']
         CCB = combined_df['clusterChargeBalance']
         CT = combined_df['clusterTime']
@@ -194,8 +230,8 @@ class AmBeNeutronAnalyzer:
         CvY = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[1]))
         CvZ = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))
         
-        # Keep one entry per eventTankTime (single or multi-cluster)
-        unique_events_df = combined_df.drop_duplicates(subset='eventTankTime').copy()
+        # Keep one entry per (run, eventTankTime) event
+        unique_events_df = combined_df.drop_duplicates(subset='_evkey').copy()
 
         # Parse neutronTofCorrection into arrays
         if 'neutronTofCorrection' not in unique_events_df.columns:
@@ -229,7 +265,7 @@ class AmBeNeutronAnalyzer:
         hit_delta_t represents the time spread of individual hits within a cluster,
         while delta_t_values represents the time difference between the first cluster and subsequent clusters in multi-cluster events.
         '''
-        single_cluster_events = combined_df[event_counts == 1]['eventTankTime'].unique()
+        single_cluster_events = combined_df[event_counts == 1]['_evkey'].unique()
         multi_cluster_df = combined_df[event_counts > 1].copy()
         '''PE = multi_cluster_df['clusterPE']
         CCB = multi_cluster_df['clusterChargeBalance']
@@ -252,14 +288,14 @@ class AmBeNeutronAnalyzer:
             valid_arrays = [arr for arr in multi_cluster_df["neutronTofCorrection"].values if len(arr) > 0]
             all_neutron_tof = np.concatenate(valid_arrays) if valid_arrays else np.array([])
 
-        multi_cluster_df['first_cluster_time'] = multi_cluster_df.groupby('eventTankTime')['clusterTime'].transform('min')
+        multi_cluster_df['first_cluster_time'] = multi_cluster_df.groupby('_evkey')['clusterTime'].transform('min')
         multi_cluster_df['delta_t'] = multi_cluster_df['clusterTime'] - multi_cluster_df['first_cluster_time']
         multi_cluster_df['is_first_cluster'] = multi_cluster_df['clusterTime'] == multi_cluster_df['first_cluster_time']
         multi_cluster_df['cluster_type'] = np.where(multi_cluster_df['is_first_cluster'], 'first', 'subsequent')
         #subsequent_clusters = multi_cluster_df[(multi_cluster_df['delta_t'] < 1) & (multi_cluster_df['cluster_type'] == 'subsequent')]
         first_clusters = multi_cluster_df[(multi_cluster_df['delta_t'] < 1) &(multi_cluster_df['cluster_type'] == 'first')]
-        valid_event_ids = first_clusters['eventTankTime'].unique()
-        subsequent_clusters = multi_cluster_df[(multi_cluster_df['cluster_type'] == 'subsequent') & (multi_cluster_df['eventTankTime'].isin(valid_event_ids))]
+        valid_event_ids = first_clusters['_evkey'].unique()
+        subsequent_clusters = multi_cluster_df[(multi_cluster_df['cluster_type'] == 'subsequent') & (multi_cluster_df['_evkey'].isin(valid_event_ids))]
 
 
         delta_t_values = multi_cluster_df[multi_cluster_df['delta_t'] > 0]['delta_t']
@@ -662,7 +698,7 @@ class AmBeNeutronAnalyzer:
         ydata = counts[fit_mask]
         ydata_errors = np.sqrt(ydata)
         ydata_errors[ydata_errors == 0] = 1e-10
-        
+
         return xdata, ydata, ydata_errors, counts, bin_centers
 
     @staticmethod
@@ -979,7 +1015,7 @@ class AmBeNeutronAnalyzer:
                 except:
                     # Fallback: just count total events directly
                     combined_df = pd.concat(df_list, ignore_index=True)
-                    Info.loc[i, 'LenEvents'] = len(combined_df['eventTankTime'].unique()) if 'eventTankTime' in combined_df.columns else len(combined_df)
+                    Info.loc[i, 'LenEvents'] = len(combined_df['_evkey'].unique()) if '_evkey' in combined_df.columns else len(combined_df)
         
         print("LMFIT Summary")
         print(Info)
@@ -1231,10 +1267,14 @@ def run(ctx, argv=None):
     mch = ctx.cuts.get("plot_min_cluster_hits", 10)
     print(f"[plots.basic] plot-only cut clusterHits >= {mch}"
           f"{'  (disabled)' if not mch else ''}")
+    hitid_swap = bool(ctx.cuts.get("apply_hitid_swap", True))
+    if not hitid_swap:
+        print("[plots.basic] hitID 453/455 swap DISABLED (data-specific PMT correction)")
     analyzer = AmBeNeutronAnalyzer(data_directory=data_dir, output_pdf=out_pdf,
                                    min_cluster_hits=int(mch or 0),
                                    campaign_label=ctx.campaign or 'AmBe 2.0v4',
-                                   selection_label=ctx.cuts.get('selection_label', ''))
+                                   selection_label=ctx.cuts.get('selection_label', ''),
+                                   apply_hitid_swap=hitid_swap)
     fc = ctx.fit_params
     if fc:
         analyzer.update_fitting_config(**{k: v for k, v in fc.items()

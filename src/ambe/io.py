@@ -88,6 +88,37 @@ def inputs_from_ctx(ctx: RunContext, key: str) -> List[Path]:
     return resolve_inputs(ctx.inputs[key])
 
 
+def event_key_columns(df: "pd.DataFrame", who: str = "ambe") -> List[str]:
+    """The columns that identify one EVENT in a pooled candidate table.
+
+    Always (run, eventTankTime) -- never eventTankTime alone.
+
+    In real data eventTankTime is a globally unique ns timestamp, so adding `run` is a
+    strict refinement that changes no result. In MC it is `eventNumber` (0-999, because
+    the MC's own eventTimeTank is identically 0), so eventTankTime alone would collapse
+    one event from EVERY run into a single group. That mis-grouping does not raise: it
+    silently produces a multiplicity histogram peaking near the number of pooled runs
+    and delta_t values taken between clusters of unrelated runs.
+
+    `run` is written by data/processor.py. Older candidate CSVs predate that column, so
+    it is recovered from the `_source_file` name (..._<run>.csv) that load_csvs attaches.
+    Failing that we fall back to eventTankTime alone and say so loudly -- correct for
+    legacy data, wrong for MC, and the caller deserves to know which it got.
+    """
+    if "run" in df.columns:
+        return ["run", "eventTankTime"]
+    if "_source_file" in df.columns:
+        run = df["_source_file"].str.extract(r"_(\d+)\.csv$", expand=False)
+        if run.notna().all():
+            df["run"] = run.astype("int64")
+            return ["run", "eventTankTime"]
+    print(f"[{who}] WARNING: no `run` column and none recoverable from _source_file; "
+          f"grouping events on eventTankTime alone. That is correct only if "
+          f"eventTankTime is a globally unique timestamp (real data). For MC it merges "
+          f"one event per run into each group.")
+    return ["eventTankTime"]
+
+
 def load_csvs(paths: Iterable[PathLike], **read_csv_kwargs) -> pd.DataFrame:
     """Concat-read a list of CSV files, adding a `_source_file` column."""
     frames = []
