@@ -71,9 +71,37 @@ class AmBeNeutronProcessing:
     def __init__(self, config: Optional[WaveformConfig] = None,
                  cuts: Optional[CutCriteria] = None,
                  selection: Optional[Selection] = None,
-                 extra_positions: Optional[Dict[int, Tuple[float, float, float]]] = None):
+                 extra_positions: Optional[Dict[int, Tuple[float, float, float]]] = None,
+                 cosmic_veto: bool = True,
+                 legacy_ordering: bool = False):
         self.config = config or WaveformConfig()
         self.cuts = cuts or CutCriteria()
+        # ORDER-DEPENDENCE SWITCH. False (default) runs the cluster loop in two
+        # passes: decide the cosmic verdict over ALL clusters first, then collect
+        # candidates only if the event survived. True reproduces the original
+        # single-pass loop, where the cosmic `break` only fired when iteration
+        # REACHED the cosmic cluster, so a candidate ordered before it was already
+        # banked -- the event then incremented cosmic_events (subtracted from the
+        # denominator) AND the candidate counter (the numerator). See
+        # icscan.py:373-381; on run 6062 that is 353 events, 2.8 pp.
+        #
+        # Kept because AmBeTriggerSummary_<tag>.csv and the published 57.23 %
+        # campaign number were produced by that loop. Reproducing them is a
+        # deliberate act, so this never defaults on.
+        self.legacy_ordering = bool(legacy_ordering)
+        # DATASET-level knob, deliberately NOT a per-selection one. selection.py:20-25
+        # keeps `cosmic()` on the base class and off both subclasses so that box and MVA
+        # always share a denominator -- that is the whole point of running both. Flipping
+        # this flips it IDENTICALLY for both decks, so the shared-denominator property is
+        # preserved and the comparison stays honest.
+        #
+        # It exists only because MC has no waveform stage. In MC there are no cosmics and
+        # no AmBe 4.4 MeV gamma (every event has exactly one primary, PDG 2112), so the
+        # sub-2us clusters this veto removes are neutron-induced prompt light, not cosmic
+        # muons. ON keeps the MC comparable to the v4 data decks; OFF is what the physics
+        # of this sample actually calls for. We run both and report the difference.
+        # Defaults True so every existing data caller is untouched.
+        self.cosmic_veto = bool(cosmic_veto)
         # Per-run positions that must NOT join the campaign map. See
         # get_source_location for why the special runs are kept out of it.
         self.extra_positions = dict(extra_positions or {})
@@ -202,7 +230,15 @@ class AmBeNeutronProcessing:
     def cosmic_cut(self, ct: float, cpe: float) -> bool:
         """Cosmic veto. Identical for every selection -- it is a Stage-1 cut that
         sits upstream of the neutron definition, so it must not vary between the two
-        analyses or their efficiencies stop sharing a denominator."""
+        analyses or their efficiencies stop sharing a denominator.
+
+        `self.cosmic_veto=False` disables it for the WHOLE dataset (see __init__ for
+        why that is a dataset-level and not a per-selection switch). Selection.cosmic
+        itself is deliberately left alone, so the box/MVA objects still cannot diverge
+        from each other however this is set.
+        """
+        if not self.cosmic_veto:
+            return False
         return self.selection.cosmic(ct, cpe)
 
     def pairwise_relative_direction(self, hitX, hitY, hitZ, hitPE, hitT) -> Tuple[np.ndarray]:
@@ -777,19 +813,42 @@ class AmBeNeutronProcessing:
         plt.savefig(f'verbose/IC_adjusted_AcceptedEvents_{runinfo}.png', dpi=300)
         plt.close()
 
-    def load_event_data(self, file_path: str, which_tree: int = 0) -> Dict[str, np.ndarray]:
+    def load_event_data(self, file_path: str, which_tree: int = 0,
+                        event_key_branch: str = "eventTimeTank",
+                        expect_run: Optional[int] = None) -> Dict[str, np.ndarray]:
         """
         Load event data from ROOT file with memory-efficient approach.
-        
+
         Args:
             file_path: Path to ROOT file
             which_tree: Tree type (0 or other)
-            
+            event_key_branch: Which branch supplies the per-event identity. Data keeps
+                the default `eventTimeTank`, a globally unique ns timestamp.
+
+                MC HAS NO SUCH TIMESTAMP: `eventTimeTank` is 0 in every event of the
+                AmBe MC production, so `eventNumber` (0-999, unique within a file) is
+                substituted here. This is the ONLY place the substitution happens, on
+                purpose: `process_events_efficient` uses ETT in six places (the Stage-1
+                gate, the MVA cluster_key, `event_clusters`, `repeated_event_id`, the
+                event-index row, and `_append_cluster_data`) and patching them one by
+                one is six chances to miss one. With a raw ETT of 0, `event_clusters`
+                would feed one event's hits into another's multi-cluster ToF path and
+                `repeated_event_id` would count multiple-neutron events exactly ONCE
+                for the whole dataset.
+
+                The substitution is legitimate only under the invariant that
+                (run, eventNumber) is globally unique. Guards 1-3 below establish the
+                per-file half; the caller (run_mc) establishes that run numbers are
+                unique across files.
+            expect_run: If given, assert the tree's own `runNumber` matches. Catches a
+                renamed or misfiled ROOT file before it is silently attributed to the
+                wrong source position.
+
         Returns:
             Dictionary containing event data arrays
         """
         print(f'Loading AmBe event data from {file_path}...')
-        
+
         with uproot.open(file_path) as file_1:
             Event = file_1["Event"]
             
@@ -821,7 +880,38 @@ class AmBeNeutronProcessing:
                     "hitPE": Event["Cluster_HitPE"].array(library="np"),
                     "hitDetID": Event["Cluster_HitDetID"].array(library="np"),
                 })
-        
+
+            if expect_run is not None:
+                got = int(Event["runNumber"].array(library="np", entry_stop=1)[0])
+                if got != int(expect_run):
+                    raise SystemExit(
+                        f"[load_event_data] {file_path}: tree runNumber is {got} but the "
+                        f"manifest says {expect_run}. A misfiled ROOT file would be "
+                        f"attributed to the wrong source position -- refusing to guess.")
+
+        if event_key_branch != "eventTimeTank":
+            ett_raw = data["eventTimeTank"]
+            key = data[event_key_branch]
+            # (1) Never overwrite a real key.
+            if not np.all(ett_raw == 0):
+                raise SystemExit(
+                    f"[load_event_data] {file_path}: eventTimeTank is not identically 0, "
+                    f"so substituting {event_key_branch!r} would DISCARD a real event key. "
+                    f"This file is not the AmBe MC production.")
+            # (2) Uniqueness within the file -- otherwise (run, key) is not unique either.
+            if len(np.unique(key)) != len(key):
+                raise SystemExit(
+                    f"[load_event_data] {file_path}: {event_key_branch!r} is not unique "
+                    f"within the file ({len(np.unique(key))} distinct of {len(key)}); "
+                    f"(run, {event_key_branch}) would collide.")
+            # (3) cluster_key() does int(...); a negative key silently collides with
+            #     nothing in particular and is impossible to notice downstream.
+            if key.min() < 0:
+                raise SystemExit(
+                    f"[load_event_data] {file_path}: {event_key_branch!r} has negative "
+                    f"values (min {key.min()}); the cluster key must be non-negative.")
+            data["eventTimeTank"] = key.astype("int64")
+
         return data
 
     def process_events_efficient(self, event_data: Dict[str, np.ndarray],
@@ -834,7 +924,12 @@ class AmBeNeutronProcessing:
 
         Args:
             event_data: Dictionary containing event data
-            good_events: Set of good event timestamps
+            good_events: Set of good event timestamps, or None to admit every event.
+                None disables the Stage-1 waveform gate entirely and is passed ONLY by
+                the MC entry point (run_mc): MC has no waveforms, so there is no IC
+                window to apply and every cluster is treated as having passed the good-
+                waveform selection. `run()` never passes None -- a data deck silently
+                ungated would report an efficiency against the wrong denominator.
             x_pos, y_pos, z_pos: Source position coordinates
             efficiency_data: Optional efficiency tracking dictionary
             run: Run number. Required by the MVA selection, which identifies a
@@ -894,7 +989,7 @@ class AmBeNeutronProcessing:
         print(f"Processing {len(EN)} events...")
         
         for i in range(len(EN)):
-            if ETT[i] not in good_events:
+            if good_events is not None and ETT[i] not in good_events:
                 continue
 
             stats['total_events'] += 1
@@ -905,39 +1000,86 @@ class AmBeNeutronProcessing:
             event_has_cosmic = False
             event_neutron_candidates = []
             event_multiple_candidates = []
-            
-            for k in range(len(CT[i])):
-                
-                # Check cosmic cut first (highest priority)
-                if self.cosmic_cut(CT[i][k], CPE[i][k]):
-                    processed_data['prompt_cluster_time'].append(CT[i][k])
-                    processed_data['prompt_cluster_charge'].append(CPE[i][k])
-                    processed_data['prompt_cluster_QB'].append(CCB[i][k])
-                    
-                    if not event_has_cosmic:  # Count only once per event
-                        stats['cosmic_events'] += 1
-                        event_has_cosmic = True
-                        if efficiency_data is not None:
-                            efficiency_data[key][1] += 1
-                    break  # Skip other cuts for this event
-                
-                # Identify this cluster for the MVA score lookup. Built once and
-                # reused by both cuts; the box selection ignores it.
-                ckey = (cluster_key(run, ETT[i], CT[i][k])
-                        if run is not None else None)
 
-                # Check single neutron cuts
-                if self.ambe_single_cut(CPE[i][k], CCB[i][k], CT[i][k], CN[i],
-                                        CH[i][k], ckey):
-                    if CPE[i][k] != float('-inf'):
-                        event_neutron_candidates.append(k)
+            if self.legacy_ordering:
+                # ORIGINAL SINGLE-PASS LOOP, ORDER-DEPENDENT ON PURPOSE. Retained
+                # verbatim so AmBeTriggerSummary_<tag>.csv and the published
+                # 57.23 % number stay reproducible. Do not "fix" this branch.
+                for k in range(len(CT[i])):
 
-                # Check multiple neutron cuts
-                if self.ambe_multiple_cut(CPE[i][k], CCB[i][k], CT[i][k], CN[i],
-                                          CH[i][k], ckey):
-                    if CPE[i][k] != float('-inf'):
-                        event_multiple_candidates.append(k)
-            
+                    # Check cosmic cut first (highest priority)
+                    if self.cosmic_cut(CT[i][k], CPE[i][k]):
+                        processed_data['prompt_cluster_time'].append(CT[i][k])
+                        processed_data['prompt_cluster_charge'].append(CPE[i][k])
+                        processed_data['prompt_cluster_QB'].append(CCB[i][k])
+
+                        if not event_has_cosmic:  # Count only once per event
+                            stats['cosmic_events'] += 1
+                            event_has_cosmic = True
+                            if efficiency_data is not None:
+                                efficiency_data[key][1] += 1
+                        break  # Skip other cuts for this event
+
+                    # Identify this cluster for the MVA score lookup. Built once and
+                    # reused by both cuts; the box selection ignores it.
+                    ckey = (cluster_key(run, ETT[i], CT[i][k])
+                            if run is not None else None)
+
+                    # Check single neutron cuts
+                    if self.ambe_single_cut(CPE[i][k], CCB[i][k], CT[i][k], CN[i],
+                                            CH[i][k], ckey):
+                        if CPE[i][k] != float('-inf'):
+                            event_neutron_candidates.append(k)
+
+                    # Check multiple neutron cuts
+                    if self.ambe_multiple_cut(CPE[i][k], CCB[i][k], CT[i][k], CN[i],
+                                              CH[i][k], ckey):
+                        if CPE[i][k] != float('-inf'):
+                            event_multiple_candidates.append(k)
+            else:
+                # PASS 1 -- the cosmic verdict, over EVERY cluster. Whether an event
+                # is vetoed is a property of the event, so it cannot depend on which
+                # cluster the iteration happens to reach first.
+                cosmic_ks = [k for k in range(len(CT[i]))
+                             if self.cosmic_cut(CT[i][k], CPE[i][k])]
+
+                if cosmic_ks:
+                    event_has_cosmic = True
+                    stats['cosmic_events'] += 1          # once per event, as before
+                    if efficiency_data is not None:
+                        efficiency_data[key][1] += 1
+                    # Record every prompt cluster, not just whichever one the old
+                    # loop broke on. "The first cosmic cluster in array order" is
+                    # not a physical quantity; the set of them is.
+                    for k in cosmic_ks:
+                        processed_data['prompt_cluster_time'].append(CT[i][k])
+                        processed_data['prompt_cluster_charge'].append(CPE[i][k])
+                        processed_data['prompt_cluster_QB'].append(CCB[i][k])
+
+                # PASS 2 -- candidates, ONLY for events that survived pass 1. A
+                # vetoed event contributes no candidates at all, so it can never
+                # land in the numerator while also being subtracted from the
+                # denominator.
+                else:
+                    for k in range(len(CT[i])):
+                        # Identify this cluster for the MVA score lookup. Built once
+                        # and reused by both cuts; the box selection ignores it.
+                        ckey = (cluster_key(run, ETT[i], CT[i][k])
+                                if run is not None else None)
+
+                        # Check single neutron cuts
+                        if self.ambe_single_cut(CPE[i][k], CCB[i][k], CT[i][k],
+                                                CN[i], CH[i][k], ckey):
+                            if CPE[i][k] != float('-inf'):
+                                event_neutron_candidates.append(k)
+
+                        # Check multiple neutron cuts
+                        if self.ambe_multiple_cut(CPE[i][k], CCB[i][k], CT[i][k],
+                                                  CN[i], CH[i][k], ckey):
+                            if CPE[i][k] != float('-inf'):
+                                event_multiple_candidates.append(k)
+
+
             # Collect hit data for all clusters in this event for multi-cluster ToF calculation
             all_candidates = event_neutron_candidates + event_multiple_candidates
             if all_candidates:
@@ -1063,7 +1205,9 @@ class AmBeNeutronProcessing:
                                       plot_ic_distributions: bool = True,
                                       dump_features: bool = True,
                                       dump_good_events: bool = False,
-                                      dump_event_index: bool = False) -> Dict[str, Any]:
+                                      dump_event_index: bool = False,
+                                      run_manifest: Optional[List[Dict[str, Any]]] = None,
+                                      event_key_branch: str = "eventTimeTank") -> Dict[str, Any]:
         """
         Complete analysis pipeline that replicates AnalysisRun.py functionality.
         This integrates waveform analysis, event processing, and CSV output generation.
@@ -1095,31 +1239,57 @@ class AmBeNeutronProcessing:
                 window. total_events and unique_neutron_triggers are already
                 recoverable from the feature parquet and the candidate CSVs;
                 cosmic_events is not, and ambe_triggers needs it.
+            run_manifest: MC ONLY. A list of {"run", "path", "position"} dicts. When
+                given, the directory scan is replaced by this list and Stage 1 is
+                skipped entirely: there are no waveforms, so `good_events` is None and
+                every event is admitted. `run()` never passes it, so the data path is
+                bit-for-bit unchanged.
+            event_key_branch: forwarded to load_event_data. See there for why MC needs
+                eventNumber and what would break if the substitution were made anywhere
+                else.
 
         Returns:
             Dictionary with complete analysis results
         """
+        mc_mode = run_manifest is not None
+
         print("="*80)
         print("STARTING COMPLETE AmBe NEUTRON ANALYSIS PIPELINE")
         print("="*80)
-        print(f"Selection mode : {self.config.selection_mode}")
-        print(f"IC window      : {self.config.pulse_gamma} < IC_adjusted < {self.config.pulse_max}")
-        if self.config.selection_mode != 'ic':
-            print(f"fprompt window : {self.config.fprompt_min} < fprompt < {self.config.fprompt_max} "
-                  f"(prompt bins {self.config.fprompt_prompt_start}-{self.config.fprompt_prompt_end}, "
-                  f"total to {self.config.fprompt_total_end})")
+        if mc_mode:
+            # Nothing about the IC window applies -- saying so beats printing a window
+            # that was never consulted.
+            print("Stage 1        : NONE (MC: no waveforms; every event admitted)")
+            print(f"Event key      : {event_key_branch}")
+            print(f"Cosmic veto    : {'ON' if self.cosmic_veto else 'OFF'}")
+        else:
+            print(f"Selection mode : {self.config.selection_mode}")
+            print(f"IC window      : {self.config.pulse_gamma} < IC_adjusted < {self.config.pulse_max}")
+            if self.config.selection_mode != 'ic':
+                print(f"fprompt window : {self.config.fprompt_min} < fprompt < {self.config.fprompt_max} "
+                      f"(prompt bins {self.config.fprompt_prompt_start}-{self.config.fprompt_prompt_end}, "
+                      f"total to {self.config.fprompt_total_end})")
         print(f"Feature dump   : {'on' if dump_features else 'off'}")
 
         run_numbers = []
         file_names = []
-        
-        for file_name in os.listdir(data_directory):
-            match = file_pattern.match(file_name)
-            if match:
-                run_number = int(match.group(1))
-                run_numbers.append(str(run_number))
-                file_names.append(os.path.join(data_directory, file_name))
-        
+
+        if mc_mode:
+            # No waveform stage, so nothing to plot or dump from it.
+            plot_ic_distributions = False
+            dump_features = False
+            dump_good_events = False
+            for entry in run_manifest:
+                run_numbers.append(str(entry["run"]))
+                file_names.append(str(entry["path"]))
+        else:
+            for file_name in os.listdir(data_directory):
+                match = file_pattern.match(file_name)
+                if match:
+                    run_number = int(match.group(1))
+                    run_numbers.append(str(run_number))
+                    file_names.append(os.path.join(data_directory, file_name))
+
         if not run_numbers:
             raise ValueError(f"No files found matching pattern in {data_directory}")
         
@@ -1142,34 +1312,44 @@ class AmBeNeutronProcessing:
         os.makedirs('verbose', exist_ok=True)
         # Step 1: Waveform Analysis for All Runs and Process Tank data
         print("\n" + "="*60)
-        print("STEP 1: Waveform Analysis for All Runs")
+        print("STEP 1: Waveform Analysis for All Runs" if not mc_mode
+              else "STEP 1: SKIPPED (MC has no waveforms)")
         print("="*60)
-        
+
         for c1, run in enumerate(run_numbers):
 
-            run_result = self.process_run_waveforms(
-                run, waveform_dir, campaign,
-                save_waveform_samples=save_waveform_samples,
-                feature_dump_path=(
-                    f'TriggerSummary/WaveformFeatures_{runinfo}_{run}.parquet'
-                    if dump_features else None
-                ),
-            )
-         
-            # Get waveform results for this run
-            good_events = run_result["good_events"]
-            x_pos, y_pos, z_pos = run_result["source_position"]
+            if mc_mode:
+                # No waveform stage at all. good_events=None makes the Stage-1 gate in
+                # process_events_efficient a no-op, which is the whole "every cluster is
+                # assumed to pass the good-waveform selection" premise of this deck.
+                good_events = None
+                x_pos, y_pos, z_pos = run_manifest[c1]["position"]
+                run_result = None
+            else:
+                run_result = self.process_run_waveforms(
+                    run, waveform_dir, campaign,
+                    save_waveform_samples=save_waveform_samples,
+                    feature_dump_path=(
+                        f'TriggerSummary/WaveformFeatures_{runinfo}_{run}.parquet'
+                        if dump_features else None
+                    ),
+                )
+
+                # Get waveform results for this run
+                good_events = run_result["good_events"]
+                x_pos, y_pos, z_pos = run_result["source_position"]
             file_path = file_names[c1]
 
-            waveform_summary_list.append({
-                "run": int(run),
-                "sourceX": x_pos,
-                "sourceY": y_pos,
-                "sourceZ": z_pos,
-                "accepted_waveforms": run_result["accepted_events"],
-                "rejected_waveforms": run_result["rejected_events"],
-                "total_waveforms": run_result["total_waveforms"]
-            })
+            if not mc_mode:
+                waveform_summary_list.append({
+                    "run": int(run),
+                    "sourceX": x_pos,
+                    "sourceY": y_pos,
+                    "sourceZ": z_pos,
+                    "accepted_waveforms": run_result["accepted_events"],
+                    "rejected_waveforms": run_result["rejected_events"],
+                    "total_waveforms": run_result["total_waveforms"]
+                })
 
             if plot_ic_distributions:
                 if run_result["ic_values"]:
@@ -1184,7 +1364,10 @@ class AmBeNeutronProcessing:
 
             
             print(f"Source position: ({x_pos}, {y_pos}, {z_pos})")
-            print(f"Good events from waveform analysis: {len(good_events)}")
+            if good_events is None:
+                print("Good events: ALL (no waveform gate)")
+            else:
+                print(f"Good events from waveform analysis: {len(good_events)}")
 
             if dump_good_events:
                 ge_path = f'TriggerSummary/GoodEvents_{runinfo}_{run}.pkl'
@@ -1194,15 +1377,29 @@ class AmBeNeutronProcessing:
                 print(f"Good events dumped -> {ge_path}")
             
             # Load event data for this specific run
-            event_data = self.load_event_data(file_path, which_tree)
-            
+            event_data = self.load_event_data(
+                file_path, which_tree, event_key_branch=event_key_branch,
+                expect_run=int(run) if mc_mode else None)
+
+            if mc_mode:
+                # Synthetic Stage-1 row so AmBeWaveformResults_<tag>.csv keeps its
+                # schema and stats.core still runs. total == accepted by construction:
+                # there is no waveform to reject. The consumer must NOT read this as a
+                # measured acceptance -- stats.core suppresses the bar for MC.
+                n_ev = len(event_data["eventNumber"])
+                waveform_summary_list.append({
+                    "run": int(run), "sourceX": x_pos, "sourceY": y_pos, "sourceZ": z_pos,
+                    "accepted_waveforms": n_ev, "rejected_waveforms": 0,
+                    "total_waveforms": n_ev,
+                })
+
             # Process events for this run
             event_rows = [] if dump_event_index else None
             processed_data, event_stats = self.process_events_efficient(
                 event_data, good_events, x_pos, y_pos, z_pos, efficiency_data,
                 run=int(run), event_rows=event_rows
             )
-            
+
             print('----------------------------------------------------------------')
             print(f'Total AmBe neutron candidates: {len(processed_data["cluster_time"])}')
             
@@ -1229,6 +1426,11 @@ class AmBeNeutronProcessing:
                 "sourceZ": processed_data['source_position'][2],
                 "eventID": processed_data['event_ids'],
                 "eventTankTime": processed_data['event_tank_time'],
+                # Constant per file. Downstream multiplicity/delta-t code must group on
+                # (run, eventTankTime), never eventTankTime alone: in MC the event key is
+                # eventNumber (0-999) and every run would otherwise merge into 1000 groups.
+                # For data this is a strict refinement that changes nothing.
+                "run": run_int,
                 "clusterDirection": processed_data['cluster_direction'],
                 #'neutronTofCorrection': processed_data['neutron_tof_correction'],
                 #'allHitsDeltaT_TofCorrected': processed_data['all_hits_delta_t_TofCorrected']
@@ -1475,11 +1677,24 @@ PROTECTED_TAGS = {
 
 
 def build_selection(ctx, name: str):
-    """Construct the neutron definition named by --selection from the config."""
+    """Construct the neutron definition named by --selection from the config.
+
+    Every threshold comes from the config. Previously only pe_max and
+    charge_balance_max did; ct_min and chits_min silently used the CutCriteria
+    defaults while `cuts.selection_label` claimed values nothing checked, so a deck
+    could advertise a window it was not applying.
+    """
     cuts = CutCriteria(
         pe_max=float(ctx.cuts.get("pe_max", 100)),
         ccb_max=float(ctx.cuts.get("charge_balance_max", 0.45)),
+        ct_min=float(ctx.cuts.get("time_min_ns", 2000)),
+        ct_max=float(ctx.cuts.get("time_max_ns", 67000)),
+        chits_min=int(ctx.cuts.get("cluster_hits_min", 5)),
     )
+    if cuts.ct_max <= cuts.ct_min:
+        raise SystemExit(
+            f"[processor] cuts.time_max_ns ({cuts.ct_max:g}) must exceed "
+            f"cuts.time_min_ns ({cuts.ct_min:g}); the delayed window is empty.")
     if name == "box":
         return get_selection("box", cuts=cuts), cuts
     mva = dict(ctx.extra.get("mva") or {})
@@ -1562,8 +1777,16 @@ def run(ctx, argv=None):
         print(f"[data.process] extra source positions (not in the campaign map): "
               f"{ {k: v for k, v in extra.items()} }")
 
+    legacy_ordering = bool(st.get("legacy_ordering", False))
+    if legacy_ordering:
+        print("[data.process] *** legacy_ordering: ON. The cluster loop runs in ONE "
+              "pass, so an event with a candidate ordered before its cosmic cluster "
+              "counts in BOTH the numerator and cosmic_events. This reproduces the "
+              "published 57.23 % path and must not be used for a new measurement. ***")
+
     processor = AmBeNeutronProcessing(config=wf, cuts=cuts, selection=selection,
-                                      extra_positions=extra)
+                                      extra_positions=extra,
+                                      legacy_ordering=legacy_ordering)
     result = processor.run_complete_analysis_pipeline(
         data_directory=st["data_directory"],
         waveform_dir=st.get("waveform_dir", st["data_directory"]),
@@ -1589,3 +1812,196 @@ def run(ctx, argv=None):
 
 def cli(ctx, argv=None):
     run(ctx, argv)
+
+
+# ---------------------------------------------------------------------------
+# MC entry point: the same Stage 2, with no Stage 1
+# ---------------------------------------------------------------------------
+# WHY A SEPARATE COMMAND rather than a mode flag on `ambe data process`. The MC has
+# no waveforms, so the Stage-1 IC gate cannot run and every cluster is treated as
+# having passed the good-waveform selection. That could have been a `stage1.input_kind`
+# key or a required `--stage1` flag, but the first needs a default (and a defaulted
+# mode is exactly what this project forbids) and the second breaks every existing
+# config and logged invocation. Making the mode the COMMAND NAME leaves the 12
+# data_*.yaml configs and their call sites untouched and leaves nothing to default.
+#
+# Everything downstream of the gate is shared verbatim: the same box and MVA selection
+# objects, the same cosmic veto, the same candidate CSVs and trigger summaries, so the
+# MC decks and the v4 data decks are the same analysis on different input.
+
+# Port -> (x, z) in cm. The label's z token is the VERTICAL coordinate and maps to y,
+# the same convention as the v5sandi runs 6273/6274/6275 (see source_positions above).
+MC_PORT_XZ = {1: (0.0, -75.0), 2: (0.0, 75.0), 3: (0.0, 102.0),
+              4: (75.0, 0.0), 5: (0.0, 0.0)}
+MC_Z_TOKEN = {"z0": 0.0, "z50": 50.0, "z100": 100.0,
+              "zminus50": -50.0, "zminus100": -100.0}
+MC_LABEL_RE = re.compile(r"^port(?P<port>\d+)_(?P<z>z(?:minus)?\d+)QE")
+
+
+def mc_label_position(label: str) -> Tuple[float, float, float]:
+    """(x, y, z) cm for an AmBe MC label such as 'port3_zminus50QE_1.50'."""
+    m = MC_LABEL_RE.match(label)
+    if not m:
+        raise SystemExit(f"[data.processmc] cannot parse MC label {label!r}")
+    port = int(m.group("port"))
+    if port not in MC_PORT_XZ:
+        raise SystemExit(f"[data.processmc] unknown port {port} in label {label!r}")
+    tok = m.group("z")
+    if tok not in MC_Z_TOKEN:
+        raise SystemExit(f"[data.processmc] unknown z token {tok!r} in label {label!r}")
+    x, z = MC_PORT_XZ[port]
+    return (x, MC_Z_TOKEN[tok], z)
+
+
+def build_mc_manifest(dataset_root: str, label_map_path: str,
+                      limit_files: Optional[int] = None) -> List[Dict[str, Any]]:
+    """One entry per MC ROOT file: {run, path, label, position}.
+
+    The run number encodes the position: run = label_index*1000 + file_index, with
+    label_index taken from label_map.txt written by the grid workflow. We parse that
+    file rather than re-encoding the LABELS list from
+    grid_wcsim/AmBe_MC_toolchain/main.py, so the two cannot drift apart. Every entry's
+    run number is cross-checked against the tree's own runNumber at load time.
+    """
+    from ..io import resolve_inputs, filter_files_with_tree
+
+    label_index: Dict[str, int] = {}
+    with open(label_map_path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            idx, lab = line.split()
+            label_index[lab] = int(idx)
+    if not label_index:
+        raise SystemExit(f"[data.processmc] no labels parsed from {label_map_path}")
+
+    files = resolve_inputs([os.path.join(dataset_root, "*",
+                                         "ANNIEEvent_MC_AmBe_*.root")])
+    if not files:
+        raise SystemExit(f"[data.processmc] no MC ROOT files under {dataset_root}")
+    # An interrupted grid job leaves a zero-key file behind; without this the whole
+    # multi-hour run dies on a bare KeyError halfway through.
+    files, _bad = filter_files_with_tree(files, "Event")
+    if limit_files:
+        files = files[:limit_files]
+
+    manifest: List[Dict[str, Any]] = []
+    for path in files:
+        path = str(path)
+        label = os.path.basename(os.path.dirname(path))
+        if label not in label_index:
+            raise SystemExit(f"[data.processmc] {path}: label {label!r} is not in "
+                             f"{label_map_path}")
+        m = re.search(r"_(\d+)_(\d+)\.root$", os.path.basename(path))
+        if not m:
+            raise SystemExit(f"[data.processmc] cannot parse file index from {path}")
+        file_index = int(m.group(1)) // 1000
+        manifest.append({
+            "run": label_index[label] * 1000 + file_index,
+            "path": path,
+            "label": label,
+            "position": mc_label_position(label),
+        })
+
+    runs = [e["run"] for e in manifest]
+    if len(set(runs)) != len(runs):
+        dupes = sorted({r for r in runs if runs.count(r) > 1})
+        raise SystemExit(
+            f"[data.processmc] run numbers are not unique across files (e.g. {dupes[:5]}). "
+            f"(run, eventNumber) is then not a unique cluster key and the MVA scores "
+            f"would be joined onto the wrong clusters.")
+    return manifest
+
+
+def run_mc(ctx, argv=None):
+    """Stage 2 over the AmBe MC production: no waveform gate, box or MVA selection."""
+    import argparse
+
+    p = argparse.ArgumentParser(prog="ambe data processmc")
+    p.add_argument("--selection", required=True, choices=["box", "mva"],
+                   help="neutron cluster definition to apply")
+    # No default, and printed in the log: the two settings produce different event
+    # denominators and different candidate sets under the same downstream plot chain.
+    p.add_argument("--cosmic-veto", required=True, choices=["on", "off"],
+                   help="apply the <2us / >100PE prompt veto (on = as the data decks do)")
+    p.add_argument("--tag", default=None,
+                   help="output tag (runinfo). Defaults to stage1_mc.tag in the config.")
+    p.add_argument("--limit-files", type=int, default=None,
+                   help="process only the first N files (smoke test)")
+    p.add_argument("--allow-protected-tag", action="store_true")
+    a = p.parse_args(list(argv) if argv else [])
+
+    st = dict(ctx.extra.get("stage1_mc") or {})
+    if not st:
+        raise SystemExit(
+            "config needs a `stage1_mc:` block with dataset_root, label_map and tag. "
+            "The key is deliberately NOT `stage1:` so a data config can never be run "
+            "through processmc (which would silently drop its IC gate) and an MC config "
+            "can never be run through process (which would look for waveforms).")
+
+    tag = a.tag or st.get("tag")
+    if not tag:
+        raise SystemExit("no output tag: pass --tag or set stage1_mc.tag")
+    if tag in PROTECTED_TAGS and not a.allow_protected_tag:
+        raise SystemExit(f"refusing to write protected tag {tag!r}")
+
+    veto_on = (a.cosmic_veto == "on")
+    selection, cuts = build_selection(ctx, a.selection)
+
+    # The scored parquet must belong to the SAME veto setting: the veto changes which
+    # events contribute clusters, so crossing them would not crash, it would quietly
+    # depress MVA coverage and look like a scoring failure.
+    if a.selection == "mva":
+        want = "vetoON" if veto_on else "vetoOFF"
+        other = "vetoOFF" if veto_on else "vetoON"
+        for pth in (ctx.extra.get("mva") or {}).get("scored") or []:
+            base = os.path.basename(str(pth))
+            if other in base or want not in base:
+                raise SystemExit(
+                    f"[data.processmc] --cosmic-veto {a.cosmic_veto} but the scored "
+                    f"parquet is {base!r}. The MVA scores must come from the extraction "
+                    f"run with the SAME veto setting, or coverage silently collapses.")
+
+    print(f"[data.processmc] tag={tag}  selection={selection.name} ({selection.label})")
+    print(f"[data.processmc] cosmic veto: {'ON' if veto_on else 'OFF'}")
+    print("[data.processmc] Stage 1: NONE. MC has no waveforms, so every cluster is "
+          "treated as having passed the good-waveform selection.")
+
+    manifest = build_mc_manifest(st["dataset_root"], st["label_map"],
+                                 limit_files=a.limit_files)
+    if a.limit_files:
+        print(f"[data.processmc] *** PARTIAL SAMPLE: {len(manifest)} of the full "
+              f"production. Nothing from this run is quotable. ***")
+
+    # Validate every position up front. get_source_location raises per run, mid-loop,
+    # after earlier runs have already written their CSVs.
+    extra = {e["run"]: e["position"] for e in manifest}
+    positions = sorted(set(extra.values()))
+    print(f"[data.processmc] {len(manifest)} files, {len(positions)} source positions")
+
+    processor = AmBeNeutronProcessing(config=WaveformConfig(), cuts=cuts,
+                                      selection=selection, extra_positions=extra,
+                                      cosmic_veto=veto_on)
+    result = processor.run_complete_analysis_pipeline(
+        data_directory=st["dataset_root"],
+        waveform_dir=st["dataset_root"],          # unused: Stage 1 never runs
+        file_pattern=re.compile(r"(?!)"),          # unused: the manifest supplies files
+        campaign=1,
+        runinfo=tag,
+        which_tree=int(st.get("which_tree", 1)),
+        plot_ic_distributions=False,
+        dump_features=False,
+        dump_event_index=bool(st.get("dump_event_index", False)),
+        run_manifest=manifest,
+        event_key_branch=str(st.get("event_key_branch", "eventNumber")),
+    )
+
+    if hasattr(selection, "report_coverage"):
+        print()
+        selection.report_coverage()
+    return result
+
+
+def cli_mc(ctx, argv=None):
+    run_mc(ctx, argv)

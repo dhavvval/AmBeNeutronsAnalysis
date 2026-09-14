@@ -237,6 +237,7 @@ if [[ " $WHAT " == *" extract "* ]]; then
     GATE_ARG=()
     [ "$MODE" = "gated" ] && GATE_ARG=(--gate-csv-dir "$OUT/gate_csvs")
     python extract_cf_features_beamcluster_data.py "$INPUT" \
+        --input-kind data \
         --run-name "${PREFIX}_${MODE}" --output-dir "$OUT" \
         "${GATE_ARG[@]}" \
         --geometry $GEO/FullTankPMTGeometry.csv \

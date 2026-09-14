@@ -266,6 +266,19 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None):
         cut_note = (f"box cuts PE ≤ {pe_max}, CB < {cb_max}, "
                     f"t ≥ 2 µs, hits ≥ 5")
 
+    # Which maps this deck emits. Default is all three, i.e. today's behaviour for
+    # every existing config. A deck that reports no efficiency (the AmBe MC decks: no
+    # waveforms, so no trigger denominator comparable to the data's) sets
+    # `plots.heatmap.maps: [statistics]` and the two efficiency maps are never drawn.
+    # Drawing them anyway would put a number on a slide that this deck cannot measure.
+    maps = list((ctx.extra.get("plots", {}).get("heatmap", {}) or {}).get(
+        "maps", ["statistics", "efficiency", "residual"]))
+    unknown = set(maps) - {"statistics", "efficiency", "residual"}
+    if unknown:
+        raise SystemExit(f"[plots.heatmap] unknown map(s) {sorted(unknown)}; "
+                         f"choose from statistics, efficiency, residual")
+    print(f"[plots.heatmap] emitting: {', '.join(maps)}")
+
     # 1. Statistics heatmap
     ref_n = df.attrs.get("stats_ref_n")
     ref_port = df.attrs.get("stats_ref_port")
@@ -296,6 +309,9 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     plt.xticks(rotation=45); plt.yticks(rotation=0)
     save_plot(fig, ctx, "statistics_heatmap")
 
+    if "efficiency" not in maps and "residual" not in maps:
+        return
+
     # 2. Efficiency heatmap
     def make_label(eff, err, n):
         if pd.isna(eff) or n == 0:
@@ -319,7 +335,13 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     ax.tick_params(labelsize=HEAT_TICK_SIZE)
     ax.invert_yaxis()
     plt.xticks(rotation=45); plt.yticks(rotation=0)
-    save_plot(fig, ctx, "efficiency_heatmap")
+    if "efficiency" in maps:
+        save_plot(fig, ctx, "efficiency_heatmap")
+    else:
+        plt.close(fig)
+
+    if "residual" not in maps:
+        return
 
     # 3. Residuals heatmap -- compare against configured reference campaign
     ref_name = ctx.extra.get("reference", {}).get("comparison_campaign", "AmBe 1.0")

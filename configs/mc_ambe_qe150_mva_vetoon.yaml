@@ -1,0 +1,90 @@
+run_name: MCAmBe_QE150_mva_vetoON
+display_label: "AmBe MC productionv2 QE 1.50, 25 positions, MVA neutron, prompt veto ON"
+campaign: "AmBe MC QE1.50"
+description: >
+  AmBe neutron MC (WCSim productionv2, QE 1.50) put through the SAME Stage 2 as the v4
+  real-data decks: 1250 files x 1000 events over 25 source positions (5 ports x 5
+  heights), selected with the MVA NEUTRON DEFINITION INSTEAD OF THE BOX CUTS. The box is
+  deliberately absent: a cluster is a neutron iff gbt_score > 0.423621.
+
+  NO STAGE 1. MC has no waveforms, so there is no IC gate and every cluster is treated
+  as having passed the good-waveform selection. `ambe data processmc` is a separate
+  command from `ambe data process` precisely so that neither config kind can be run
+  through the wrong path.
+
+  EVENT KEY. eventTimeTank is 0 in every MC event, so eventNumber (0-999, unique within
+  a file) is substituted in load_event_data. runNumber = label_index*1000 + file_index
+  is unique per file, so (run, eventNumber) is globally unique. Downstream multiplicity
+  and delta-t code MUST group on (run, eventTankTime), never eventTankTime alone.
+
+  THE LABEL'S z IS THE VERTICAL COORDINATE and maps to y in the (x, y, z) source map,
+  the same convention as the v5sandi runs 6273/6274/6275. port3_zminus50 -> (0,-50,102).
+  This puts the MC on the same 5x5 port-by-height grid the data heatmaps draw.
+
+  PROMPT VETO ON. This deck applies the data's <2us / >100PE veto so it stays directly
+  comparable to the v4 data decks. Its twin, mc_ambe_qe150_mva_vetooff.yaml, turns it
+  off, which is what the physics of this sample calls for: MC has no cosmics and no
+  AmBe 4.4 MeV gamma (every event has exactly one primary, PDG 2112), so the sub-2us
+  clusters are neutron-induced prompt light. Both are produced and the difference is
+  reported.
+
+  NO EFFICIENCY IS REPORTED FROM THIS DECK, of any kind. The efficiency and residual-
+  efficiency heatmaps are suppressed below.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/mc_ambe
+
+stage1_mc:
+  dataset_root: /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv2/QE_1.50
+  label_map: /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv2/QE_1.50/label_map.txt
+  which_tree: 1
+  event_key_branch: eventNumber
+  dump_event_index: true
+  tag: MCAmBe_QE150_mva_vetoON
+
+inputs:
+  trigger_summary:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_MCAmBe_QE150_mva_vetoON.csv
+  candidate_csvs:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_MCAmBe_QE150_mva_vetoON_*.csv
+
+cuts:
+  # COSMIC-VETO thresholds only. No neutron box is applied under the MVA: a
+  # cluster is a neutron iff gbt_score > 0.423621, with no PE, charge-balance,
+  # time or hits requirement. These two keys live here because the veto is
+  # defined in the same CutCriteria object.
+  pe_max: 100
+  charge_balance_max: 0.45
+  # Plot-only cut in plots/basic.py. 0 here, same as both v4 decks, so MC and data are
+  # comparable and neither deck is misrepresented as carrying a hidden hits requirement.
+  plot_min_cluster_hits: 0
+  # The 453/455 hitID swap in plots/basic.py is a DATA-specific PMT correction and it
+  # fires on any hitID string merely CONTAINING "453"/"455". MC detector IDs would trip
+  # it and be silently relabelled.
+  apply_hitid_swap: false
+  selection_label: "MVA neutron (GBT eff80, score > 0.423621) - prompt veto ON"
+
+plots:
+  heatmap:
+    # Efficiency and residual maps deliberately absent: no efficiency is reported.
+    maps: [statistics]
+
+fit_params: {}
+
+mva:
+  # THE FROZEN CCinc-NEUTRINO MODEL. Nothing is trained here or anywhere in this work:
+  # this is the same .pkl and the same threshold already used to select neutrons in the
+  # AmBe v4 DATA deck (configs/data_ambe2v4_all28_mva.yaml). Using it unchanged is what
+  # makes the MC deck and the data deck the SAME selection rather than two different
+  # measurements that happen to share a name.
+  #
+  # 0.423621 is the truth-tag / ClusterFinder GBT cut at the MC 80 % signal-efficiency
+  # working point. Recorded literally so this config is reproducible on its own.
+  #
+  # The scored parquet MUST be the one extracted with the SAME --cosmic-veto as this
+  # deck: the veto changes which events contribute clusters, and crossing them does not
+  # crash, it silently depresses coverage. run_mc asserts the basename matches.
+  scored:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/mc_ambe/mva/mcqe150_vetoON__data_features_cf__scored.parquet
+  score_col: gbt_score
+  threshold: 0.423621
+  point: eff80

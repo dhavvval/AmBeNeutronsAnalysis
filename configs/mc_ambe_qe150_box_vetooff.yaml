@@ -1,0 +1,72 @@
+run_name: MCAmBe_QE150_box_vetoOFF
+display_label: "AmBe MC productionv2 QE 1.50, 25 positions, box cuts, prompt veto OFF"
+campaign: "AmBe MC QE1.50"
+description: >
+  AmBe neutron MC (WCSim productionv2, QE 1.50) put through the SAME Stage 2 as the v4
+  real-data decks: 1250 files x 1000 events over 25 source positions (5 ports x 5
+  heights), selected with the traditional box cuts.
+
+  NO STAGE 1. MC has no waveforms, so there is no IC gate and every cluster is treated
+  as having passed the good-waveform selection. `ambe data processmc` is a separate
+  command from `ambe data process` precisely so that neither config kind can be run
+  through the wrong path.
+
+  EVENT KEY. eventTimeTank is 0 in every MC event, so eventNumber (0-999, unique within
+  a file) is substituted in load_event_data. runNumber = label_index*1000 + file_index
+  is unique per file, so (run, eventNumber) is globally unique. Downstream multiplicity
+  and delta-t code MUST group on (run, eventTankTime), never eventTankTime alone.
+
+  THE LABEL'S z IS THE VERTICAL COORDINATE and maps to y in the (x, y, z) source map,
+  the same convention as the v5sandi runs 6273/6274/6275. port3_zminus50 -> (0,-50,102).
+  This puts the MC on the same 5x5 port-by-height grid the data heatmaps draw.
+
+  PROMPT VETO OFF. This deck does NOT apply the <2us / >100PE veto, which is what the
+  physics of this sample calls for: MC has no cosmics and no AmBe 4.4 MeV gamma (every
+  event has exactly one primary, PDG 2112), so the sub-2us clusters this veto would
+  remove are neutron-induced prompt light, not cosmic muons. Its twin,
+  mc_ambe_qe150_box_vetoon.yaml, keeps the veto on for direct comparability with the v4
+  data decks. Both are produced and the difference is reported.
+
+  Consequences of OFF, so nothing downstream reads as a bug: cosmic_events is 0 and
+  ambe_triggers == total_events in the trigger summary, and every
+  PromptAmBeNeutronCandidates_*.csv is EMPTY (the prompt lists are only appended inside
+  the cosmic branch).
+
+  NO EFFICIENCY IS REPORTED FROM THIS DECK, of any kind. The efficiency and residual-
+  efficiency heatmaps are suppressed below.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/mc_ambe
+
+stage1_mc:
+  dataset_root: /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv2/QE_1.50
+  label_map: /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv2/QE_1.50/label_map.txt
+  which_tree: 1
+  event_key_branch: eventNumber
+  dump_event_index: true
+  tag: MCAmBe_QE150_box_vetoOFF
+
+inputs:
+  trigger_summary:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_MCAmBe_QE150_box_vetoOFF.csv
+  candidate_csvs:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_MCAmBe_QE150_box_vetoOFF_*.csv
+
+cuts:
+  # Box thresholds AND the cosmic-veto thresholds (they share one CutCriteria object).
+  pe_max: 100
+  charge_balance_max: 0.45
+  # Plot-only cut in plots/basic.py. 0 here, same as both v4 decks, so MC and data are
+  # comparable and neither deck is misrepresented as carrying a hidden hits requirement.
+  plot_min_cluster_hits: 0
+  # The 453/455 hitID swap in plots/basic.py is a DATA-specific PMT correction and it
+  # fires on any hitID string merely CONTAINING "453"/"455". MC detector IDs would trip
+  # it and be silently relabelled.
+  apply_hitid_swap: false
+  selection_label: "box cuts PE <= 100, CB < 0.45, t >= 2 us, hits >= 5 - prompt veto OFF"
+
+plots:
+  heatmap:
+    # Efficiency and residual maps deliberately absent: no efficiency is reported.
+    maps: [statistics]
+
+fit_params: {}

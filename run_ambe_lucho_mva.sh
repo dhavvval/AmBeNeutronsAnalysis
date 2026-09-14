@@ -71,6 +71,7 @@ echo
 echo "[A] extracting ClusterFinder-method DATA features (resumable) ..."
 python -u extract_cf_features_beamcluster_data.py \
     "${DATA_DIR}/" \
+    --input-kind data \
     --run-name "${RUN_NAME}" --output-dir "${OUT}" \
     --gate-csv-dir "${GATE_DIR}" \
     --geometry "${GEOM}" --offsets "${OFFSETS}" \
