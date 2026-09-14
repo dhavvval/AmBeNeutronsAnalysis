@@ -99,11 +99,22 @@ inputs:
 cuts:
   pe_max: 100
   charge_balance_max: 0.45
+  # The delayed search window, closed at both ends. THESE ARE THE AUTHORITATIVE
+  # VALUES: build_selection reads them into CutCriteria, and efficiency_fit checks
+  # its own window against them and refuses to run if they disagree. Previously
+  # time_min was a hardcoded dataclass default and there was no upper bound at all,
+  # so a cluster past 67 us would have been accepted into an efficiency that is only
+  # defined over this span.
+  time_min_ns: 2000
+  time_max_ns: 67000
+  cluster_hits_min: 5
   # Plot-only cut inside src/ambe/plots/basic.py prepare_data. Zero on purpose: it is
   # NOT part of the box selection, and a hidden >= 10 here would silently change the
   # multiplicity histogram the efficiency is fit to.
   plot_min_cluster_hits: 0
-  selection_label: "box cuts PE ≤ 100, CB < 0.45, t ≥ 2 µs, hits ≥ 5"
+  # Derived from the cuts above by BoxSelection.__init__; kept here only as a label
+  # for plots. It is no longer a free-text claim that nothing checks.
+  selection_label: "box cuts PE ≤ 100, CB < 0.45, 2 ≤ t ≤ 67 µs, hits ≥ 5"
 
 # ---------------------------------------------------------------------------
 # Thesis chapter 8 multiplicity-fit parameters. Consumed by
@@ -128,8 +139,69 @@ fit_params:
   denominator: ambe_triggers        # ambe_triggers | total_events
   numerator_mode: noncosmic         # noncosmic | production
 
+  # WHICH BACKGROUND MODEL SUPPLIES THE HEADLINE. Required; there is no default.
+  # Both models are fit and reported regardless -- this only says which one the
+  # quoted number comes from, and which one becomes the delta_m systematic.
+  #
+  # 'poisson' is chosen here because the data-driven fit on THIS pair is not a
+  # competing measurement: background run 6264 has 22 AmBe triggers, so its template
+  # uncertainty dominates the chi2 denominator from bin 2 up and the resulting
+  # chi2/ndof of ~0.4 reflects that, not agreement. Removing sigma_bkg moves its
+  # best fit from 0.640 to 0.351 (scripts/diagnose_datadriven_chi2.py). The Poisson
+  # fit is also a poor fit -- see gof_min_p_value below -- but its failure is a
+  # KNOWN, DOCUMENTED one (thesis 8.6.2, the uncorrelated model underestimates the
+  # high-multiplicity tail) rather than an artefact of a 22-trigger sample.
+  nominal_model: poisson            # data_driven | poisson
+
+  # Goodness-of-fit gate. Below this p-value the driver REFUSES to print a headline
+  # unless nominal_model_override_justification is set. p is computed from
+  # pseudo-experiments, not the analytic chi2 CDF.
+  gof_min_p_value: 0.01
+  n_gof_toys: 2000
+  # THE NOMINAL MODEL FAILS THIS GATE (p < 1e-3 from 2,000 pseudo-experiments;
+  # chi2 = 51.4). It is quoted anyway, and this is the written reason, recorded in
+  # the JSON next to the number:
+  nominal_model_override_justification: >-
+    The uncorrelated-background model does not describe the high-multiplicity tail.
+    This is the SAME failure the thesis reports in 8.6.2 ("the uncorrelated
+    background model fit underestimates the high multiplicity tail"), where it gives
+    chi2/ndof = 11/5 at position 0; 46 of our 51.4 comes from multiplicity bins 3-4,
+    and our sample is 1.6x larger so the same physical mismatch carries more
+    leverage. It means the real background is not Poisson in time, which is a
+    statement about the detector, not a defect in the extraction.
+    The alternative is not better: the data-driven fit's p ~ 0.4 is an artefact of
+    background run 6264 having 22 AmBe triggers, whose template uncertainty
+    dominates the chi2 denominator from bin 2 up. Removing sigma_bkg moves that fit
+    from 0.640 to 0.351 with chi2/ndof ~ 854
+    (scripts/diagnose_datadriven_chi2.py --source 6265 --bkg 6264). A fit that good
+    for that reason is not evidence of a better model.
+    delta_m (the signed distance to the data-driven fit) is therefore carrying real
+    model uncertainty rather than noise, and the number should be read as
+    preliminary until a background run with usable statistics exists.
+
+  # Statistical treatment. Both default to the thesis behaviour so the published
+  # comparison holds; the alternatives are offered so the size of the approximation
+  # can be measured rather than assumed.
+  #   likelihood: thesis_chi2 treats normalised bins as independent Gaussians with
+  #     variance p_i/N. They are multinomial: anti-correlated, with variance
+  #     p_i(1-p_i)/N. 'multinomial' does it properly.
+  #   background_uncertainty: thesis_diagonal adds the template sigma per-bin to the
+  #     chi2 denominator (eq. 8.5). 'bootstrap' Dirichlet-resamples the template and
+  #     propagates it through the Bernoulli convolution, which is where it acts.
+  likelihood: thesis_chi2             # thesis_chi2 | multinomial
+  background_uncertainty: thesis_diagonal   # thesis_diagonal | bootstrap
+  n_bootstrap: 400
+
+  # Overflow. 'fail' refuses to merge physically different multiplicities into one
+  # bin; 'clip' folds them into the top bin, which then means ">= n_bins-1".
+  overflow_policy: fail             # fail | clip
+
   # Acquisition window. 6265's candidates span 2,002 -> 66,490 ns, consistent with
-  # 67 us. The code asserts no candidate exceeds this rather than trusting it.
+  # 67 us. This MUST equal cuts.time_max_ns -- efficiency_fit cross-checks the two
+  # and exits if they differ, because the fit normalises the background rate over
+  # this span while selection decides what enters the histogram. They were
+  # previously independent, and the comment here claimed an assertion that did not
+  # exist anywhere in the code.
   acquisition_window_ns: 67000
   signal_window_start_ns: 2000
   bkg_window_start_ns: 2000
@@ -158,6 +230,26 @@ fit_params:
   # triggers the template uncertainty is large, so true is reported alongside.
   template_fluctuate: false
 
+# ---------------------------------------------------------------------------
+# Stage-1 waveform cut figures. Consumed by src/ambe/plots/waveform_cuts.py
+# (ambe plots waveformcuts --config <this file>).
+# ---------------------------------------------------------------------------
+waveform_cuts:
+  # High-IC sideband for normalising the no-source IC shape onto the source run.
+  # run, so the flat source-independent component under the 700-1200 window can be
+  # read off. THERE IS NO DEFAULT and the figure is skipped if this is absent: the
+  # answer moves from ~0.5 % to ~3.5 % of Stage-1 accepted triggers across plausible
+  # sidebands on this pair, so the choice is an analyst decision that has to be
+  # recorded, not a constant hidden in the plotting code.
+  #
+  # Every value it produces is an UPPER BOUND. The source run's sideband is flat
+  # background PLUS the high-IC tail of its own 4.4 MeV gamma peak, and there is no
+  # per-run livetime in this repo to normalise by instead (same reason delta_bt is
+  # unquotable below). 1600-2500 is chosen as a compromise: far enough above the
+  # peak (median IC 926 on 6265) that the tail is small, close enough that 6264 still
+  # has ~1k waveforms there.
+  sideband_ic: [1600, 2500]
+
 systematics:
   # delta_m is computed from the two background models and needs no input.
   #
@@ -165,9 +257,15 @@ systematics:
   # Livetime is not in any file in this repo: the waveform parquets' `timestamp`
   # column is absolute epoch with a zero minimum, so its span is not a livetime.
   # Supply seconds per run here to get delta_bt as the thesis defines it; leave null
-  # and the code falls back to the trigger-COUNT ratio and labels the result as such
-  # rather than silently passing counts off as rates.
+  # and the code reports the trigger-COUNT ratio as a DIAGNOSTIC ONLY, excluded from
+  # the systematic total, rather than silently passing counts off as rates.
   livetime_s:
+    6264: null
+    6265: null
+    6266: null
+  # Optional per-run livetime uncertainty in seconds. When supplied it is propagated
+  # into delta_bt alongside the Poisson errors on the two trigger counts.
+  livetime_unc_s:
     6264: null
     6265: null
     6266: null
@@ -177,5 +275,14 @@ systematics:
   # housing. No equivalent number exists for this campaign yet. NULL means the code
   # reports "delta_h: NOT EVALUATED" -- it must never substitute zero, which would
   # understate the systematic budget while looking complete.
+  #
+  # CONVENTION: delta_h_housing_fraction is a CORRECTION added to the efficiency,
+  # and delta_h_housing_fraction_unc is the systematic. A fraction supplied without
+  # an uncertainty therefore contributes nothing to the budget and the code says so.
+  # Prefer giving the counts below and letting the code derive both: for Teal's
+  # numbers that is 31/10000 = 0.0031 +/- 0.00056. (Thesis eq. 8.8 prints a 1E5
+  # denominator, which is a typo -- the prose says 31 of 10,000.)
   delta_h_housing_fraction: null
   delta_h_housing_fraction_unc: null
+  housing_n_captures: null
+  housing_n_simulated: null

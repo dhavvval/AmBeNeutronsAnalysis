@@ -10,11 +10,13 @@ description: >
   THE RUNS
     6254, 6256   pulser pair. ZERO IC-passing triggers (0 of 7,932 and 0 of 4,254).
                  They produce no candidates at all; that is the result, not a failure.
-    6264         cosmic-dominated. Vetoes at ~98 % on this box path and gives ZERO
-                 Stage-2 candidates. The MVA route quotes 93.3 % for the same run,
-                 because it re-derives cluster features in a (-5, +20) ns delayed
-                 window so its clusterPE differs and the >100 PE veto flips on a
-                 handful of events. Quote each route's own number; never mix them.
+    6264         cosmic-dominated. Vetoes at 96.3 % on this box path (567 of 589).
+                 It does NOT give zero Stage-2 candidates: it gives 7 candidates in
+                 5 events (corrected 2026-09-10, see below). The MVA route quotes
+                 93.3 % for the same run, because it re-derives cluster features in
+                 a (-5, +20) ns delayed window so its clusterPE differs and the
+                 >100 PE veto flips on a handful of events. Quote each route's own
+                 number; never mix them.
     6265, 6266, 6270   behave source-in, 0.64-0.74 candidates per AmBe trigger.
 
   6270 IS THE CORRUPTED MERGE. BeamCluster_6270.root still contains 11,279 duplicated
@@ -23,8 +25,24 @@ description: >
   reads 2,941 (+27 %). Check this after every run of this config.
 
   EXPECTED GATED TRIGGERS, as established independently via the MVA route in
-  ANALYSIS_ccinc_v3_FULL.md 6.7 -- assert these so the two routes cannot diverge:
+  ANALYSIS_ccinc_v3_FULL.md 6.7:
     6264 -> 149,  6265 -> 2,150,  6266 -> 2,171,  6270 -> 2,312.
+
+  *** THOSE ARE THE MVA ROUTE'S NUMBERS AND ARE NOT THE BOX PATH'S. Corrected
+  2026-09-10. On THIS deck's Stage-1 gate the same runs give:
+    6264 -> total 589,    cosmic 567,   ambe_triggers 22,     7 candidates / 5 events
+    6265 -> total 20,964, cosmic 5,336, ambe_triggers 15,628, 11,342 cands / 10,456 ev
+    6266 -> total 39,391, cosmic 8,710, ambe_triggers 30,681
+  Verified three independent ways that close to the event: (a) .accepted.sum() of
+  WaveformFeatures_..._<run>.parquet; (b) the special_box (0,0,0) row minus the
+  refpair (0,0,0) row, since special_box aggregates 6254+6256+6264+6265 = 21,553;
+  (c) a fresh reprocess under configs/data_ambe2v4_effpair_box.yaml, which
+  reproduces 589/567 and 20,964/5,336 exactly.
+
+  The two routes therefore disagree by a factor ~7 on the 6265 denominator and that
+  disagreement is UNRESOLVED. Do not assert the MVA figures against this deck; they
+  will fail, and substituting them into a box-path efficiency gives a nonsense
+  number. Each route must be quoted with its own denominators. ***
 
   The source positions below are supplied through stage1.extra_source_positions and
   are DELIBERATELY not added to processor.py source_positions: that map drives the

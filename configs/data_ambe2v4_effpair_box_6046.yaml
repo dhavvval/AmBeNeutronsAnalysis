@@ -59,8 +59,12 @@ inputs:
 cuts:
   pe_max: 100
   charge_balance_max: 0.45
+  # Authoritative delayed window; must match fit_params.acquisition_window_ns.
+  time_min_ns: 2000
+  time_max_ns: 67000
+  cluster_hits_min: 5
   plot_min_cluster_hits: 0
-  selection_label: "box cuts PE ≤ 100, CB < 0.45, t ≥ 2 µs, hits ≥ 5"
+  selection_label: "box cuts PE ≤ 100, CB < 0.45, 2 ≤ t ≤ 67 µs, hits ≥ 5"
 
 fit_params:
   source_run: 6046
@@ -70,6 +74,31 @@ fit_params:
   n_bins: 8
   denominator: ambe_triggers
   numerator_mode: noncosmic
+
+  # Required; no default. 'poisson' for the same reason as the 6265 deck, and more
+  # so here: 6264 is not even from 6046's deployment window, so the data-driven fit
+  # is both statistics-starved AND epoch-mismatched. Its chi2/ndof of 0.41 is an
+  # artefact of the 22-trigger template -- with sigma_bkg removed the same fit gives
+  # 0.431 and chi2/ndof of 1097 (scripts/diagnose_datadriven_chi2.py --source 6046).
+  nominal_model: poisson
+  gof_min_p_value: 0.01
+  n_gof_toys: 2000
+  # Fails the gate (p < 1e-3, chi2 = 61.0), for the same documented reason as the
+  # 6265 deck -- see that config for the full argument.
+  nominal_model_override_justification: >-
+    Same known failure as the 6265 deck: the uncorrelated background model
+    underestimates the high-multiplicity tail (thesis 8.6.2), and the data-driven
+    alternative's good chi2/ndof is an artefact of background run 6264's 22
+    triggers rather than a better description. 6046 carries an ADDITIONAL defect the
+    6265 deck does not: 6264 was taken during 6265's deployment window, not 6046's,
+    and no epoch-matched background run exists for the March 2026 sub-campaign
+    (6046, 6056, 6060, 6061, 6062) anywhere in this repo. This number is therefore
+    preliminary on two independent counts and must not be quoted without both.
+
+  likelihood: thesis_chi2
+  background_uncertainty: thesis_diagonal
+  n_bootstrap: 400
+  overflow_policy: fail
 
   acquisition_window_ns: 67000
   signal_window_start_ns: 2000

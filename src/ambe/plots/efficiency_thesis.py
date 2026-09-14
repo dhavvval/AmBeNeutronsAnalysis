@@ -128,7 +128,10 @@ def plot_chi2_projections(ctx, rp):
              "Neutron detection efficiency $\\epsilon_n$")):
         d = vals - np.min(vals)
         ax.plot(grid, d, color="C0", lw=2, label="Uncorr. bkg. model")
-        ax.axhline(2.30, color="grey", ls=":", label="$\\Delta\\chi^2 = 2.30$")
+        # The shaded band is the PROFILE interval, so the reference line has to be
+        # delta-chi2 = 1 to match it. It was 2.30 while the band was also built at
+        # 2.30; both have moved together (see fit_poisson).
+        ax.axhline(1.0, color="grey", ls=":", label="$\\Delta\\chi^2 = 1$")
         ax.axvspan(lo, hi, color="C0", alpha=.15)
         ax.axvline(best, color="C0", ls="--", lw=1)
         ax.set_ylim(0, 30)
@@ -143,52 +146,71 @@ def plot_chi2_projections(ctx, rp):
     return save_plot(fig, ctx, "eff_chi2_projections")
 
 
-def plot_capture_time(ctx, candidate_csv, run, fit_lo_us=15.0, fit_hi_us=67.0):
+def plot_capture_time(ctx, candidate_csv, run):
     """Capture-time fit -- the evidence that a run is source-like.
 
-    Fitted from 15 us, as the thesis does (section 8.5.2): AmBe neutrons need time to
-    thermalise, so the turn-on below ~15 us is not exponential and including it biases
-    tau upward.
+    Model, window and solver come from basic.py (NeutCapture, 2-67 us,
+    least_squares), so these pages are comparable with CaptureTimeFits_*.csv rather
+    than being a second, differently-defined capture time.
     """
+    import lmfit
     import matplotlib.pyplot as plt
     import pandas as pd
-    from scipy.optimize import curve_fit
+
+    from .basic import AmBeNeutronAnalyzer
+
+    # basic.py owns the model, the window and the solver choice. Borrow its
+    # configured analyzer rather than defining a second capture time.
+    an = AmBeNeutronAnalyzer()
+    cfg = an.fitting_config
 
     d = pd.read_csv(candidate_csv)
-    t = d["clusterTime"].to_numpy(float) / 1000.0
-    sel = (t >= fit_lo_us) & (t <= fit_hi_us)
-    if sel.sum() < 50:
+    CT = d["clusterTime"].to_numpy(float) / 1000.0
+    if ((CT > cfg['fit_min_time']) & (CT < cfg['fit_max_time'])).sum() < 50:
         return None
-    h, edges = np.histogram(t[sel], bins=30, range=(fit_lo_us, fit_hi_us))
-    ctr = 0.5 * (edges[1:] + edges[:-1])
-    f = lambda x, A, tau, B: A * np.exp(-(x - fit_lo_us) / tau) + B
+    xdata, ydata, ydata_errors, counts, bin_centers = an._prepare_fitting_data(CT)
     try:
-        p, cov = curve_fit(f, ctr, h, p0=[max(h[0], 1), 30.0, max(h[-1], 1.0)],
-                           sigma=np.sqrt(np.maximum(h, 1)), maxfev=20000)
-    except Exception:
+        model = lmfit.Model(an.NeutCapture)
+        params = model.make_params(A=cfg['initial_amplitude'],
+                                   therm=cfg['initial_thermal_time'],
+                                   tau=cfg['initial_capture_time'],
+                                   B=cfg['initial_background'])
+        params['A'].min = cfg['amplitude_bounds'][0]
+        params['therm'].min = cfg['thermal_bounds'][0]
+        params['therm'].max = cfg['thermal_bounds'][1]
+        params['tau'].min = cfg['capture_bounds'][0]
+        params['tau'].max = cfg['capture_bounds'][1]
+        params['B'].vary = False
+        result = model.fit(ydata, params, t=xdata, weights=1 / ydata_errors,
+                           method="least_squares", scale_covar=False)
+    except Exception as exc:
+        print(f"[plots.efficiency] capture-time fit failed for run {run}: {exc}")
         return None
-    tau, tau_e = p[1], float(np.sqrt(cov[1][1]))
-    r = (h - f(ctr, *p)) / np.sqrt(np.maximum(h, 1))
-    chi2ndof = float(np.sum(r ** 2) / (len(h) - 3))
+
+    therm, tau = result.params['therm'], result.params['tau']
+    xplot = np.linspace(cfg['plot_min_time'], cfg['fit_max_time'], 500)
+    curve = an.NeutCapture(xplot, result.params['A'].value, therm.value,
+                           tau.value, result.params['B'].value)
 
     fig, ax = plt.subplots()
-    all_h, all_e = np.histogram(t, bins=65, range=(2, fit_hi_us))
-    ax.step(all_e[:-1], all_h, where="post", color="C7", alpha=.5,
-            label="all delayed clusters")
-    ax.errorbar(ctr, h, yerr=np.sqrt(np.maximum(h, 1)), fmt="o", ms=4, color="C0",
-                label=f"fit range [{fit_lo_us:g}, {fit_hi_us:g}] $\\mu$s")
-    xs = np.linspace(fit_lo_us, fit_hi_us, 300)
-    ax.plot(xs, f(xs, *p), "k-", lw=2,
-            label=f"$\\tau$ = {tau:.1f} $\\pm$ {tau_e:.1f} $\\mu$s, "
-                  f"$\\chi^2$/ndof = {chi2ndof:.2f}")
-    ax.set_xlabel("Neutron candidate time [$\\mu$s]")
-    ax.set_ylabel("Number of candidates")
-    ax.set_title(ctx.title(f"Capture time, run {run}"))
+    ax.hist(CT, bins=cfg['time_bins'], range=cfg['time_range'],
+            histtype="step", color="C7", label="all delayed clusters")
+    ax.errorbar(xdata, ydata, yerr=ydata_errors, fmt="o", ms=4, color="C0",
+                label=f"fit {cfg['fit_min_time']:.0f}–{cfg['fit_max_time']:.0f} "
+                      f"$\\mu$s")
+    ax.plot(xplot, curve, "k-", lw=2,
+            label=f"$\\tau$ = {tau.value:.2f} $\\pm$ {tau.stderr:.2f} $\\mu$s, "
+                  f"therm = {therm.value:.2f} $\\pm$ {therm.stderr:.2f} $\\mu$s, "
+                  f"$\\chi^2$/ndof = {result.redchi:.2f}")
+    ax.set_xlabel("Cluster Time [$\\mu$s]")
+    ax.set_ylabel("Counts")
+    ax.set_title(ctx.title(f"Capture time (LMFIT), run {run}"))
     ax.legend(fontsize=9)
-    ax.grid(alpha=.3, ls="--")
     fig.tight_layout()
     save_plot(fig, ctx, f"eff_capture_time_{run}")
-    return dict(run=run, tau_us=tau, tau_err_us=tau_e, chi2_per_ndof=chi2ndof)
+    return dict(run=run, tau_us=tau.value, tau_err_us=tau.stderr,
+                therm_us=therm.value, therm_err_us=therm.stderr,
+                chi2_per_ndof=result.redchi)
 
 
 def run(ctx, argv=None):
@@ -209,7 +231,7 @@ def run(ctx, argv=None):
         float(fp.get("signal_window_start_ns", 2000)),
         float(fp.get("bkg_window_start_ns", 2000)))
 
-    ei = _resolve_event_index(ctx, ctx.run_name)
+    ei = _resolve_event_index(ctx)
     denom = fp.get("denominator", "ambe_triggers")
     num_mode = fp.get("numerator_mode", "noncosmic")
     src = build_multiplicity(ei, src_run, n_bins, denom, num_mode)

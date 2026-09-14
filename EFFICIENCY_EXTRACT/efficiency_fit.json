@@ -1,0 +1,188 @@
+{
+  "window_ns": {
+    "minimum": 2000.0,
+    "maximum": 67000.0
+  },
+  "cuts": {
+    "charge_balance_max": 0.45,
+    "cluster_pe_max": 100,
+    "cluster_hits_min": 5,
+    "time_min_ns": 2000,
+    "time_max_ns": 67000,
+    "note": "dataset-specific adaptations of the thesis box, NOT a reproduction of its thresholds"
+  },
+  "nominal_model": "poisson",
+  "nominal_model_override_justification": "The uncorrelated-background model does not describe the high-multiplicity tail. This is the SAME failure the thesis reports in 8.6.2 (\"the uncorrelated background model fit underestimates the high multiplicity tail\"), where it gives chi2/ndof = 11/5 at position 0; 46 of our 51.4 comes from multiplicity bins 3-4, and our sample is 1.6x larger so the same physical mismatch carries more leverage. It means the real background is not Poisson in time, which is a statement about the detector, not a defect in the extraction. The alternative is not better: the data-driven fit's p ~ 0.4 is an artefact of background run 6264 having 22 AmBe triggers, whose template uncertainty dominates the chi2 denominator from bin 2 up. Removing sigma_bkg moves that fit from 0.640 to 0.351 with chi2/ndof ~ 854 (scripts/diagnose_datadriven_chi2.py --source 6265 --bkg 6264). A fit that good for that reason is not evidence of a better model. delta_m (the signed distance to the data-driven fit) is therefore carrying real model uncertainty rather than noise, and the number should be read as preliminary until a background run with usable statistics exists.",
+  "efficiency_raw": 0.605,
+  "efficiency_corrected": 0.605,
+  "statistical_interval": {
+    "type": "profile_delta_chi2_1",
+    "delta_chi2": 1.0,
+    "low": 0.6007379277682535,
+    "high": 0.6095657195727969
+  },
+  "joint_projection_interval": {
+    "type": "joint_2_parameter_delta_chi2_2.30",
+    "delta_chi2": 2.3,
+    "low": 0.5985903444726834,
+    "high": 0.6118046027134331,
+    "note": "thesis convention; projecting a 2-parameter joint region onto one axis OVERCOVERS for that parameter"
+  },
+  "systematics": {
+    "plus": 0.03500000000000003,
+    "minus": 0.0,
+    "components": {
+      "model": {
+        "signed": 0.03500000000000003,
+        "plus": 0.03500000000000003,
+        "minus": 0.0
+      }
+    },
+    "notes": [
+      "delta_h (housing captures, thesis 8.7.2) is NOT EVALUATED: no MC housing-capture fraction has been supplied. The quoted total systematic is therefore incomplete and is a LOWER BOUND.",
+      "delta_bt is DIAGNOSTIC ONLY and is EXCLUDED from the systematic total: it was computed from trigger counts, not rates. Thesis eq. 8.9 uses f_B/f_S in Hz. Supply systematics.livetime_s per run in the config to get a publishable number."
+    ]
+  },
+  "goodness_of_fit": {
+    "chi2": 51.36190280813695,
+    "ndof_definition": "thesis: n_bins - n_fitted (does not subtract the normalisation); standard: n_bins - 1 - n_fitted",
+    "ndof_thesis": 6,
+    "ndof_standard": 5,
+    "p_value": 0.0,
+    "p_value_basis": "2,000 multinomial pseudo-experiments at the best-fit model",
+    "p_value_threshold": 0.01,
+    "passed": false,
+    "warnings": [
+      "nominal model 'poisson' has p = 0.0000 < gof_min_p_value = 0.01: it does not describe the multiplicity distribution. chi2 = 51.4 over ndof_thesis=6 / ndof_standard=5.",
+      "OVERRIDDEN BY CONFIG: The uncorrelated-background model does not describe the high-multiplicity tail. This is the SAME failure the thesis reports in 8.6.2 (\"the uncorrelated background model fit underestimates the high multiplicity tail\"), where it gives chi2/ndof = 11/5 at position 0; 46 of our 51.4 comes from multiplicity bins 3-4, and our sample is 1.6x larger so the same physical mismatch carries more leverage. It means the real background is not Poisson in time, which is a statement about the detector, not a defect in the extraction. The alternative is not better: the data-driven fit's p ~ 0.4 is an artefact of background run 6264 having 22 AmBe triggers, whose template uncertainty dominates the chi2 denominator from bin 2 up. Removing sigma_bkg moves that fit from 0.640 to 0.351 with chi2/ndof ~ 854 (scripts/diagnose_datadriven_chi2.py --source 6265 --bkg 6264). A fit that good for that reason is not evidence of a better model. delta_m (the signed distance to the data-driven fit) is therefore carrying real model uncertainty rather than noise, and the number should be read as preliminary until a background run with usable statistics exists."
+    ]
+  },
+  "models": {
+    "uncorrelated": {
+      "eff": 0.605,
+      "lo": 0.6007379277682535,
+      "hi": 0.6095657195727969,
+      "interval_type": "profile_delta_chi2_1",
+      "joint_lo": 0.5985903444726834,
+      "joint_hi": 0.6118046027134331,
+      "lam": 0.076,
+      "chi2": 51.36190280813695,
+      "ndof_thesis": 6,
+      "ndof_standard": 5,
+      "chi2_per_ndof_thesis": 8.560317134689493,
+      "chi2_per_ndof_standard": 10.27238056162739,
+      "p_value": 0.0,
+      "p_value_basis": "2,000 multinomial pseudo-experiments at the best-fit model",
+      "caveats": []
+    },
+    "data_driven": {
+      "eff": 0.64,
+      "lo": 0.5318924102002097,
+      "hi": 0.7482476025131848,
+      "interval_type": "profile_delta_chi2_1",
+      "joint_lo": null,
+      "joint_hi": null,
+      "lam": null,
+      "chi2": 3.07162147039905,
+      "ndof_thesis": 7,
+      "ndof_standard": 6,
+      "chi2_per_ndof_thesis": 0.4388030671998643,
+      "chi2_per_ndof_standard": 0.511936911733175,
+      "p_value": 0.3795,
+      "p_value_basis": "2,000 multinomial pseudo-experiments at the best-fit model",
+      "caveats": [
+        "background run 6264 has only 22 triggers in the denominator; its per-bin uncertainty dominates the chi2 and the data-driven interval will be correspondingly wide. Treat this model as a systematic cross-check, not the primary result.",
+        "background run 6264 has only 5 candidate-bearing events; the background template is nearly a delta at zero, which drives this fit toward the naive counting ratio."
+      ]
+    }
+  },
+  "background_model_crosschecks": {
+    "nominal": "poisson",
+    "alternative_efficiency": 0.64,
+    "delta_model_signed": 0.03500000000000003,
+    "note": "the model difference is the delta_m systematic; its SIGN is kept so the budget can be asymmetric"
+  },
+  "input_provenance": {
+    "source": {
+      "run": 6265,
+      "hist": [
+        "5704",
+        "9192",
+        "639",
+        "82",
+        "9",
+        "1",
+        "0",
+        "1"
+      ],
+      "total_events": 20964,
+      "cosmic_events": 5336,
+      "denominator": 15628,
+      "denominator_mode": "ambe_triggers",
+      "numerator_mode": "noncosmic",
+      "n_overflow": 0,
+      "provenance": "EventIndex",
+      "naive_efficiency": 0.635014077297159
+    },
+    "background": {
+      "run": 6264,
+      "hist": [
+        "17",
+        "3",
+        "2",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      "total_events": 589,
+      "cosmic_events": 567,
+      "denominator": 22,
+      "denominator_mode": "ambe_triggers",
+      "numerator_mode": "noncosmic",
+      "n_overflow": 0,
+      "provenance": "EventIndex",
+      "naive_efficiency": 0.22727272727272727
+    },
+    "likelihood": "thesis_chi2",
+    "background_uncertainty": "thesis_diagonal",
+    "overflow_policy": "fail",
+    "engine": "analytic",
+    "background_scale_factor": 1.0
+  },
+  "quoted": "0.605 +0.005(stat) +0.035(sys) / -0.004(stat) -0.000(sys)",
+  "config": {
+    "source_run": 6265,
+    "background_run": 6264,
+    "crosscheck_run": 6266,
+    "n_bins": 8,
+    "denominator": "ambe_triggers",
+    "numerator_mode": "noncosmic",
+    "nominal_model": "poisson",
+    "gof_min_p_value": 0.01,
+    "n_gof_toys": 2000,
+    "nominal_model_override_justification": "The uncorrelated-background model does not describe the high-multiplicity tail. This is the SAME failure the thesis reports in 8.6.2 (\"the uncorrelated background model fit underestimates the high multiplicity tail\"), where it gives chi2/ndof = 11/5 at position 0; 46 of our 51.4 comes from multiplicity bins 3-4, and our sample is 1.6x larger so the same physical mismatch carries more leverage. It means the real background is not Poisson in time, which is a statement about the detector, not a defect in the extraction. The alternative is not better: the data-driven fit's p ~ 0.4 is an artefact of background run 6264 having 22 AmBe triggers, whose template uncertainty dominates the chi2 denominator from bin 2 up. Removing sigma_bkg moves that fit from 0.640 to 0.351 with chi2/ndof ~ 854 (scripts/diagnose_datadriven_chi2.py --source 6265 --bkg 6264). A fit that good for that reason is not evidence of a better model. delta_m (the signed distance to the data-driven fit) is therefore carrying real model uncertainty rather than noise, and the number should be read as preliminary until a background run with usable statistics exists.",
+    "likelihood": "thesis_chi2",
+    "background_uncertainty": "thesis_diagonal",
+    "n_bootstrap": 400,
+    "overflow_policy": "fail",
+    "acquisition_window_ns": 67000,
+    "signal_window_start_ns": 2000,
+    "bkg_window_start_ns": 2000,
+    "eff_grid": {
+      "min": 0.3,
+      "max": 0.95,
+      "step": 0.001
+    },
+    "lambda_grid": {
+      "min": 0.0,
+      "max": 0.6,
+      "step": 0.002
+    },
+    "n_throws": 1000000,
+    "seed": 20260910,
+    "engine": "analytic",
+    "template_fluctuate": false
+  }
+}
