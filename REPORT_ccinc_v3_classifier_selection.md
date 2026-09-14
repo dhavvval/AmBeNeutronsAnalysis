@@ -1,5 +1,12 @@
 # CCinc v3 — Classifier Selection, Differential Background Lineage, and AmBe Closure
 
+> **See also — `REPORT_ccinc_v3_cluster_provenance_timewindows.md` (2026-09-11).**
+> Adds a second, independent argument for the ClusterFinder verdict below: measured against MC
+> truth, OPTICS splits one neutron across clusters **8× more often** than CF (3.21 % vs 0.40 % of
+> neutrons, tank). The choice made here on transfer grounds also holds on correctness grounds.
+> That report also finds that ~61 % of the tank background class is neutron-majority light, which
+> is the leading candidate explanation for why AUC plateaus at 0.672 here.
+
 > ## ⚠ CAPTURE-TIME FIT WINDOW CHANGED — 2026-08-27
 >
 > **Every capture-time number in this document was measured on a 10–67 µs fit window and

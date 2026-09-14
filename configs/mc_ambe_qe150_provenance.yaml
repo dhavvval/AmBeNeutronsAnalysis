@@ -1,0 +1,58 @@
+run_name: MCAmBe_QE150_provenance
+display_label: "AmBe MC QE 1.50 — provenance of the extra cluster in multi-cluster events"
+campaign: "AmBe MC QE1.50"
+description: >
+  When an AmBe MC event yields more than one neutron-like cluster, is that ONE neutron
+  whose light was split across two ClusterFinder clusters, or two DIFFERENT neutrons?
+
+  The dataset makes the question sharp: every event has exactly one primary neutron
+  (PDG 2112) and at most one true capture. So a genuine "different neutrons" case
+  REQUIRES a secondary neutron -- NeutronAncestorClass 2 (from a proton), 3 (from a
+  neutron) or 4 (other). The class breakdown is part of the answer, not a diagnostic.
+
+  Membership is EXACT (Cluster_HitChankey + Cluster_HitT), not the +-window rule that
+  the OPTICS/MVA feature path uses, because the window reassigns hits between exactly
+  the tens-of-ns-separated cluster pairs under study. `--mode window` reruns the whole
+  thing with the window rule as a cross-check and the two are compared; if they
+  disagree on more than 10% of clusters the answer must be quoted as a range.
+
+  Hit -> DirectParent is a JOIN on (PMTID, HitTime) with the per-event ~15.9 ns PMT
+  offset and an 8 ns tolerance -- the DirectParent arrays are ordered by
+  std::map<pmtID, map<hitTime>> iteration and are NOT row-aligned with hit*.
+
+output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/mc_ambe
+
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv2/QE_1.50/*QE_1.50/ANNIEEvent_MC_AmBe_*.root
+
+provenance:
+  label_map: /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv2/QE_1.50/label_map.txt
+  # Cluster-label thresholds. All are scanned in __prov_threshold_scan.csv; gate V8
+  # fails the run if the split fraction moves more than 5 points between min_frac
+  # 0.5 and 0.7, i.e. if the answer is threshold-driven rather than data-driven.
+  min_frac: 0.60
+  weak_frac: 0.40
+  min_hits: 3
+  runnerup_frac: 0.30
+  min_traced_frac: 0.50
+  bg_frac: 0.60
+  # Single-cluster events sampled per file to calibrate the clusterTime-minus-
+  # trueNeutCapTime band used by cross-check CC1. Seeded per run, so reproducible.
+  # 5 per file x 1250 files = ~6,250 control events, ample to fix the CC1 band
+  # median and IQR, and Tier B cost scales directly with this number.
+  control_events_per_file: 5
+
+  # For `--mode attach-mva`. The SAME frozen CCinc-neutrino model and threshold the
+  # MVA decks use -- nothing is trained anywhere in this analysis. Each variant points
+  # at the scored table for its own veto setting; crossing them would mislabel which
+  # clusters the selection accepted.
+  mva:
+    threshold: 0.423621
+    score_col: gbt_score
+    scored:
+      mva_vetoON:  /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/mc_ambe/mva/mcqe150_vetoON__data_features_cf__scored.parquet
+      mva_vetoOFF: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/mc_ambe/mva/mcqe150_vetoOFF__data_features_cf__scored.parquet
+
+cuts: {}
+fit_params: {}

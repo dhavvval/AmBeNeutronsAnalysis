@@ -1,6 +1,13 @@
 # CCinc v3 — World-Volume Background & Merged Tank+World Training
 ## productionv3 world/fmvmrd · Stages 0 → 2 · merged with tank/fmvmrd
 
+> **See also — `REPORT_ccinc_v3_cluster_provenance_timewindows.md` (2026-09-11).**
+> The §4.5 finding that 14.0 % of tank background clusters are neutron-rich is correct for what
+> it measures (merged tank+world, `frac_neutron > frac_nonneutron`) but should **not** be read as
+> bounding the effect. Measured per-hit on the tank truth-tag stream, **60.7 % of the background
+> class is neutron-majority light that failed the label only because no single neutron owned half
+> the cluster**, and 99.9 % of it contains at least one neutron hit.
+
 **Runs:** `cc_neutrino_v3world_truthtag`, `cc_neutrino_v3world_recotag` (+ merged trainings)
 **Date produced:** 2026-08-04 / 05
 **MC input:** `/pnfs/annie/persistent/users/dajana/output/genie_wcsim_world/productionv3/world/fmvmrd/ANNIEEvent_cc_neutrino_world_*.root`
