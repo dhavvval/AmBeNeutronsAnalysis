@@ -1,3 +1,27 @@
+"""
+Teal Pershing's original chapter 8 driver, kept as the provenance record.
+
+DO NOT RUN THIS. It is superseded by:
+
+    ambe stats efficiency  --config configs/data_ambe2v4_effpair_box.yaml
+    ambe plots efficiency  --config configs/data_ambe2v4_effpair_box.yaml
+
+which reimplement the same method (ambe/stats/efficiency_fit.py) against this
+repo's data with the denominator, cosmic-veto and zero-bin handling made explicit.
+
+WHY IT IS KEPT. This file is the only surviving transcription of Teal's driver and
+is the figure-by-figure reference the new plots were written against.
+
+WHY IT CANNOT RUN. It imports `AmBeNeutronEff` and `ProfileLikelihoodBuilder` as flat
+module names from his ANNIENtupleAnalysis checkout; neither is on disk here (the
+second exists only as ambe.stats.profile_likelihood). Those imports failed at MODULE
+IMPORT time, so `ambe plots phase2` died inside cli._load() before reaching the stub
+below -- the error named a missing module rather than saying the command was retired.
+The original body is preserved verbatim in the string literal below so nothing is
+lost, while the module itself now imports cleanly.
+"""
+
+_ORIGINAL_DRIVER = r"""
 ###AmBe plots ##
 import os          
 import numpy as np
@@ -294,15 +318,19 @@ plt.show()
 
 
 
+"""
+
+
 # ---------------------------------------------------------------------------
 # ambe CLI integration
 # ---------------------------------------------------------------------------
 def run(ctx, argv=None):
-    """Not yet ported to RunContext API. Run this script directly."""
-    raise NotImplementedError(
-        f"This module ({__name__}) has not been ported to the ambe CLI yet. "
-        "Run it directly as a Python script."
-    )
+    raise SystemExit(
+        "ambe plots phase2 is retired. Teal's original driver is preserved in this "
+        "module's _ORIGINAL_DRIVER string for reference only.\n"
+        "Use instead:\n"
+        "    ambe stats efficiency --config configs/data_ambe2v4_effpair_box.yaml\n"
+        "    ambe plots efficiency --config configs/data_ambe2v4_effpair_box.yaml")
 
 
 def cli(ctx, argv=None):
