@@ -64,7 +64,7 @@ echo "[chain] driver exit $rc" | tee -a $CHAINLOG
 # ── 5. classify ─────────────────────────────────────────────────────────────
 source /exp/annie/app/users/dajana/myboy/bin/activate
 export PYTHONUNBUFFERED=1
-python ccinc_v3_ambe_closure.py --do classify --dataset ambepipe_v4neutron \
+python -m scripts.presentation.ccinc_v3_ambe_closure --do classify --dataset ambepipe_v4neutron \
   > logs_classify_v4neutron.log 2>&1
 echo "[chain] classify exit $? $(date)" | tee -a $CHAINLOG
 grep -viE "tensorflow|cuda|cuInit|TF-TRT" logs_classify_v4neutron.log | tail -30 \

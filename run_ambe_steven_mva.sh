@@ -106,7 +106,7 @@ echo "[1] scored -> ${SCORED}"
 # ── Stage 2: per-run neutron-rate summary ────────────────────────────────────
 echo
 echo "[2] per-run neutron-rate summary (MC-anchored rf_score @ 0.80 sig-eff) ..."
-python summarize_ambe_neutrons.py \
+python -m scripts.workflows.summarize_ambe_neutrons \
     --scored      "${SCORED}" \
     --mc-scores   "${MC_SCORES}" \
     --score-col   rf_score \
@@ -119,7 +119,7 @@ echo
 echo "[3] multiplicity + score PDF (Stage A → B) ..."
 STATS_ARG=""
 [[ -f "${STATS_CSV}" ]] && STATS_ARG="--stats-csv ${STATS_CSV}"
-python plot_ambe_neutron_multiplicity.py \
+python -m scripts.diagnostics.plot_ambe_neutron_multiplicity \
     --scored      "${SCORED}" \
     ${STATS_ARG} \
     --mc-features "${MC_FEATS}" \
@@ -135,7 +135,7 @@ CAPTURE_DIR="${OUT}/capture_stageAB_steven"
 mkdir -p "${CAPTURE_DIR}"
 # Threshold derived from steven MC test-set: rf_score @ 80% signal efficiency = 0.8423.
 # (The old 0.643 was from the cc_neutrino model — do not use it here.)
-python capture_time_stageAB_from_parquet.py \
+python -m scripts.diagnostics.capture_time_stageAB_from_parquet \
     --scored    "${SCORED}" \
     --score-col rf_score \
     --score-cut 0.8423 \
@@ -149,7 +149,7 @@ echo "[5] data vs MC feature comparison ..."
 COMPARE_DIR="${OUT}/compare_selections_steven"
 mkdir -p "${COMPARE_DIR}"
 
-python analyze_data_mc_comparison.py \
+python -m scripts.diagnostics.analyze_data_mc_comparison \
     --data-dir   "${REPO}/EventAmBeNeutronCandidatesData" \
     --mc-parquet "${MC_STEVEN_DIR}" \
     --run-name   mc_steven_multiport \

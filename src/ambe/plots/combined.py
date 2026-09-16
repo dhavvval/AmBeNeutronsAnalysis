@@ -97,7 +97,8 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     # 3. Cluster PE vs Charge Balance
     fig, ax = plt.subplots()
     h = ax.hist2d(pe, ccb, bins=200, cmap="viridis",
-                  range=[[-10, 500], [0.1, 1.0]], cmin=1)
+                  range=[[0, float(ctx.cuts.get("pe_max", 100)) + 20],
+                         [0.1, 0.5]], cmin=1)
     fig.colorbar(h[3], ax=ax, label="Counts")
     ax.set_title(f"{sel_label}\n" + ctx.title("Cluster PE vs charge balance"))
     ax.set_xlabel("Cluster PE")

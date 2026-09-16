@@ -4,7 +4,7 @@
 # merged tank+world models to real AmBe data.
 #
 # Deliberately never run before now (world report §6, open item 6). Nothing is
-# trained here: mva_analysis.py --score-data loads a frozen artifact, rebuilds the
+# trained here: src/ambe/mc/mva_analysis.py --score-data loads a frozen artifact, rebuilds the
 # feature matrix in the stored order with the stored MC training medians, and applies
 # RF/GBT/XGB plus the companion NN. Verified beforehand: all 31 (truth-tag) / 21
 # (reco-tag) features the models expect are present in the AmBe features parquets, so
@@ -111,7 +111,7 @@ only three scores will be produced" | tee -a $LOG
   echo "  model: $(basename "$PKL")" | tee -a $LOG
   echo "  data : $(basename "$DAT")" | tee -a $LOG
   echo "  stage: $D" | tee -a $LOG
-  python mva_analysis.py \
+  python -m ambe.mc.mva_analysis \
       --score-data "$D/ambe_${STREAM}_${MSFX}.parquet" \
       --model "$D/$(basename "$PKL")" 2>&1 | tee -a $LOG
   rc=${PIPESTATUS[0]}

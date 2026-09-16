@@ -7,8 +7,8 @@
 # Steps:
 #   1) ambe mc process   (annie venv)
 #   2) ambe mc features  (annie venv)  -- no `ambe mc optics` grid sweep
-#   3) mva_analysis.py --method optics        --save-model   (annie311 venv, needs TF)
-#   4) mva_analysis.py --method clusterfinder --save-model   (annie311 venv, needs TF)
+#   3) src/ambe/mc/mva_analysis.py --method optics        --save-model   (annie311 venv, needs TF)
+#   4) src/ambe/mc/mva_analysis.py --method clusterfinder --save-model   (annie311 venv, needs TF)
 #
 # Usage:  bash run_lucho_100k.sh
 # ============================================================
@@ -52,7 +52,7 @@ echo "=================================================="
     echo ""
     echo "[3-4] MVA train + freeze  (method=${METHOD}, bkg=all non-neutron)"
     echo "      → ${OUT}"
-    time python mva_analysis.py \
+    time python -m ambe.mc.mva_analysis \
         --config "$CFG" \
         --method "$METHOD" \
         --bkg-mode all \

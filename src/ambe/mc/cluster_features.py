@@ -1683,7 +1683,7 @@ def extract_features_from_background_hits(
 ) -> pd.DataFrame:
     """
     Compute cluster features for background data that has already been through
-    OPTICS pre-selection (output of analyze_optics_data_rate.py).
+    OPTICS pre-selection (output of scripts/workflows/analyze_optics_data_rate.py).
 
     Reads background_optics_hits.parquet — columns:
         run, event_number, cluster_id, is_background, x, y, z, t, pe, pmtID
@@ -1831,6 +1831,13 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None) -> Path:
     p = argparse.ArgumentParser(prog="ambe mc features")
     p.add_argument("--min-pulses", type=int,
                    default=int(ctx.cuts.get("min_pulses_per_event", 3)))
+    p.add_argument("--background-hits", "--hits", dest="background_hits")
+    p.add_argument("--rerun-optics", action="store_true",
+                   help="Recluster each saved background cluster with one OPTICS setting")
+    p.add_argument("--min-samples", type=int)
+    p.add_argument("--xi", type=float)
+    p.add_argument("--t-unit-ns", type=float)
+    p.add_argument("--output", type=Path)
     args = p.parse_args(list(argv) if argv else [])
 
     ms, xi, t_unit, prefilter, truth_win, geo_path, off_path, src_pos = _config_from_ctx(ctx)
@@ -1848,14 +1855,27 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None) -> Path:
 
     # Beamoff mode: hits parquet already has OPTICS cluster assignments —
     # skip OPTICS re-run and truth labelling, just compute features.
-    background_hits = ctx.extra.get("features", {}).get("background_hits", None)
+    background_hits = args.background_hits or ctx.extra.get("features", {}).get("background_hits")
+    if args.rerun_optics and not background_hits:
+        p.error("--rerun-optics requires --background-hits or features.background_hits")
     if background_hits:
-        df = extract_features_from_background_hits(background_hits, geo,
-                                                   source_pos_m=src_pos)
-        out_parquet = ctx.parquet_path(f"{ctx.run_name}__background_cluster_features")
+        if args.rerun_optics:
+            df = extract_features_from_background_hits_optics(
+                background_hits, geo,
+                min_samples=args.min_samples if args.min_samples is not None else ms,
+                xi=args.xi if args.xi is not None else xi,
+                t_unit_ns=args.t_unit_ns if args.t_unit_ns is not None else t_unit,
+                source_pos_m=src_pos)
+        else:
+            df = extract_features_from_background_hits(background_hits, geo,
+                                                       source_pos_m=src_pos)
+        out_parquet = args.output or ctx.parquet_path(f"{ctx.run_name}__background_cluster_features")
+        out_parquet.parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(out_parquet, index=False)
         print(f"[cluster_features] wrote background features → {out_parquet}")
         return out_parquet
+    if args.output or args.min_samples is not None or args.xi is not None or args.t_unit_ns is not None:
+        p.error("background feature overrides require --background-hits")
 
     df = extract_all_features(
         ctx, geo,

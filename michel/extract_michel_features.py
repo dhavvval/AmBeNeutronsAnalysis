@@ -1,31 +1,10 @@
 #!/usr/bin/env python3
-"""
-Extract Michel electron cluster features from an ANNIEEvent MC ROOT file.
+"""Extract relaxed MC Michel cluster features.
 
-Two modes:
-  --exact-cuts  Apply exactly Michel_tuning.py thresholds; prints a cutflow
-                table and exits (expected result: 0 surviving clusters because
-                HasMRD=1 for all WCSim events and no delayed cluster has ≥20
-                hits with CB < 0.18).
-  default       MC-adapted selection (see below) suitable for this file.
-
-MC-adapted selection (default):
-  - Muon cluster  : max-PE cluster per event (PE > 500)
-  - Michel candidate: cluster with dt > 200 ns from muon, PE < 650, hits >= 5
-
-Standard Michel_tuning.py thresholds (hits >= 20, CB < 0.18, MRD/veto flags)
-cannot be applied to this file: the muons are through-going (HasMRD=1 for all
-events, MRDStop=0, MRDThrough=0) and the resulting Michel decay clusters have
-only 5-17 hits and CB 0.2-0.6.  The dt > 200 ns cut is the primary discriminant
-that separates true muon-decay products from prompt scattered muon light.
-
-Usage
------
-    # Exact Michel_tuning.py cuts — cutflow diagnostic only:
-    python extract_michel_features.py --config configs/mc_michel_mva.yaml --exact-cuts
-
-    # MC-adapted cuts — produces features parquet:
-    python extract_michel_features.py --config configs/mc_michel_mva.yaml
+Uses a brightest-cluster muon tag, PE >= 500, and delayed candidates with
+200 <= dt <= 70000 ns, PE < 650, hits >= 5 and 0 < CB < 0.2. This sample differs
+from tag_michel_background.py; see michel/README.md.
+--exact-cuts is a historical partial cutflow diagnostic, not a full event selection.
 """
 from __future__ import annotations
 
@@ -39,8 +18,7 @@ import numpy as np
 import pandas as pd
 import uproot
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from src.ambe.mc.cluster_features import compute_cluster_features, load_geometry
+from ambe.mc.cluster_features import compute_cluster_features, load_geometry
 
 
 # ── Selection thresholds (MC-adapted, see module docstring) ───────────────────
@@ -77,7 +55,7 @@ def _exact_cutflow(root_path: str, tree_name: str = "Event;1") -> None:
      15. Michel CB ∈ (0, 0.2)
     """
     print(f"\n{'='*60}")
-    print("EXACT Michel_tuning.py CUTFLOW")
+    print("HISTORICAL PARTIAL MICHEL CUTFLOW (not a full dirt-muon selection)")
     print(f"{'='*60}")
     print(f"File: {root_path}\n")
 
@@ -240,12 +218,7 @@ def _exact_cutflow(root_path: str, tree_name: str = "Event;1") -> None:
     print(f"\n{'='*60}")
 
     if n_michel_total == 0:
-        print("\nResult: ZERO Michel clusters pass the exact Michel_tuning.py cuts.")
-        print("This is expected for this MC file because:")
-        print("  - All muons are through-going (HasMRD=1) → MRD cut blocks all events")
-        print("  - Delayed clusters (dt>200ns) have only 5-17 hits → hits<20 cut kills them")
-        print("  - Delayed clusters have CB 0.2-0.6 → CB<0.2 cut removes survivors")
-        print("\nNext step: relax cuts to the MC-adapted thresholds (--config mode)")
+        print("No candidates pass this partial cluster-cut diagnostic.")
     print(f"{'='*60}\n")
 
 
@@ -390,7 +363,7 @@ def main():
                    help="AmBe source position in metres. Example: 0 -0.1446 1.681")
     p.add_argument("--tree",        default="Event;1")
     p.add_argument("--exact-cuts",  action="store_true",
-                   help="Apply exact Michel_tuning.py cuts and print cutflow table. "
+                   help="Print the historical partial cluster-cut diagnostic. "
                         "Does not extract features or write output.")
     args = p.parse_args()
 

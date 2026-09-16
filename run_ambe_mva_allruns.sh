@@ -52,14 +52,14 @@ echo "════════════════════════�
 # ── Stage 0: ensure the frozen model exists (re-freeze if missing) ────────────
 if [[ ! -f "${MODEL}" ]]; then
   echo "[0] frozen model missing — training + freezing from MC ..."
-  python mva_analysis.py --config "${CONFIG}" --no-nn --no-cv --save-model || exit 1
+  python -m ambe.mc.mva_analysis --config "${CONFIG}" --no-nn --no-cv --save-model || exit 1
 else
   echo "[0] frozen model present: ${MODEL}"
 fi
 
 # ── Stage 1: feature extraction over ALL runs (resumable) ─────────────────────
 echo "[1] extracting features over all runs in ${DATA_DIR} ..."
-python -u analyze_optics_beamcluster_data.py \
+python -u -m scripts.workflows.analyze_optics_beamcluster_data \
     "${DATA_DIR}/" \
     --features-out --run-name "${RUN_NAME}" --output-dir "${OUT}" \
     --gate-csv-dir "${GATE_DIR}" --jobs "${JOBS}" || exit 1
@@ -68,19 +68,19 @@ echo "[1] features -> ${FEATS}"
 
 # ── Stage 2: score all clusters with the frozen model ─────────────────────────
 echo "[2] scoring with frozen model ..."
-python mva_analysis.py --config "${CONFIG}" --score-data "${FEATS}" || exit 1
+python -m ambe.mc.mva_analysis --config "${CONFIG}" --score-data "${FEATS}" || exit 1
 SCORED="${OUT}/${RUN_NAME}__data_features__scored.parquet"
 echo "[2] scored -> ${SCORED}"
 
 # ── Stage 3: per-run neutron-rate + position-dependence summary ───────────────
 echo "[3] per-run summary (MC-anchored ${SCORE_COL} @ ${SIG_EFF} signal eff) ..."
-python summarize_ambe_neutrons.py \
+python -m scripts.workflows.summarize_ambe_neutrons \
     --scored "${SCORED}" --mc-scores "${MC_SCORES}" \
     --score-col "${SCORE_COL}" --sig-eff "${SIG_EFF}" --out "${OUT}" || exit 1
 
 # ── Stage 4: combined multiplicity / comparison PDF ───────────────────────────
 echo "[4] multiplicity + comparison plots ..."
-python plot_ambe_neutron_multiplicity.py \
+python -m scripts.diagnostics.plot_ambe_neutron_multiplicity \
     --scored "${SCORED}" --mc-features "${MC_FEATS}" --stats-csv "${STATS_CSV}" \
     --score-col "${SCORE_COL}" --score-cut "${PLOT_CUT}" \
     --out "${OUT}/${RUN_NAME}__neutron_multiplicity.pdf" || exit 1

@@ -95,14 +95,14 @@ MC_SCORES_CF="${NEW_PARQ}/${RUN}__mva_scores${MODEL_TAG}__cf.parquet"
 MC_FEATURES="${NEW_PARQ}/${RUN}__cluster_features.parquet"
 
 # ── Stage 2: Train BOTH MVA streamlines cleanly in the sandbox ────────────
-# CRITICAL: mva_analysis.py ALWAYS writes the per-cluster MC scores to the
+# CRITICAL: src/ambe/mc/mva_analysis.py ALWAYS writes the per-cluster MC scores to the
 # config-derived name  ${RUN}__mva_scores${MODEL_TAG}.parquet  — it ignores the
 # --save-model path for the SCORES file. Since both trainings share ${RUN}, the
 # 2nd training would overwrite the 1st's scores. So after EACH training we
 # immediately MOVE the default-named scores parquet to a method-specific name.
 # (This is exactly the bug that, via a symlink, clobbered the original OPTICS
 # scores on the first attempt — here there are no symlinks to write through.)
-# mva_analysis.py writes these THREE artifacts to method-AGNOSTIC default names —
+# src/ambe/mc/mva_analysis.py writes these THREE artifacts to method-AGNOSTIC default names —
 # so OPTICS and CF (same run_name) would clobber each other. After each training
 # we rename all three to a per-method name so BOTH streamlines' models, scores,
 # AND plots/CSVs (RF signal-vs-bkg discriminator + NN loss/accuracy history) are
@@ -134,7 +134,7 @@ echo "--- Stage 2a: MVA train (method=optics) ---"
 if [[ -e "$PKL_OPTICS" && -e "$MC_SCORES_OPTICS" ]]; then
   echo "  reusing existing sandbox OPTICS model + scores (already trained) — skip"
 else
-  python mva_analysis.py \
+  python -m ambe.mc.mva_analysis \
       --config "$CONFIG" --method optics \
       --cc-only --bkg-mode all --max-ratio 1.0 --keep-prompt-bkg \
       --save-model "$PKL_OPTICS"
@@ -146,7 +146,7 @@ echo "--- Stage 2b: MVA train (method=clusterfinder) ---"
 if [[ -e "$PKL_CF" && -e "$MC_SCORES_CF" ]]; then
   echo "  reusing existing sandbox CF model + scores — skip"
 else
-  python mva_analysis.py \
+  python -m ambe.mc.mva_analysis \
       --config "$CONFIG" --method clusterfinder \
       --cc-only --bkg-mode all --max-ratio 1.0 --keep-prompt-bkg \
       --save-model "$PKL_CF"
@@ -156,13 +156,13 @@ fi
 # ── Pick best classifier + operating cut, PER method (anchored on each MC) ──
 echo
 echo "--- Picking best model + cut (OPTICS) ---"
-eval "$(python pick_best_model_cut.py --scores "$MC_SCORES_OPTICS" --sig-eff 0.80)"
+eval "$(python -m scripts.workflows.pick_best_model_cut --scores "$MC_SCORES_OPTICS" --sig-eff 0.80)"
 : "${BEST_SCORE_COL:=rf_score}"; : "${BEST_SCORE_CUT:=0.5}"
 OPT_SCORE_COL="$BEST_SCORE_COL"; OPT_SCORE_CUT="$BEST_SCORE_CUT"
 echo "[pipeline] OPTICS: ${OPT_SCORE_COL} @ ${OPT_SCORE_CUT}"
 
 echo "--- Picking best model + cut (CF) ---"
-eval "$(python pick_best_model_cut.py --scores "$MC_SCORES_CF" --sig-eff 0.80)"
+eval "$(python -m scripts.workflows.pick_best_model_cut --scores "$MC_SCORES_CF" --sig-eff 0.80)"
 : "${BEST_SCORE_COL:=rf_score}"; : "${BEST_SCORE_CUT:=0.5}"
 CF_SCORE_COL="$BEST_SCORE_COL"; CF_SCORE_CUT="$BEST_SCORE_CUT"
 echo "[pipeline] CF: ${CF_SCORE_COL} @ ${CF_SCORE_CUT}"
@@ -210,34 +210,34 @@ else:
 PYEOF
 
   echo "--- ${TAG}: score AmBe data with its OWN model ---"
-  python mva_analysis.py --score-data "$COMP_CUT_DATA" --model "$PKL"
+  python -m ambe.mc.mva_analysis --score-data "$COMP_CUT_DATA" --model "$PKL"
   DATA_STEM="$(basename "${COMP_CUT_DATA%.parquet}")"
   mv -f "$(dirname "$COMP_CUT_DATA")/${DATA_STEM}__scored.parquet" "${OUT_S}/${TAG}__scored.parquet"
   SCORED="${OUT_S}/${TAG}__scored.parquet"
 
   echo "--- ${TAG}: neutron rate summary (${SCOL}) ---"
-  python summarize_ambe_neutrons.py --scored "$SCORED" --mc-scores "$MC_PAR" \
+  python -m scripts.workflows.summarize_ambe_neutrons --scored "$SCORED" --mc-scores "$MC_PAR" \
       --score-col "$SCOL" --sig-eff 0.80 --out "${OUT_S}/rate_best"
 
   echo "--- ${TAG}: multiplicity PDF (${SCOL} @ ${SCUT}) ---"
-  python plot_ambe_neutron_multiplicity.py --scored "$SCORED" --mc-features "$MC_FEATURES" \
+  python -m scripts.diagnostics.plot_ambe_neutron_multiplicity --scored "$SCORED" --mc-features "$MC_FEATURES" \
       --score-col "$SCOL" --score-cut "$SCUT" --out "${OUT_S}/${TAG}__multiplicity.pdf"
 
   echo "--- ${TAG}: capture-time fit (${SCOL} @ ${SCUT}) ---"
-  python capture_time_stageAB_from_parquet.py --scored "$SCORED" \
+  python -m scripts.diagnostics.capture_time_stageAB_from_parquet --scored "$SCORED" \
       --score-col "$SCOL" --score-cut "$SCUT" --out-dir "${OUT_S}/capture_stageAB" --methods lmfit
 done
 
 # ── Stage 4: benchmark each method with ITS OWN model ─────────────────────
 echo
 echo "--- Stage 4 (ccinc_xi02cc_optics_boxcuts_cftrain): OPTICS + own model ---"
-python benchmark_selection_2x2.py --features "$MC_FEAT_CC" --model "$PKL_OPTICS" \
+python -m scripts.diagnostics.benchmark_selection_2x2 --features "$MC_FEAT_CC" --model "$PKL_OPTICS" \
     --score-col "$OPT_SCORE_COL" --score-cut "$OPT_SCORE_CUT" \
     --out-dir "${OUT_ROOT}/ambe_data/ccinc_xi02cc_optics_boxcuts_cftrain/benchmark"
 
 echo
 echo "--- Stage 4 (ccinc_xi02cc_cf_boxcuts_cftrain): CF + own CF model ---"
-python benchmark_selection_2x2.py --features "$MC_FEAT_CC" --model "$PKL_CF" \
+python -m scripts.diagnostics.benchmark_selection_2x2 --features "$MC_FEAT_CC" --model "$PKL_CF" \
     --score-col "$CF_SCORE_COL" --score-cut "$CF_SCORE_CUT" \
     --out-dir "${OUT_ROOT}/ambe_data/ccinc_xi02cc_cf_boxcuts_cftrain/benchmark"
 

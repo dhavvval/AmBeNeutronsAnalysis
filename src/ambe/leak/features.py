@@ -102,7 +102,6 @@ def _good_events(ctx, run):
     wf = WaveformConfig(
         pulse_gamma=int(st.get("ic_min", WaveformConfig.pulse_gamma)),
         pulse_max=int(st.get("ic_max", WaveformConfig.pulse_max)),
-        selection_mode="ic",
     )
     extra = {int(k): tuple(float(x) for x in v)
              for k, v in (st.get("extra_source_positions") or {}).items()}

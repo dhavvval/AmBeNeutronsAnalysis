@@ -7,7 +7,7 @@
 #   Stage 1+2 : AmBe waveform IC cut (v1: 400<IC<575) -> good_events,
 #               then keep BeamCluster events with eventTimeTank in good_events
 #               + ambe_single_cut -> EventAmBeNeutronCandidates_<TAG>_<run>.csv
-#               (driver: run_waveform_gated_pipeline.py)
+#               (driver: scripts/workflows/run_waveform_gated_pipeline.py)
 #   Stage 3   : per-event OPTICS on those candidate CSVs
 #               (src/ambe/clustering/optics_data.py -> writes *_OPTICS.csv)
 #
@@ -42,7 +42,7 @@ echo "=================================================================="
 
 # ---- Stage 1+2: waveform gating -> candidate CSVs ----------------------------
 echo ""; echo ">>> STAGE 1+2: waveform IC cut + BeamCluster matching ..."
-python -u run_waveform_gated_pipeline.py --dataset "$DATASET" --runinfo "$TAG" \
+python -u -m scripts.workflows.run_waveform_gated_pipeline --dataset "$DATASET" --runinfo "$TAG" \
     2>&1 | tee "waveform_gated_${TAG}_stage12.log"
 
 # ---- Stage 3: OPTICS on the gated candidate CSVs -----------------------------

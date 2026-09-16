@@ -68,7 +68,7 @@ echo "=========================================================="
 # ---- 4. Run ------------------------------------------------------------------
 # --jobs N      : process N files in parallel (CPU-bound; set near core count)
 # (resume is ON by default: existing runs in the CSV are skipped)
-python -u analyze_optics_beamcluster_data.py \
+python -u -m scripts.workflows.analyze_optics_beamcluster_data \
     "$INPUT" \
     --output-dir "$OUTDIR" \
     --jobs "$JOBS" \

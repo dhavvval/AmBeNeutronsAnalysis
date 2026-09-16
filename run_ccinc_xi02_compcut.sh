@@ -29,7 +29,7 @@
 #                       Default "optics" = one model, historical behaviour.
 #                       METHODS="optics clusterfinder" trains one model per
 #                       method and preserves both sets of artifacts (see
-#                       preserve_artifacts below — mva_analysis.py's mode_tag
+#                       preserve_artifacts below — src/ambe/mc/mva_analysis.py's mode_tag
 #                       does NOT encode --method, so without this the second
 #                       training silently overwrites the first).
 #   TAG_PREFIX=<pfx>    prefix for the Stage-3/4 AmBe streamline dir names,
@@ -132,7 +132,7 @@ fi
 if [[ "${START_STAGE}" -le 1 ]]; then
   echo
   echo "--- Stage 1b: background composition report ---"
-  python report_background_composition.py \
+  python -m scripts.diagnostics.report_background_composition \
       --config "$CONFIG" \
       --methods ${METHODS} \
       --comp-n-neutron-max "$COMP_N_NEUTRON_MAX" \
@@ -152,7 +152,7 @@ MC_FEATURES="${OUT_ROOT}/${RUN}/parquet/${RUN}__cluster_features.parquet"
 # The MVA is trained on xi=0.02 cluster features (different shape from xi=0.10).
 N_METHODS="$(wc -w <<< "${METHODS}")"
 
-# mva_analysis.py writes the scores parquet, plot PDF and summary CSV to
+# src/ambe/mc/mva_analysis.py writes the scores parquet, plot PDF and summary CSV to
 # method-AGNOSTIC names derived from run_name + mode_tag. Training two methods
 # under one run_name therefore clobbers the first method's artifacts. When more
 # than one method is trained, each one's artifacts are moved to a per-method name
@@ -191,7 +191,7 @@ if [[ "${START_STAGE}" -le 2 ]]; then
     echo "--- Stage 2 [${M}] ---"
     if [[ "${N_METHODS}" -eq 1 ]]; then
       # Single method: keep the historical default artifact names untouched.
-      python mva_analysis.py \
+      python -m ambe.mc.mva_analysis \
           --config "$CONFIG" \
           --method "$M" \
           --cc-only \
@@ -200,7 +200,7 @@ if [[ "${START_STAGE}" -le 2 ]]; then
           --keep-prompt-bkg \
           --save-model
     else
-      python mva_analysis.py \
+      python -m ambe.mc.mva_analysis \
           --config "$CONFIG" \
           --method "$M" \
           --cc-only \
@@ -239,7 +239,7 @@ fi
 # ── Pick the best classifier + derive its operating cut (adaptive) ───────
 echo
 echo "--- Picking best MVA model + operating cut ---"
-eval "$(python pick_best_model_cut.py --scores "$MC_SCORES" --sig-eff 0.80)"
+eval "$(python -m scripts.workflows.pick_best_model_cut --scores "$MC_SCORES" --sig-eff 0.80)"
 : "${BEST_SCORE_COL:=rf_score}"
 : "${BEST_SCORE_CUT:=0.5}"
 echo "[pipeline] using BEST_SCORE_COL=${BEST_SCORE_COL}  BEST_SCORE_CUT=${BEST_SCORE_CUT}"
@@ -300,7 +300,7 @@ PYEOF
 
   # Stage 3a — score comp-cut data, then rename to per-streamline scored parquet
   echo "--- ${TAG}: score AmBe data (post comp-cut) ---"
-  python mva_analysis.py \
+  python -m ambe.mc.mva_analysis \
       --score-data "$COMP_CUT_DATA" \
       --model      "$PKL"
   DATA_STEM="$(basename "${COMP_CUT_DATA%.parquet}")"
@@ -310,7 +310,7 @@ PYEOF
 
   # Stage 3b — per-run neutron rate summary
   echo "--- ${TAG}: neutron rate summary (${BEST_SCORE_COL}) ---"
-  python summarize_ambe_neutrons.py \
+  python -m scripts.workflows.summarize_ambe_neutrons \
       --scored    "$SCORED" \
       --mc-scores "$MC_PAR" \
       --score-col "$BEST_SCORE_COL" \
@@ -319,7 +319,7 @@ PYEOF
 
   # Stage 3c — multiplicity + score PDF
   echo "--- ${TAG}: multiplicity PDF (${BEST_SCORE_COL} @ ${BEST_SCORE_CUT}) ---"
-  python plot_ambe_neutron_multiplicity.py \
+  python -m scripts.diagnostics.plot_ambe_neutron_multiplicity \
       --scored      "$SCORED" \
       --mc-features "$MC_FEATURES" \
       --score-col   "$BEST_SCORE_COL" \
@@ -328,7 +328,7 @@ PYEOF
 
   # Stage 3d — capture-time fit (lmfit)
   echo "--- ${TAG}: capture-time fit (${BEST_SCORE_COL} @ ${BEST_SCORE_CUT}) ---"
-  python capture_time_stageAB_from_parquet.py \
+  python -m scripts.diagnostics.capture_time_stageAB_from_parquet \
       --scored    "$SCORED" \
       --score-col "$BEST_SCORE_COL" \
       --score-cut "$BEST_SCORE_CUT" \
@@ -353,7 +353,7 @@ CF_SCORED_MCA="${OUT_ROOT}/ambe_data/${TAG_PREFIX}_cf_mcbkg/${TAG_PREFIX}_cf_mcb
 echo
 echo "--- Stage 4 (${TAG_PREFIX}_optics_boxcuts): OPTICS + box cuts ---"
 OUT_S3="${OUT_ROOT}/ambe_data/${TAG_PREFIX}_optics_boxcuts"
-python benchmark_selection_2x2.py \
+python -m scripts.diagnostics.benchmark_selection_2x2 \
     --features  "$MC_FEAT_CC" \
     --model     "$PKL_MCA" \
     --score-col "$BEST_SCORE_COL" \
@@ -363,7 +363,7 @@ python benchmark_selection_2x2.py \
 echo
 echo "--- Stage 4 (${TAG_PREFIX}_cf_boxcuts): CF + box cuts ---"
 OUT_S6="${OUT_ROOT}/ambe_data/${TAG_PREFIX}_cf_boxcuts"
-python benchmark_selection_2x2.py \
+python -m scripts.diagnostics.benchmark_selection_2x2 \
     --features  "$MC_FEAT_CC" \
     --model     "$PKL_MCA" \
     --score-col "$BEST_SCORE_COL" \

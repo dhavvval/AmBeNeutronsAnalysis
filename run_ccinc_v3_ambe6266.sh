@@ -160,14 +160,14 @@ if [[ " $WHAT " == *" gate "* ]]; then
   echo "" | tee -a $LOG
   echo "######## 1. gate  $(date) ########" | tee -a $LOG
   if [ "$CAMPAIGN" = "run6266" ]; then
-    python make_gate_csvs_from_parquet.py --source step4 \
+    python -m scripts.workflows.make_gate_csvs_from_parquet --source step4 \
         --parquet "$STEP4" --out-dir "$OUT/gate_csvs" \
         --tag AmBe2.0v4_ic 2>&1 | tee -a $LOG
     [ "${PIPESTATUS[0]}" -eq 0 ] || rc_all=1
   elif [ "$CAMPAIGN" = "v4special" ]; then
     rm -rf "$OUT/gate_csvs"; mkdir -p "$OUT/gate_csvs"
     for r in $RUNS; do
-      python make_gate_csvs_from_parquet.py --source step4 \
+      python -m scripts.workflows.make_gate_csvs_from_parquet --source step4 \
           --parquet "$S4DIR/step4_joined_${r}.parquet" \
           --out-dir "$OUT/gate_csvs" --tag AmBe2.0v4_special 2>&1 | tee -a $LOG
       [ "${PIPESTATUS[0]}" -eq 0 ] || rc_all=1
@@ -236,7 +236,7 @@ if [[ " $WHAT " == *" extract "* ]]; then
     echo "######## 2. extract CF features [$MODE]  $(date) ########" | tee -a $LOG
     GATE_ARG=()
     [ "$MODE" = "gated" ] && GATE_ARG=(--gate-csv-dir "$OUT/gate_csvs")
-    python extract_cf_features_beamcluster_data.py "$INPUT" \
+    python -m scripts.workflows.extract_cf_features_beamcluster_data "$INPUT" \
         --input-kind data \
         --run-name "${PREFIX}_${MODE}" --output-dir "$OUT" \
         "${GATE_ARG[@]}" \
@@ -278,7 +278,7 @@ scores will be produced" | tee -a $LOG
 
       echo "" | tee -a $LOG
       echo "######## 3. score ${STREAM}/cf [$MODE]  $(date) ########" | tee -a $LOG
-      python mva_analysis.py \
+      python -m ambe.mc.mva_analysis \
           --score-data "$D/${PREFIX}_${STREAM}_cf_${MODE}.parquet" \
           --model "$D/$(basename "$PKL")" 2>&1 | tee -a $LOG
       rc=${PIPESTATUS[0]}

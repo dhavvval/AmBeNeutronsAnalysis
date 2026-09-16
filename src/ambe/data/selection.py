@@ -1,46 +1,7 @@
-"""
-The neutron cluster definition, as a swappable object.
+"""Shared neutron selection. Box and MVA use the same event veto and delayed window.
 
-WHY THIS MODULE EXISTS. The AmBe analysis is run twice over the same data, changing
-only what counts as a neutron cluster:
-
-    box   0 < clusterPE <= 100,  0 < chargeBalance < 0.45,  clusterHits >= 5
-    mva   gbt_score > threshold, and NO PE / CB / hits box at all
-
-Both are additionally confined to the delayed search window 2000 <= clusterTime <=
-67000 ns. That window is NOT part of either neutron definition -- see
-`Selection.in_window` -- it is the span the efficiency is defined over, and it is
-shared for the same reason the cosmic veto is.
-
-Before this module the box was written out twice, in two files that had to agree and
-had no mechanism forcing them to:
-
-    data/processor.py:165-182   ambe_single_cut / ambe_multiple_cut / cosmic_cut
-    data/eff.py:15-48           AmBe() / AmBeMultiple() / cosmic()
-
-Both now delegate here, so there is one definition of the box and one place the MVA
-alternative had to be added.
-
-THE COSMIC VETO IS DELIBERATELY NOT SWAPPABLE. `cosmic()` lives on the base class and
-neither subclass overrides it. The veto (any cluster with clusterTime < 2 us or
-clusterPE > 100 drops the whole event) sits UPSTREAM of the neutron definition, in
-Stage 1, alongside the IC gate. If it differed between the two selections the two
-analyses would no longer share a denominator and their efficiencies would not be
-comparable -- which is the entire point of running both.
-
-WHAT `cn` MEANS, AND WHY IT IS THE SAME IN BOTH. `cn` is the event's TOTAL cluster
-count (`numberOfClusters`), not the number of accepted clusters. So `single` means
-"this event has exactly one cluster, and it is a neutron" for both selections alike.
-Keeping that identical is what lets the single/multiple split be compared across the
-two definitions; the multiplicity of *accepted* clusters is a separate quantity and is
-computed downstream from the candidate lists.
-
-Usage:
-    from .selection import get_selection
-    sel = get_selection("box")                      # or "mva", with mva_* kwargs
-    if sel.cosmic(ct, cpe): ...
-    if sel.single(cpe, ccb, ct, cn, chits, key): ...
-"""
+Single/multiple refers to the total cluster count before selection.
+MVA keys are (run, tank timestamp, cluster time rounded to 0.001 ns)."""
 
 from __future__ import annotations
 
@@ -59,24 +20,12 @@ ClusterKey = Tuple[int, int, float]
 
 @dataclass
 class CutCriteria:
-    """Box-selection thresholds.
-
-    Defined here rather than in processor.py because the selection objects are the
-    things that consume it. `from ambe.data.processor import CutCriteria` still works
-    -- processor.py re-exports it -- since reprocess_ambe_v1.py, boxcut_v4_special.py
-    and run_waveform_gated_pipeline.py all import it from there.
-    """
+    """Box thresholds and event-veto thresholds; cluster times are in nanoseconds."""
     pe_min: float = 0
     pe_max: float = 100
     ccb_min: float = 0
     ccb_max: float = 0.45
     ct_min: float = 2000
-    # Upper edge of the delayed search window. The efficiency is only DEFINED over
-    # [ct_min, ct_max]: the fitter normalises the background rate over exactly this
-    # span (see stats/efficiency_fit.background_scale_factor), so a candidate
-    # accepted outside it enters the numerator without livetime backing it. Before
-    # this existed the bound was only ever enforced by the input files happening to
-    # stop at 67 us, which is not an enforcement.
     ct_max: float = 67000
     chits_min: int = 5
     cosmic_ct_threshold: float = 2000
@@ -103,16 +52,7 @@ class Selection:
                 cpe > self.cuts.cosmic_pe_threshold)
 
     def in_window(self, ct: float) -> bool:
-        """Is this cluster inside the delayed search window? Closed at both ends.
-
-        LIVES ON THE BASE CLASS, LIKE THE COSMIC VETO, AND FOR THE SAME REASON. The
-        window is not part of the neutron definition -- it is the span over which the
-        efficiency is defined and over which the fitter normalises the background
-        rate. If `box` and `mva` searched different windows their efficiencies would
-        not be comparable, which is the entire point of running both. Note this
-        matters more for `mva`, which has no time cut of its own at all and would
-        otherwise inherit whatever span the scoring stage happened to cover.
-        """
+        """Test the closed delayed search window shared by box and MVA."""
         return self.cuts.ct_min <= ct <= self.cuts.ct_max
 
     def accepts(self, cpe, ccb, ct, chits, key) -> bool:
@@ -139,6 +79,16 @@ class BoxSelection(Selection):
                       f"{c.ct_min/1000:g} ≤ t ≤ {c.ct_max/1000:g} µs, "
                       f"hits ≥ {c.chits_min:g}")
 
+    def cut_masks(self, cpe, ccb, ct, chits):
+        """Vectorised component masks, in PE, charge balance, time, hits order."""
+        c = self.cuts
+        return (
+            (cpe > c.pe_min) & (cpe <= c.pe_max),
+            (ccb > c.ccb_min) & (ccb < c.ccb_max),
+            (ct >= c.ct_min) & (ct <= c.ct_max),
+            chits >= c.chits_min,
+        )
+
     def accepts(self, cpe, ccb, ct, chits, key=None) -> bool:
         c = self.cuts
         return (c.pe_min < cpe <= c.pe_max and
@@ -147,17 +97,7 @@ class BoxSelection(Selection):
 
 
 class MvaSelection(Selection):
-    """MVA neutron: score above threshold, and no box of any kind.
-
-    This is what makes the second analysis independent rather than a tightening of
-    the first. Clusters that FAIL the box (too much light, poor charge balance, too
-    few hits) are eligible here, so the two selections are genuinely different
-    samples rather than one nested inside the other.
-
-    Membership is precomputed into a set rather than tested arithmetically because
-    the score lives in a scored parquet keyed by cluster, not in the BeamCluster
-    quantities the event loop has to hand.
-    """
+    """Accept scored clusters above threshold inside the shared delayed window."""
 
     name = "mva"
 
@@ -218,16 +158,6 @@ class MvaSelection(Selection):
             return False
         if key in self.accepted:
             return True
-        # CRITICAL BOOKKEEPING. A cluster this pipeline finds but the scoring stage
-        # never saw has NO score, and returning False for it is indistinguishable
-        # from "scored and below threshold". Those are different statements: one is
-        # a rejection, the other is missing information, and silently merging them
-        # depresses the MVA's apparent efficiency by the extraction's dropout rate.
-        # Measured on the 28-run campaign: 11,780 of 237,590 box candidates (4.96 %)
-        # are unscored, which is the documented -4.6 % Stage-2 closure gap of the
-        # MVA extraction. It moves the keep rate from 79.01 % of SCORED clusters
-        # (the published number) to 75.09 % of ALL clusters.
-        # So count the misses and make the caller report them.
         if key not in self.scored_keys:
             self.n_unscored += 1
             self.unscored_runs[key[0]] = self.unscored_runs.get(key[0], 0) + 1

@@ -1,12 +1,11 @@
-"""
-Thin wrapper kept for backward compatibility.
-Use extract_cluster_features.py directly instead:
+"""Recluster tagged Michel hits using the maintained MC feature extractor.
 
-    python3 extract_cluster_features.py --hits <path> --output <path> --rerun-optics
+Example: python michel/extract_michel_optics_features.py --config CONFIG.yaml
+         --hits michel_background_hits.parquet --min-samples 3 --output features.parquet
+This runs one OPTICS setting on previously selected clusters, not a sweep.
 """
-import subprocess, sys
-from pathlib import Path
+from ambe.cli import main
+import sys
 
-root = Path(__file__).resolve().parents[1]
-sys.exit(subprocess.call([sys.executable, str(root / "extract_cluster_features.py"),
-                          "--rerun-optics", *sys.argv[1:]]))
+if __name__ == "__main__":
+    main(["mc", "features", "--rerun-optics", *sys.argv[1:]])

@@ -1126,7 +1126,7 @@ def run(ctx, argv=None):
             "  data_driven  uses the measured background shape, but inherits the\n"
             "               background run's statistics; with a small background\n"
             "               sample its chi2/ndof looks good for the wrong reason\n"
-            "               (see scripts/diagnose_datadriven_chi2.py).\n"
+            "               (see src/ambe/diagnostics/datadriven_chi2.py).\n"
             "Neither is a safe default, which is why you have to say.")
     nominal_model = str(nominal_model)
     if nominal_model not in NOMINAL_MODELS:

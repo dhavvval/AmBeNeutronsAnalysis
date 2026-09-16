@@ -58,6 +58,7 @@ class RunContext:
     fit_params: Dict[str, Any] = field(default_factory=dict)
     output_root: Optional[str] = None
     extra: Dict[str, Any] = field(default_factory=dict)
+    config_path: Optional[Path] = None
 
     # -------- Directories (computed) ----------------------------------------
     @property
@@ -138,7 +139,7 @@ def load_context(config_path: str | os.PathLike) -> RunContext:
     Minimal YAML:
         run_name: mc_optics_trial01
 
-    Full example: see configs/example_mc_optics.yaml.
+    Full example: see configs/cc_neutrino_optics_sweep10.yaml.
     """
     path = Path(config_path)
     if not path.exists():
@@ -157,4 +158,4 @@ def load_context(config_path: str | os.PathLike) -> RunContext:
     ctx_kwargs = {k: raw[k] for k in known if k in raw}
     ctx_kwargs["extra"] = {k: v for k, v in raw.items() if k not in known}
 
-    return RunContext(**ctx_kwargs)
+    return RunContext(**ctx_kwargs, config_path=path.resolve())

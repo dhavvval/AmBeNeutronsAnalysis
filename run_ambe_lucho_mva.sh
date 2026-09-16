@@ -8,7 +8,7 @@
 #   • produces rf/gbt/xgb summaries (per-score) so the three trees can be compared;
 #   • FIRST builds the missing pieces the lucho freeze didn't produce:
 #       Part A: ClusterFinder-method DATA features (the data parquet was OPTICS-only)
-#               via extract_cf_features_beamcluster_data.py over the BeamCluster ntuples;
+#               via scripts/workflows/extract_cf_features_beamcluster_data.py over the BeamCluster ntuples;
 #       Part B: the optics MC-scores anchor (the freeze saved only CF MC scores).
 #
 # Usage:
@@ -69,7 +69,7 @@ echo "════════════════════════�
 # ── Part A: ClusterFinder-method DATA features over all BeamCluster runs ──────
 echo
 echo "[A] extracting ClusterFinder-method DATA features (resumable) ..."
-python -u extract_cf_features_beamcluster_data.py \
+python -u -m scripts.workflows.extract_cf_features_beamcluster_data \
     "${DATA_DIR}/" \
     --input-kind data \
     --run-name "${RUN_NAME}" --output-dir "${OUT}" \
@@ -112,9 +112,9 @@ print(f"  MC CF     features: {len(cf):,} -> {cf_out}")
 PYEOF
 
 # Score the optics MC features through the optics frozen model -> optics MC anchor.
-# mva_analysis.py --score-data writes <stem>__scored.parquet next to the input.
+# src/ambe/mc/mva_analysis.py --score-data writes <stem>__scored.parquet next to the input.
 echo "[B] scoring optics MC features with mc_lucho_100k_optics_frozen.pkl ..."
-python mva_analysis.py --config "${CONFIG}" \
+python -m ambe.mc.mva_analysis --config "${CONFIG}" \
     --score-data "${MC_FEATS_OPT}" --model "${MODEL_OPT}" \
     || { echo "FATAL: optics MC anchor scoring failed"; exit 1; }
 MC_OPT_SCORED="${MC_FEATS_OPT%.parquet}__scored.parquet"
@@ -145,7 +145,7 @@ sub.to_parquet(out, index=False)
 PYEOF
   if [[ ! -s "${SPLIT}" ]]; then echo "  [${METHOD}] skipped (no data rows)"; return 0; fi
 
-  python mva_analysis.py --config "${CONFIG}" --score-data "${SPLIT}" --model "${MODEL}" \
+  python -m ambe.mc.mva_analysis --config "${CONFIG}" --score-data "${SPLIT}" --model "${MODEL}" \
       || { echo "FATAL: scoring ${METHOD} failed"; exit 1; }
   local SCORED="${SPLIT%.parquet}__scored.parquet"
   local CANON="${OUT}/${RUN_NAME}__data_features_${METHOD}__scored_lucho.parquet"
@@ -158,7 +158,7 @@ PYEOF
     local RDIR="${OUT}/lucho_${METHOD}_rate_${SCORE%%_*}"
     mkdir -p "${RDIR}"
     echo "  [${METHOD}] summary (${SCORE}) ..."
-    python summarize_ambe_neutrons.py \
+    python -m scripts.workflows.summarize_ambe_neutrons \
         --scored "${CANON}" --mc-scores "${MC_SCORES}" \
         --score-col "${SCORE}" --sig-eff "${SIG_EFF}" --out "${RDIR}" \
         || echo "  WARN: summary ${METHOD}/${SCORE} failed (continuing)"
@@ -180,7 +180,7 @@ PYEOF
   local STATS_ARG=""
   [[ -f "${STATS_CSV}" ]] && STATS_ARG="--stats-csv ${STATS_CSV}"
   echo "  [${METHOD}] multiplicity + score PDF ..."
-  python plot_ambe_neutron_multiplicity.py \
+  python -m scripts.diagnostics.plot_ambe_neutron_multiplicity \
       --scored "${CANON}" ${STATS_ARG} \
       --mc-features "${MC_FEATS}" \
       --score-col gbt_score --score-cut 0.5 \
@@ -192,7 +192,7 @@ PYEOF
   mkdir -p "${CAPDIR}"
   if [[ "${RF_THR}" != "nan" && -n "${RF_THR}" ]]; then
     echo "  [${METHOD}] capture-time fit (lmfit, rf>${RF_THR}) ..."
-    python capture_time_stageAB_from_parquet.py \
+    python -m scripts.diagnostics.capture_time_stageAB_from_parquet \
         --scored "${CANON}" --score-col rf_score --score-cut "${RF_THR}" \
         --out-dir "${CAPDIR}" --methods lmfit \
         || echo "  WARN: capture-time fit ${METHOD} failed (continuing)"
@@ -204,7 +204,7 @@ PYEOF
   local CMPDIR="${OUT}/compare_selections_lucho_${METHOD}"
   mkdir -p "${CMPDIR}"
   echo "  [${METHOD}] data/MC comparison ..."
-  python analyze_data_mc_comparison.py \
+  python -m scripts.diagnostics.analyze_data_mc_comparison \
       --data-dir "${GATE_DIR}" \
       --mc-parquet "${LUCHO_DIR}" \
       --run-name mc_lucho_100k \

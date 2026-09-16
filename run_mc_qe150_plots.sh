@@ -10,7 +10,7 @@ for CFG in "$@"; do
   $PY -u -m ambe.cli plots combined --config configs/${CFG}.yaml 2>&1 | grep -v '^ ' | tail -4
   $PY -u -m ambe.cli plots heatmap  --config configs/${CFG}.yaml 2>&1 | grep -v '^ ' | tail -4
   $PY -u -m ambe.cli plots basic    --config configs/${CFG}.yaml 2>&1 | grep -v '^ ' | tail -6
-  $PY -u fit_capture_time_fprompt_compare.py --mode tagset --tags "$TAG" \
+  $PY -u -m ambe.stats.capture_time --mode tagset --tags "$TAG" \
       --out-label "$TAG" --fit-backend lmfit 2>&1 | tail -6
 done
 echo "PLOTS DONE $(date)"

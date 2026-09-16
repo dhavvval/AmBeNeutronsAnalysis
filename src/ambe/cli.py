@@ -4,11 +4,11 @@
 After `pip install -e .`, a user can run:
 
     ambe --help
-    ambe mc process --config configs/mc_trial01.yaml
-    ambe mc optics  --config configs/mc_trial01.yaml
-    ambe plots basic --config configs/data_amb2v4.yaml
+    ambe mc process --config configs/mc_lucho_full.yaml
+    ambe mc optics  --config configs/mc_lucho_full.yaml
+    ambe plots basic --config configs/data_ambe2v4_all28_box.yaml
     ambe leak features --config configs/data_ambe2v5sandi_box.yaml
-    ambe pipeline mc --config configs/mc_trial01.yaml
+    ambe pipeline mc --config configs/mc_lucho_full.yaml
 
 Each subcommand dispatches to a function in the corresponding module that
 accepts (ctx: RunContext, args: argparse.Namespace). Subcommands are registered
@@ -45,11 +45,14 @@ COMMANDS: dict[tuple[str, str], str] = {
     # cluster is treated as having passed the good-waveform selection. Separate command
     # rather than a flag so neither config kind can be run through the wrong path.
     ("data", "processmc"):      "ambe.data.processor:cli_mc",
-    ("data", "eff"):            "ambe.data.eff:cli",
-    ("data", "icscan"):         "ambe.data.icscan:cli",
-    ("data", "runtable"):       "ambe.data.runtable:cli",
+    ("data", "eff"):            "ambe.data.processor:cli",
+    ("data", "icscan"):         "ambe.plots.icscan:cli",
+    ("data", "runtable"):       "ambe.diagnostics.runtable:cli",
     ("leak", "features"):       "ambe.leak.features:cli",
     ("leak", "pmtcharge"):      "ambe.leak.pmtcharge:cli",
+    ("plots", "icscan"):        "ambe.plots.icscan:cli",
+    ("diagnostics", "runtable"): "ambe.diagnostics.runtable:cli",
+    ("mc", "mva"):             "ambe.mc.mva_analysis:cli",
     ("plots", "basic"):         "ambe.plots.basic:cli",
     ("plots", "combined"):      "ambe.plots.combined:cli",
     ("plots", "heatmap"):       "ambe.plots.heatmap:cli",

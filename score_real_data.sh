@@ -95,7 +95,7 @@ echo
 # ── Step 2: score OPTICS rows ────────────────────────────────────────────
 if [[ -s "$OPT_PARQUET" ]]; then
   echo "=== Step 2: score OPTICS rows with OPTICS-trained model ==="
-  python mva_analysis.py \
+  python -m ambe.mc.mva_analysis \
     --config "$CONFIG" \
     --score-data "$OPT_PARQUET" \
     --model "$OPTICS_MODEL"
@@ -105,7 +105,7 @@ fi
 # ── Step 3: score CF rows ────────────────────────────────────────────────
 if [[ -s "$CF_PARQUET" ]]; then
   echo "=== Step 3: score ClusterFinder rows with CF-trained model ==="
-  python mva_analysis.py \
+  python -m ambe.mc.mva_analysis \
     --config "$CONFIG" \
     --score-data "$CF_PARQUET" \
     --model "$CF_MODEL"

@@ -51,7 +51,6 @@ Anything elsewhere in the repo still quoting 30.53 / 30.535 / 31.509 predates th
 |---|---|---|
 | A1 | `V3MERGED__cutflow_streamlines_table` | the two selections, cut by cut |
 | A2 | `V3MERGED__cutflow_nminus1_table` | which cut is actually doing the work |
-| A3 | `V3MERGED__streamline_overlap_table` | the streamlines never disagree about a *label*, only about which events they include |
 | A4 | `V3MERGED__merged_training_sizes` | what merging the world sample bought: background 8,392 → 36,008 per class |
 
 ## B. Training and classifier choice (§3) — 8 figures
@@ -59,7 +58,6 @@ Anything elsewhere in the repo still quoting 30.53 / 30.535 / 31.509 predates th
 | # | figure | says |
 |---|---|---|
 | B1 | `V3MERGED__auc_tank_vs_merged` | the +0.082 merged gain. **Say §4.4 out loud here** — it is a change of question, not a better answer |
-| B2 | `V3MERGED__auc_cv_boxplot` | the gain is 12–25× the CV scatter; the GBT/XGB gap is not |
 | B3 | `V3STATS__roc_by_config` | all four models, all four configurations, one scale |
 | B4 | `V3STATS__loss_comparison` | log-loss breaks the GBT/XGB tie, and shows the NN calibrates badly |
 | B5 | `V3STATS__model_verdict_table` | **the verdict slide**: GBT on ClusterFinder |
@@ -72,7 +70,7 @@ with the "not comparable" caveat attached (§0).
 
 *What to say at B7/B8, and the distinction that matters:* B6's purity is computed on a
 **1:1 balanced** test set, so it is a ranking diagnostic, not a physical purity. B7/B8 are
-the natural-population numbers — `benchmark_selection_2x2.py --box ambe --score-col
+the natural-population numbers — `scripts/diagnostics/benchmark_selection_2x2.py --box ambe --score-col
 gbt_score --score-cut 0.423621`, i.e. the *same* box the AmBe data analysis applies and the
 *same* frozen threshold deck 3 uses. Two things worth stating:
 
@@ -128,7 +126,6 @@ implying the numbers are current.
 | C0 | `V3MERGED__bkg_containment_normalized__truthtag_cf` | the containment view: every component as a share of ALL delayed background light, tank vs outside the tank, out-of-tank neutron capture kept in the normalisation (61.1% of the total) |
 | C1 | `V3MERGED__bkg_composition_tank_vs_world` | 59.5% of the background light is real neutron capture, mostly from the world |
 | C2 | `V3MERGED__training_background_by_particle` | of the non-neutron remainder: μ⁻ 53%, π⁺ 26%, π⁰ 7%, p 6%, π⁻ 5%, μ⁺ 3% |
-| C3 | `V3BG__truthtag_cf__top6_shape` | where each species lives along the leading features — *composition of a bin* |
 
 ## D. Background anatomy — the new block (§5) — 11 figures
 
@@ -230,7 +227,7 @@ The neutron definition is the AmBe pipeline's own — IC gate 700–1200 + secon
 veto, then `0 < PE ≤ 100`, `0 < CB < 0.45`, `t ≥ 2 µs`, `hits ≥ 5` after the cosmic
 veto. This is the QA baseline group F is measured against, so it stands on its own.
 
-**This group splits across two decks**, which is why `collect_presentation_plots.py`
+**This group splits across two decks**, which is why `scripts/presentation/collect_presentation_plots.py`
 assigns decks per slot and not per group. G1–G7 and G10–G12 are the box cuts alone,
 with no MVA and no MC anywhere in them, and go to `deck2_ambe_boxcuts`. G8, G9 and
 G13–G16 put the MVA next to the box cuts and go to `deck4_boxcut_vs_mva`.
@@ -239,9 +236,6 @@ G13–G16 put the MVA next to the box cuts and go to `deck4_boxcut_vs_mva`.
 |---|---|---|
 | G1 | `V4BOX__cutflow_table` | the box cuts stage by stage: 474,192 IC-gated triggers → 19.85% cosmic-vetoed → 380,072 AmBe triggers → **217,532 neutron triggers** (45.9% of Stage 1) |
 | G2 | `V4BOX__efficiency_by_position` | **the headline**: campaign efficiency **57.23 ± 0.08 %** over 28 runs / 26 positions, range **40.3–71.8 %**; port 3 lowest, port 5 y=0 highest |
-| G3 | `V4BOX__consistency_table` | **the QA statement**: the 8 new runs move the campaign efficiency by **−0.07 pp** (57.30 → 57.23). Adding 30% more data changed nothing |
-| G4 | `V4BOX__capture_time_by_position` | τ per position, 26 positions, **all 26 fits converge**; weighted **29.477 ± 0.193 µs** |
-| G5 | `V4BOX__capture_time_anchor_comparison` | extending 19 → 26 positions moves τ by **+0.005 µs** and shrinks the error 12%. The anchor is stable |
 | G6 | `V4BOX__cosmic_fraction` | cosmic veto **19.85 %** campaign-wide, flat to 7 pp across 26 positions — a detector-stability check |
 | G7 | `V4BOX__multiplicity_share` | multi-neutron share **19.74 %**, range 18.0–23.7 % |
 | G8 | `V4BOX__validation_mva_vs_boxcut_table` | **the validation slide**: the frozen MVA definition and the box cuts on the *same* 26 AmBe positions under *one* fit recipe — agreement **0.11σ** (−0.188 ± 1.754 µs) |
@@ -320,7 +314,7 @@ was only ever shown as a 26-point scatter against position index (G4), and `ther
 never shown at all even though the **same** NeutCapture fit returns it and it has been
 sitting in `CaptureTimeFits_v4_all28.csv` all along. J9/J10 put both on the port × y
 grid the efficiency uses, so a τ map and an efficiency map can be laid side by side for
-the same cells. Produced by `boxcut_v4_campaign.py --do captureheat`, fit backend
+the same cells. Produced by `scripts/presentation/boxcut_v4_campaign.py --do captureheat`, fit backend
 **lmfit** (`--fit-backend lmfit`), B fixed at 0, on the **2–67 µs** window.
 
 ## K. Deck 3 core — MVA neutron, the same pipeline *(new)*
@@ -353,7 +347,7 @@ Never compare 57.25 % with 45.88 % — compare 55.99 % with 45.88 %.
 ## L. Deck 4 — the two definitions differenced *(new)*
 
 Box minus MVA, on the same covered triggers and the same scored clusters. Produced by
-`boxcut_v4_campaign.py --do scoredsubset` then `--do residuals`. Nothing here is a
+`scripts/presentation/boxcut_v4_campaign.py --do scoredsubset` then `--do residuals`. Nothing here is a
 purity: AmBe data has no per-cluster truth label, so an overlap is an agreement. The
 purity is B7/B8, from MC.
 
@@ -410,7 +404,7 @@ The four runs the campaign can only report as zeros, run through the *same* flow
 campaign runs — Stage-1 IC waveform gate, then the tank cluster stage, then the Stage-2
 box — but reporting the **distributions at each stage** instead of the survivor count,
 and reporting them **ungated** as well as gated. Produced by
-`boxcut_v4_special.py --do diag`.
+`scripts/presentation/boxcut_v4_special.py --do diag`.
 
 Ungated is not a relaxation of the analysis. For the two dummy triggers it is the only
 option that exists: a scheduled readout carries no BGO gamma, so **0 of 7,933** and
@@ -496,7 +490,6 @@ panels are drawn on — belongs in the talk and in this file, not on the slide.
 | M17 | `V4SPECDIAG__tank_cutflow_table` | Stage-2 cumulative cut flow on ungated clusters. The no-source run loses **94.2 %** of its 176,634 clusters, and it is charge balance and time that do it |
 | M18 | `V4SPECDIAG__tank_nminus1_table` | the same leave-one-out, which is what identifies *which* cut is working. **`hits ≥ 5` is a strict no-op** at every run — ClusterFinder already requires 5 |
 | M19 | `V4SPECDIAG__nosource_charge_6254_vs_6256` | **the nothing-to-detect charge answer, on the two DUMMY TRIGGERS, and it is two numbers not one**: hit-level charge differs by **+220.7 ± 13.9 PE (15.9σ)** and hit count by **+118.6 ± 1.2 (95.9σ)**, but CLUSTER-level charge **agrees** (−6.1 ± 17.7 PE, 0.35σ). The LAPPD leak raises the hit stream without producing clusters |
-| M20 | `V4SPECDIAG__ic_adjusted_vs_fprompt_2d` | backup: IC_adjusted vs prompt fraction, one panel per run. Dropped from the running order — M2 and M3 already carry both of its projections. The figure to produce if anyone asks whether the gate could be moved |
 
 *The number that must travel with M19, because it is the reason mean tank PE is not
 usable as a stand-in for cluster PE anywhere in this analysis:* the two estimators

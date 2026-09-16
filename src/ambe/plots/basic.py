@@ -60,7 +60,7 @@ class AmBeNeutronAnalyzer:
             'time_bins': 70,
             'time_range': (0, 70),
             # WAS 10.0. The fit window is now 2-67 us campaign-wide -- see the note
-            # on FIT_MIN in fit_capture_time_fprompt_compare.py, which this must stay
+            # on FIT_MIN in src/ambe/stats/capture_time.py, which this must stay
             # equal to. 2 us is where the data starts (the box cut is t >= 2 us and
             # the cosmic veto removes anything earlier), so fitting from 10 discarded
             # the whole thermalisation rise. Every published capture time moves
@@ -1289,7 +1289,7 @@ def run(ctx, argv=None):
     #
     # 'summary' is deliberately NOT added. It runs generate_summary_plots(), whose
     # capture/thermal port x y heatmaps are now produced as deck figures by
-    # boxcut_v4_campaign.py --do captureheat (J9/J10, K9/K10) with a convergence gate,
+    # scripts/presentation/boxcut_v4_campaign.py --do captureheat (J9/J10, K9/K10) with a convergence gate,
     # masked cells and the weighted mean in the title. Worse, it writes to
     # OutputPlots/{Capture,Thermal}Time_AmBeNeutrons_<campaign_tag>_LMFIT.png, and
     # campaign_tag is 'AmBe2.0v4' for BOTH selections -- so running the box book and
