@@ -1,26 +1,7 @@
 run_name: AmBe2.0v4_refpair_box
 display_label: "AmBe v4 leak-free reference pair 6265 / 6266, traditional box cuts"
 campaign: "AmBe 2.0v4"
-description: >
-  Runs 6265 and 6266 ONLY, processed under the same box cuts and the same 700-1200
-  Stage-1 IC gate as every other deck, so they can serve as same-position reference
-  runs for the AmBe2.0v5sandi campaign:
-      6265 at Port 5, y = 0    -> reference for v5sandi 6273
-      6266 at Port 5, y = +100 -> reference for v5sandi 6274
-  Both are leak-free by leak_score (0.5287 and 0.5244, i.e. on the OFF side of the
-  0.515 boundary, next to the confirmed-OFF 6062 at 0.5236).
-
-  WHY THIS CONFIG EXISTS RATHER THAN READING data_ambe2v4_special_box.yaml's SUMMARY.
-  That config gives 6254, 6256, 6264 and 6265 the SAME position (0, 0, 0). The
-  trigger/waveform summaries are aggregated per source position, so those four runs
-  collapse into a single row -- and because the run column is summed along with
-  everything else, the row is labelled run "25039", which is exactly
-  6254 + 6256 + 6264 + 6265. Its 21,553 accepted waveforms and 93,204 total are the
-  four-run SUM, not 6265. Any per-run number read off that row for 6265 is wrong.
-
-  Staging only 6265 and 6266 removes the collision: they sit at two distinct
-  positions, so each gets its own row and the per-run numbers are real. Nothing here
-  overwrites the special_box tag; this is a separate tag with its own outputs.
+description: "AmBe data: ambe2v4_refpair_box"
 
 output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data
 
@@ -37,9 +18,6 @@ stage1:
   save_waveform_samples: false
   dump_good_events: true
   tag: AmBe2.0v4_refpair_box
-  # 6265/6266 are not in processor.py source_positions -- they are labelled special
-  # runs, deliberately kept out of the campaign efficiency map. Supplied here, same
-  # values as data_ambe2v4_special_box.yaml.
   extra_source_positions:
     6265: [0.0, 0.0, 0.0]
     6266: [0.0, 100.0, 0.0]

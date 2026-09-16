@@ -1,33 +1,10 @@
 run_name: AmBe2.0v4_effpair_box_6046
 display_label: "AmBe v4 efficiency for run 6046 (the actual run behind the campaign 71.8% at (0,0,0)), box cuts"
 campaign: "AmBe 2.0v4"
-description: >
-  Same deck as data_ambe2v4_effpair_box.yaml (shares its Stage-1 outputs, tag
-  AmBe2.0v4_effpair_box) but points the multiplicity fit at run 6046 as the SOURCE
-  run instead of 6265.
-
-  WHY 6046. It is the run that actually composes the all28_box campaign's (0,0,0)
-  row -- verified 2026-09-10: 6046 alone under the all28_box Stage-1 gate gives
-  total_events=27,987 and unique_neutron_triggers=15,567, matching that row EXACTLY
-  (naive eff 15,567/21,676 = 71.82 %). The processor.py source_positions map lists
-  five other run numbers at (0,0,0) (4499, 4496, 5682, 5740, 6273) but none of them
-  are staged in ambe_output/stage_v4/source28/ -- they belong to older v1/v3/v5
-  campaigns. So THE 71.8% CAMPAIGN NUMBER AT PORT 5 CENTRE IS RUN 6046 ALONE, not a
-  blend of runs.
-
-  BACKGROUND RUN. There is no dedicated no-source run at 6046's exact position in
-  this campaign. 6264 is used here for consistency with the 6265 fit (same
-  background run, so delta_m and the systematic budget are on the same footing), but
-  6264 was taken at Port 5 during the 6265 deployment window, not during 6046's. This
-  is a REAL gap, not an oversight: quote it as "background run 6264 used for both
-  6046 and 6265 for lack of a run-specific background" rather than implying they
-  were taken together.
+description: "AmBe data: ambe2v4_effpair_box_6046"
 
 output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data
 
-# Reuses the SAME Stage-1 outputs as the primary effpair deck -- do not reprocess
-# separately, just point the fit at a different source_run against the same
-# EventIndex parquets (which now include 6046, staged alongside 6264/6265/6266).
 stage1:
   data_directory: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/stage_v4/effpair
   waveform_dir: /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4
@@ -75,11 +52,6 @@ fit_params:
   denominator: ambe_triggers
   numerator_mode: noncosmic
 
-  # Required; no default. 'poisson' for the same reason as the 6265 deck, and more
-  # so here: 6264 is not even from 6046's deployment window, so the data-driven fit
-  # is both statistics-starved AND epoch-mismatched. Its chi2/ndof of 0.41 is an
-  # artefact of the 22-trigger template -- with sigma_bkg removed the same fit gives
-  # 0.431 and chi2/ndof of 1097 (scripts/diagnose_datadriven_chi2.py --source 6046).
   nominal_model: poisson
   gof_min_p_value: 0.01
   n_gof_toys: 2000
