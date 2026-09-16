@@ -1,3 +1,6 @@
+> Initial cleanup record. The later [plotting/statistics review](FOLLOWUP_REVIEW.md)
+> consolidates diagnostics and capture fitting further and moves all Markdown here.
+
 # Cleanup plan and commit sequence
 
 Work branch: `cleanup/blessedPlotcuts-codebase`, based on `e1313c5`.
@@ -33,7 +36,8 @@ Quantify their effects on matched samples before changing the measurement.
 - Removed DBSCAN/kNN/isolation-forest experiments after finding no live imports or
   CLI registrations. Retained the two older OPTICS CSV experiments for review.
 - Moved `icscan` to plots and `runtable`/the chi-square study to diagnostics.
-- Moved MVA into `ambe.mc`, and reusable capture-time helpers into `ambe.stats`.
+- Moved MVA into `ambe.mc`. Capture-time helpers initially moved into
+  `ambe.stats`, then the follow-up cleanup consolidated them in `ambe.plots.basic`.
 - Organized all 42 remaining root Python utilities under `scripts/`; updated imports,
   file-relative repository paths, shell launch commands and documentation references.
 - Removed five fprompt-only studies, waveform fprompt calculations/config fields and

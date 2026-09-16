@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "ANNIE AmBe neutron analysis tools: data and MC pipelines, clustering, plotting, statistics"
 authors = [{ name = "Dajana" }]
 license = { text = "MIT" }
-readme = "README.md"
+readme = "docs/README.md"
 requires-python = ">=3.9"
 
 dependencies = [
