@@ -52,6 +52,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import yaml
+from ..paths import output_root as resolve_output_root
 from matplotlib.backends.backend_pdf import PdfPages
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.metrics import roc_auc_score, roc_curve, auc
@@ -160,8 +161,8 @@ def load_paths(config_path: str) -> tuple[str, Path, Path, Path, str]:
     run_name    = cfg["run_name"]
     # Remembered so --merge-run can resolve sibling runs under the same output_root
     # without each needing its own config file.
-    load_paths_for_run._default_root = cfg["output_root"]  # type: ignore[attr-defined]
-    root        = Path(cfg["output_root"]) / run_name
+    load_paths_for_run._default_root = str(resolve_output_root(cfg.get("output_root")))  # type: ignore[attr-defined]
+    root        = resolve_output_root(cfg.get("output_root")) / run_name
     parquet_dir = root / "parquet"
     plots_dir   = root / "plots"
     csv_dir     = root / "csv"
@@ -184,7 +185,7 @@ def load_paths_for_run(run_name: str, output_root: Optional[str] = None) -> Path
         raise RuntimeError(
             f"cannot resolve output_root for --merge-run {run_name!r}; "
             "set $AMBE_OUT or pass a primary --config that defines output_root")
-    return Path(root) / run_name / "parquet"
+    return resolve_output_root(root) / run_name / "parquet"
 
 
 def _report_per_source(sub: pd.DataFrame, y: np.ndarray, when: str) -> None:

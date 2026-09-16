@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Write new products in this checkout; archived inputs remain configurable.
+AMBE_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export AMBE_OUT="${AMBE_OUT:-$AMBE_REPO/ambe_output}"
 #
 # run_ccinc_v3_ambe6266.sh — score AmBe RUN 6266 (AmBe2.0v4) with the merged
 # tank+world models, ungated and IC-gated, as the first v4 validation of the
@@ -17,7 +20,7 @@
 #
 # CLUSTERFINDER ONLY. OPTICS does not transfer to AmBe data (KS-to-MC-signal
 # 0.42-0.64 vs 0.11-0.16, and the OPTICS data median sits BELOW the MC background
-# median — REPORT_ccinc_v3_classifier_selection.md §4), and reco-tag/OPTICS fails
+# median — docs/reports/REPORT_ccinc_v3_classifier_selection.md §4), and reco-tag/OPTICS fails
 # outright with tau pinned at the fit bound. Both CF configurations are scored;
 # truth-tag/CF is the deliverable, reco-tag/CF is an MC-best cross-check and is
 # NOT data-applicable (its FV and muon kinematics read truth branches).
@@ -38,14 +41,14 @@
 #
 set -uo pipefail
 
-cd /exp/annie/app/users/dajana/AmBeNeutronsAnalysis
+cd "$AMBE_REPO" || exit 1
 source /exp/annie/app/users/dajana/myboy/bin/activate
 export PYTHONUNBUFFERED=1
 
-BASE=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
+BASE="${AMBE_REPO}/ambe_output"
 GEO=/exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry
 AMBEDIR=/pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4
-CANDDIR=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData
+CANDDIR="${AMBE_REPO}/EventAmBeNeutronCandidatesData"
 S4DIR=/exp/annie/data/users/dajana/AmBe_special_runs_diagnostics/outputs
 STEP4=$S4DIR/step4_joined_6266.parquet
 

@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from scripts.presentation.make_plots_ccinc_v3_merged import BLUE, GREY, bare
-from ambe.stats.capture_time import fit, prepare, NeutCapture
+from ambe.plots.basic import fit, prepare, NeutCapture
 import scripts.presentation.boxcut_v4_campaign as C
 HERE = Path(__file__).resolve().parents[2]
 OUT = HERE / "PRESENTATION_PLOTS"

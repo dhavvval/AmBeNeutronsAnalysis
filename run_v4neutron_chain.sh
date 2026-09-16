@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Write new products in this checkout; archived inputs remain configurable.
+AMBE_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export AMBE_OUT="${AMBE_OUT:-$AMBE_REPO/ambe_output}"
 #
 # run_v4neutron_chain.sh — wait for the AmBe2.0v4_ext Stage-1 pass to finish, then
 # run the full 28-run neutron campaign end to end.
@@ -12,7 +15,7 @@
 # watcher then waits on itself forever.
 #
 set -uo pipefail
-cd /exp/annie/app/users/dajana/AmBeNeutronsAnalysis
+cd "$AMBE_REPO" || exit 1
 
 S1LOG=logs_stage1_v4ext.log
 CHAINLOG=logs_v4neutron_chain.log

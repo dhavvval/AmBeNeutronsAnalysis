@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from .paths import plots_dir, parquet_dir, csv_dir, run_dir, output_root
+from .paths import plots_dir, parquet_dir, csv_dir, run_dir, output_root, REPOSITORY_ROOT
 
 
 # --------------------------------------------------------------------------- #
@@ -76,6 +76,12 @@ class RunContext:
     @property
     def csv_dir(self) -> Path:
         return csv_dir(self.run_name, self.output_root)
+
+    def markdown_path(self, base: str) -> Path:
+        """Generated analysis notes share the repository's documentation directory."""
+        directory = REPOSITORY_ROOT / "docs" / "generated" / _sanitise(self.run_name)
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory / (_sanitise(base) + ".md")
 
     # -------- Title / filename helpers --------------------------------------
     def title(self, base: str) -> str:

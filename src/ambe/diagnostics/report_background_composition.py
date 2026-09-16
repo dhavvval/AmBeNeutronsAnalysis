@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Report background species and populations in model training samples.
 
-Run from the repository root: python -m scripts.diagnostics.report_background_composition
+Run from the repository root: python -m ambe.diagnostics.report_background_composition
 """
 from __future__ import annotations
 

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Plot multiplicity separately for the two CC-inclusive event selections.
 
-Run from the repository root: python -m scripts.diagnostics.plot_multiplicity_per_streamline
+Run from the repository root: python -m ambe.diagnostics.plot_multiplicity_per_streamline
 """
 import argparse
 import glob
 from pathlib import Path
+from ambe.paths import REPOSITORY_ROOT
 
 import numpy as np
 import pandas as pd
@@ -43,7 +44,7 @@ def select(df: pd.DataFrame, sel: str) -> pd.DataFrame:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--out-dir", default="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/slide_plots_ccinc_xi02")
+    p.add_argument("--out-dir", default=str(REPOSITORY_ROOT / "slide_plots_ccinc_xi02"))
     p.add_argument("--max-n", type=int, default=6, help="last explicit bin; rest folded into >=max-n")
     args = p.parse_args()
     out = Path(args.out_dir); out.mkdir(parents=True, exist_ok=True)

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Write new products in this checkout; archived inputs remain configurable.
+AMBE_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export AMBE_OUT="${AMBE_OUT:-$AMBE_REPO/ambe_output}"
 # Unattended overnight runner: 10% OPTICS sweep (36-config grid) + composition-cut
 # efficiency on the top configs. Safe to launch in a detached tmux and walk away.
 #
@@ -13,9 +16,9 @@
 #   D) full composition-cut grid (n_neutron x frac_nonneutron) per config -> table in the log
 set -uo pipefail   # NOTE: not -e — we want the script to finish all configs even if one fails
 
-REPO=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis
+REPO="${AMBE_REPO}"
 VENV=/exp/annie/app/users/dajana/myboy/bin/activate
-OUT_ROOT=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
+OUT_ROOT="${AMBE_REPO}/ambe_output"
 SWEEP_CFG=configs/cc_neutrino_optics_sweep10.yaml
 SWEEP_RUN=cc_neutrino_optics_sweep
 LOG="${REPO}/logs_optics_sweep10.log"

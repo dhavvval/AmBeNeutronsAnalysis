@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Write new products in this checkout; archived inputs remain configurable.
+AMBE_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export AMBE_OUT="${AMBE_OUT:-$AMBE_REPO/ambe_output}"
 # run_ambe_mva_allruns.sh
 # ─────────────────────────────────────────────────────────────────────────────
 # Full AmBe-data neutron MVA pipeline over ALL AmBe2.0v1 runs, end to end.
@@ -27,12 +30,12 @@ SIG_EFF="${SIG_EFF:-0.80}"           # MC signal-efficiency working point for th
 PLOT_CUT="${PLOT_CUT:-0.7}"          # raw score cut used only in the per-run Stage-B page
 
 # ── Paths ────────────────────────────────────────────────────────────────────
-REPO="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis"
+REPO="${AMBE_REPO}"
 VENV="/exp/annie/app/users/dajana/myboy/bin/activate"
 DATA_DIR="/pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v1"
 GATE_DIR="${REPO}/EventAmBeNeutronCandidatesData"
-OUT="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data"
-MC="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/cc_neutrino/parquet"
+OUT="${AMBE_REPO}/ambe_output/ambe_data"
+MC="${AMBE_REPO}/ambe_output/cc_neutrino/parquet"
 MODEL="${MC}/cc_neutrino__mva_frozen.pkl"
 MC_SCORES="${MC}/cc_neutrino__mva_scores.parquet"
 MC_FEATS="${MC}/cc_neutrino__cluster_features.parquet"
@@ -80,7 +83,7 @@ python -m scripts.workflows.summarize_ambe_neutrons \
 
 # ── Stage 4: combined multiplicity / comparison PDF ───────────────────────────
 echo "[4] multiplicity + comparison plots ..."
-python -m scripts.diagnostics.plot_ambe_neutron_multiplicity \
+python -m ambe.diagnostics.plot_ambe_neutron_multiplicity \
     --scored "${SCORED}" --mc-features "${MC_FEATS}" --stats-csv "${STATS_CSV}" \
     --score-col "${SCORE_COL}" --score-cut "${PLOT_CUT}" \
     --out "${OUT}/${RUN_NAME}__neutron_multiplicity.pdf" || exit 1

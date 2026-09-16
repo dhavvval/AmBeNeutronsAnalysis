@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Write new products in this checkout; archived inputs remain configurable.
+AMBE_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export AMBE_OUT="${AMBE_OUT:-$AMBE_REPO/ambe_output}"
 # ============================================================================
 # ISOLATED SANDBOX: two-streamline MVA (train OPTICS *and* ClusterFinder models)
 # ============================================================================
@@ -18,7 +21,7 @@
 #   The original cc_neutrino_xi02_compcut/ tree is a pure read-only input here.
 #
 # Run in a detached tmux session and walk away:
-#   cd /exp/annie/app/users/dajana/AmBeNeutronsAnalysis
+#   cd "$AMBE_REPO" || exit 1
 #   tmux new-session -s cftrain
 #   START_STAGE=2 bash run_ccinc_xi02_compcut_cftrain.sh
 #   # detach: Ctrl-b d     reattach: tmux attach -t cftrain
@@ -48,12 +51,11 @@ SRC_RUN="cc_neutrino_xi02_compcut"                 # where Stage-0/1 already liv
 RUN="${RUN:-cc_neutrino_xi02_compcut_cftrain}"     # where NEW outputs go
 MODEL_TAG="${MODEL_TAG:-__keepprompt}"
 
-REPO=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis
+REPO="${AMBE_REPO}"
 VENV=/exp/annie/app/users/dajana/myboy/bin/activate
 CONFIG="configs/${RUN}.yaml"
 LOG="${REPO}/logs_${RUN}.log"
-OUT_ROOT=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
-
+OUT_ROOT="${AMBE_REPO}/ambe_output"
 # Composition cut thresholds (Stages 3 + 4)
 COMP_N_NEUTRON_MAX=10
 COMP_FRAC_NONNEUTRON_MIN=0.40
@@ -220,24 +222,24 @@ PYEOF
       --score-col "$SCOL" --sig-eff 0.80 --out "${OUT_S}/rate_best"
 
   echo "--- ${TAG}: multiplicity PDF (${SCOL} @ ${SCUT}) ---"
-  python -m scripts.diagnostics.plot_ambe_neutron_multiplicity --scored "$SCORED" --mc-features "$MC_FEATURES" \
+  python -m ambe.diagnostics.plot_ambe_neutron_multiplicity --scored "$SCORED" --mc-features "$MC_FEATURES" \
       --score-col "$SCOL" --score-cut "$SCUT" --out "${OUT_S}/${TAG}__multiplicity.pdf"
 
   echo "--- ${TAG}: capture-time fit (${SCOL} @ ${SCUT}) ---"
-  python -m scripts.diagnostics.capture_time_stageAB_from_parquet --scored "$SCORED" \
+  python -m ambe.diagnostics.capture_time_stageAB_from_parquet --scored "$SCORED" \
       --score-col "$SCOL" --score-cut "$SCUT" --out-dir "${OUT_S}/capture_stageAB" --methods lmfit
 done
 
 # ── Stage 4: benchmark each method with ITS OWN model ─────────────────────
 echo
 echo "--- Stage 4 (ccinc_xi02cc_optics_boxcuts_cftrain): OPTICS + own model ---"
-python -m scripts.diagnostics.benchmark_selection_2x2 --features "$MC_FEAT_CC" --model "$PKL_OPTICS" \
+python -m ambe.diagnostics.benchmark_selection_2x2 --features "$MC_FEAT_CC" --model "$PKL_OPTICS" \
     --score-col "$OPT_SCORE_COL" --score-cut "$OPT_SCORE_CUT" \
     --out-dir "${OUT_ROOT}/ambe_data/ccinc_xi02cc_optics_boxcuts_cftrain/benchmark"
 
 echo
 echo "--- Stage 4 (ccinc_xi02cc_cf_boxcuts_cftrain): CF + own CF model ---"
-python -m scripts.diagnostics.benchmark_selection_2x2 --features "$MC_FEAT_CC" --model "$PKL_CF" \
+python -m ambe.diagnostics.benchmark_selection_2x2 --features "$MC_FEAT_CC" --model "$PKL_CF" \
     --score-col "$CF_SCORE_COL" --score-cut "$CF_SCORE_CUT" \
     --out-dir "${OUT_ROOT}/ambe_data/ccinc_xi02cc_cf_boxcuts_cftrain/benchmark"
 

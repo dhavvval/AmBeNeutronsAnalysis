@@ -1,6 +1,6 @@
 """Compare saved real-data and MC cluster features.
 
-Run from the repository root: python -m scripts.diagnostics.analyze_data_mc_comparison
+Run from the repository root: python -m ambe.diagnostics.analyze_data_mc_comparison
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import re
 import sys
 import warnings
 from pathlib import Path
+from ambe.paths import DEFAULT_OUTPUT
 from typing import Dict, List, Optional
 
 import matplotlib
@@ -412,7 +413,7 @@ def main():
     parser.add_argument("--offsets",    default=DEFAULT_OFFSETS)
     args = parser.parse_args()
 
-    output_dir = Path(args.output_dir or args.mc_parquet).parent
+    output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_OUTPUT / args.run_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load geometry

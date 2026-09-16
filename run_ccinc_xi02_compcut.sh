@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Write new products in this checkout; archived inputs remain configurable.
+AMBE_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export AMBE_OUT="${AMBE_OUT:-$AMBE_REPO/ambe_output}"
 # Run the CC-inclusive xi=0.02 + composition-cut neutron pipeline end-to-end.
 # Variant of run_ccinc_productionv2.sh with:
 #   - OPTICS ms=8, xi=0.02, t_unit=25 ns  (tighter than productionv2 xi=0.10)
@@ -63,11 +66,11 @@ MODEL_TAG="${MODEL_TAG:-__keepprompt}"
 METHODS="${METHODS:-optics}"
 TAG_PREFIX="${TAG_PREFIX:-ccinc_xi02cc}"
 
-REPO=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis
+REPO="${AMBE_REPO}"
 VENV=/exp/annie/app/users/dajana/myboy/bin/activate
 CONFIG="configs/${RUN}.yaml"
 LOG="${LOG:-${REPO}/logs_${RUN}.log}"
-OUT_ROOT=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
+OUT_ROOT="${AMBE_REPO}/ambe_output"
 GEO=/exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
 OFFSETS=/exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv
 
@@ -132,7 +135,7 @@ fi
 if [[ "${START_STAGE}" -le 1 ]]; then
   echo
   echo "--- Stage 1b: background composition report ---"
-  python -m scripts.diagnostics.report_background_composition \
+  python -m ambe.diagnostics.report_background_composition \
       --config "$CONFIG" \
       --methods ${METHODS} \
       --comp-n-neutron-max "$COMP_N_NEUTRON_MAX" \
@@ -319,7 +322,7 @@ PYEOF
 
   # Stage 3c — multiplicity + score PDF
   echo "--- ${TAG}: multiplicity PDF (${BEST_SCORE_COL} @ ${BEST_SCORE_CUT}) ---"
-  python -m scripts.diagnostics.plot_ambe_neutron_multiplicity \
+  python -m ambe.diagnostics.plot_ambe_neutron_multiplicity \
       --scored      "$SCORED" \
       --mc-features "$MC_FEATURES" \
       --score-col   "$BEST_SCORE_COL" \
@@ -328,7 +331,7 @@ PYEOF
 
   # Stage 3d — capture-time fit (lmfit)
   echo "--- ${TAG}: capture-time fit (${BEST_SCORE_COL} @ ${BEST_SCORE_CUT}) ---"
-  python -m scripts.diagnostics.capture_time_stageAB_from_parquet \
+  python -m ambe.diagnostics.capture_time_stageAB_from_parquet \
       --scored    "$SCORED" \
       --score-col "$BEST_SCORE_COL" \
       --score-cut "$BEST_SCORE_CUT" \
@@ -353,7 +356,7 @@ CF_SCORED_MCA="${OUT_ROOT}/ambe_data/${TAG_PREFIX}_cf_mcbkg/${TAG_PREFIX}_cf_mcb
 echo
 echo "--- Stage 4 (${TAG_PREFIX}_optics_boxcuts): OPTICS + box cuts ---"
 OUT_S3="${OUT_ROOT}/ambe_data/${TAG_PREFIX}_optics_boxcuts"
-python -m scripts.diagnostics.benchmark_selection_2x2 \
+python -m ambe.diagnostics.benchmark_selection_2x2 \
     --features  "$MC_FEAT_CC" \
     --model     "$PKL_MCA" \
     --score-col "$BEST_SCORE_COL" \
@@ -363,7 +366,7 @@ python -m scripts.diagnostics.benchmark_selection_2x2 \
 echo
 echo "--- Stage 4 (${TAG_PREFIX}_cf_boxcuts): CF + box cuts ---"
 OUT_S6="${OUT_ROOT}/ambe_data/${TAG_PREFIX}_cf_boxcuts"
-python -m scripts.diagnostics.benchmark_selection_2x2 \
+python -m ambe.diagnostics.benchmark_selection_2x2 \
     --features  "$MC_FEAT_CC" \
     --model     "$PKL_MCA" \
     --score-col "$BEST_SCORE_COL" \

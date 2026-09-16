@@ -8,13 +8,14 @@ sigma_bkg zeroed out (source-only denominator) and by scanning what background
 trigger count would be needed for sigma_bkg to stop dominating.
 
 Usage:
-    python src/ambe/diagnostics/datadriven_chi2.py --source 6046 --bkg 6264 --tag effpair_box
-    python src/ambe/diagnostics/datadriven_chi2.py --source 6265 --bkg 6264 --tag effpair_box
+    python -m ambe.efficiency_extraction.datadriven_chi2 --source 6046 --bkg 6264 --tag effpair_box
+    python -m ambe.efficiency_extraction.datadriven_chi2 --source 6265 --bkg 6264 --tag effpair_box
 """
 import argparse
 import numpy as np
 
-from ambe.stats.efficiency_fit import (
+from ambe.paths import REPOSITORY_ROOT
+from .efficiency_fit import (
     load_event_index, build_multiplicity, fit_datadriven, make_grid,
     analytic_profile_datadriven, chi2, delta_chi2_interval,
 )
@@ -62,8 +63,8 @@ def main():
     args = ap.parse_args()
 
     ei = load_event_index([
-        f"TriggerSummary/EventIndex_AmBe2.0v4_{args.tag}_{args.source}.parquet",
-        f"TriggerSummary/EventIndex_AmBe2.0v4_{args.tag}_{args.bkg}.parquet",
+        str(REPOSITORY_ROOT / f"TriggerSummary/EventIndex_AmBe2.0v4_{args.tag}_{args.source}.parquet"),
+        str(REPOSITORY_ROOT / f"TriggerSummary/EventIndex_AmBe2.0v4_{args.tag}_{args.bkg}.parquet"),
     ])
     src = build_multiplicity(ei, args.source, args.nbins, args.denominator, args.numerator)
     bkg = build_multiplicity(ei, args.bkg, args.nbins, args.denominator, args.numerator)

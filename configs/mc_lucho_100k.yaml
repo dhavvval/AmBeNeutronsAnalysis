@@ -5,7 +5,7 @@ description: >
   Full 100k-event Lucho run (10 ROOT files, 10k events each).
   Pipeline: process → features → MVA freeze. No grid-sweep optics step.
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
+output_root: ambe_output
 
 inputs:
   root_files:

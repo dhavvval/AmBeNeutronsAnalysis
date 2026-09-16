@@ -1,4 +1,5 @@
 import os
+from ..paths import REPOSITORY_ROOT
 import glob
 import pickle
 import numpy as np
@@ -367,7 +368,7 @@ class AmBeNeutronProcessing:
 
     def plot_waveform_sample(self, hist_edges: np.ndarray, hist_values: np.ndarray, 
                            baseline: float, timestamp: str, run: str, 
-                           IC_adjusted: float, status: str, save_dir: str = 'verbose'):
+                           IC_adjusted: float, status: str, save_dir: str = str(REPOSITORY_ROOT / 'verbose')):
         """Plot a sample waveform for visualization."""
         os.makedirs(save_dir, exist_ok=True)
         
@@ -572,7 +573,7 @@ class AmBeNeutronProcessing:
     def _plot_combined_ic_distributions(self, all_ic_values: List[float], 
                                        all_ic_accepted: List[float], runinfo: str):
         """Plot combined IC distributions for all runs."""
-        os.makedirs('verbose', exist_ok=True)
+        os.makedirs(str(REPOSITORY_ROOT / 'verbose'), exist_ok=True)
         
         # All IC values
         plt.figure(figsize=(10, 6))
@@ -581,7 +582,7 @@ class AmBeNeutronProcessing:
         plt.ylabel('Number of Events')
         plt.title('All IC adjusted Values for all runs')
         plt.tight_layout()
-        plt.savefig(f'verbose/IC_adjusted_AllEvents_{runinfo}.png', dpi=300)
+        plt.savefig(str(REPOSITORY_ROOT / f'verbose/IC_adjusted_AllEvents_{runinfo}.png'), dpi=300)
         plt.close()
         
         # All IC values (log scale)
@@ -591,7 +592,7 @@ class AmBeNeutronProcessing:
         plt.ylabel('Number of Events (log scale)')
         plt.title('All IC adjusted Values for all runs (log scale)')
         plt.tight_layout()
-        plt.savefig(f'verbose/Log_IC_adjusted_AllEvents_{runinfo}.png', dpi=300)
+        plt.savefig(str(REPOSITORY_ROOT / f'verbose/Log_IC_adjusted_AllEvents_{runinfo}.png'), dpi=300)
         plt.close()
         
         # Accepted IC values
@@ -602,14 +603,14 @@ class AmBeNeutronProcessing:
             plt.ylabel('Number of Events')
             plt.title('Accepted IC_adjusted Values for all runs')
             plt.tight_layout()
-            plt.savefig(f'verbose/IC_adjusted_AcceptedEvents_{runinfo}.png', dpi=300)
+            plt.savefig(str(REPOSITORY_ROOT / f'verbose/IC_adjusted_AcceptedEvents_{runinfo}.png'), dpi=300)
             plt.close()
 
     def _plot_combined_ic_from_histograms(self, histogram_counts: np.ndarray,
                                           accepted_counts: np.ndarray,
                                           bin_edges: np.ndarray, runinfo: str):
         """Plot combined IC distributions from pre-computed histogram counts."""
-        os.makedirs('verbose', exist_ok=True)
+        os.makedirs(str(REPOSITORY_ROOT / 'verbose'), exist_ok=True)
         
         bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
         bin_width = bin_edges[1] - bin_edges[0]
@@ -621,7 +622,7 @@ class AmBeNeutronProcessing:
         plt.ylabel('Number of Events')
         plt.title('All IC adjusted Values for all runs')
         plt.tight_layout()
-        plt.savefig(f'verbose/IC_adjusted_AllEvents_{runinfo}.png', dpi=300)
+        plt.savefig(str(REPOSITORY_ROOT / f'verbose/IC_adjusted_AllEvents_{runinfo}.png'), dpi=300)
         plt.close()
         
         # All IC values (log scale)
@@ -631,7 +632,7 @@ class AmBeNeutronProcessing:
         plt.ylabel('Number of Events (log scale)')
         plt.title('All IC adjusted Values for all runs (log scale)')
         plt.tight_layout()
-        plt.savefig(f'verbose/Log_IC_adjusted_AllEvents_{runinfo}.png', dpi=300)
+        plt.savefig(str(REPOSITORY_ROOT / f'verbose/Log_IC_adjusted_AllEvents_{runinfo}.png'), dpi=300)
         plt.close()
         
         # Accepted IC values
@@ -641,7 +642,7 @@ class AmBeNeutronProcessing:
         plt.ylabel('Number of Events')
         plt.title('Accepted IC_adjusted Values for all runs')
         plt.tight_layout()
-        plt.savefig(f'verbose/IC_adjusted_AcceptedEvents_{runinfo}.png', dpi=300)
+        plt.savefig(str(REPOSITORY_ROOT / f'verbose/IC_adjusted_AcceptedEvents_{runinfo}.png'), dpi=300)
         plt.close()
 
     def load_event_data(self, file_path: str, which_tree: int = 0,
@@ -1068,12 +1069,13 @@ class AmBeNeutronProcessing:
             ic_hist_bins = np.linspace(0, 1400, 201)
             all_ic_histogram = np.zeros(200)  # Accumulate histogram counts
             all_ic_accepted_histogram = np.zeros(200)
-            pdf_file = PdfPages(f'verbose/AllRuns_IC_adjusted_{runinfo}.pdf')
+            (REPOSITORY_ROOT / "verbose").mkdir(parents=True, exist_ok=True)
+            pdf_file = PdfPages(str(REPOSITORY_ROOT / f'verbose/AllRuns_IC_adjusted_{runinfo}.pdf'))
 
         # Create output directories
-        os.makedirs('TriggerSummary', exist_ok=True)
-        os.makedirs('EventAmBeNeutronCandidatesData', exist_ok=True)
-        os.makedirs('verbose', exist_ok=True)
+        os.makedirs(str(REPOSITORY_ROOT / 'TriggerSummary'), exist_ok=True)
+        os.makedirs(str(REPOSITORY_ROOT / 'EventAmBeNeutronCandidatesData'), exist_ok=True)
+        os.makedirs(str(REPOSITORY_ROOT / 'verbose'), exist_ok=True)
         # Step 1: Waveform Analysis for All Runs and Process Tank data
         print("\n" + "="*60)
         print("STEP 1: Waveform Analysis for All Runs" if not mc_mode
@@ -1094,7 +1096,7 @@ class AmBeNeutronProcessing:
                     run, waveform_dir, campaign,
                     save_waveform_samples=save_waveform_samples,
                     feature_dump_path=(
-                        f'TriggerSummary/WaveformFeatures_{runinfo}_{run}.parquet'
+                        str(REPOSITORY_ROOT / f'TriggerSummary/WaveformFeatures_{runinfo}_{run}.parquet')
                         if dump_features else None
                     ),
                 )
@@ -1134,7 +1136,7 @@ class AmBeNeutronProcessing:
                 print(f"Good events from waveform analysis: {len(good_events)}")
 
             if dump_good_events:
-                ge_path = f'TriggerSummary/GoodEvents_{runinfo}_{run}.pkl'
+                ge_path = str(REPOSITORY_ROOT / f'TriggerSummary/GoodEvents_{runinfo}_{run}.pkl')
                 os.makedirs(os.path.dirname(ge_path), exist_ok=True)
                 with open(ge_path, 'wb') as _fh:
                     pickle.dump(set(good_events), _fh)
@@ -1147,9 +1149,9 @@ class AmBeNeutronProcessing:
 
             if mc_mode:
                 # Synthetic Stage-1 row so AmBeWaveformResults_<tag>.csv keeps its
-                # schema and stats.core still runs. total == accepted by construction:
+                # schema for downstream summaries. total == accepted by construction:
                 # there is no waveform to reject. The consumer must NOT read this as a
-                # measured acceptance -- stats.core suppresses the bar for MC.
+                # measured waveform acceptance.
                 n_ev = len(event_data["eventNumber"])
                 waveform_summary_list.append({
                     "run": int(run), "sourceX": x_pos, "sourceY": y_pos, "sourceZ": z_pos,
@@ -1205,7 +1207,7 @@ class AmBeNeutronProcessing:
             print(df.head())
             
             # Save neutron candidates data
-            output_file = f'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_{runinfo}_{run_int}.csv'
+            output_file = str(REPOSITORY_ROOT / f'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_{runinfo}_{run_int}.csv')
             df.to_csv(output_file, float_format="%.6f", index=False)
             print(f"✓ Saved neutron candidates to {output_file}")
             
@@ -1217,7 +1219,7 @@ class AmBeNeutronProcessing:
             })
             
             # Save prompt neutrons data
-            prompt_file = f'EventAmBeNeutronCandidatesData/PromptAmBeNeutronCandidates_{runinfo}_{run_int}.csv'
+            prompt_file = str(REPOSITORY_ROOT / f'EventAmBeNeutronCandidatesData/PromptAmBeNeutronCandidates_{runinfo}_{run_int}.csv')
             prompt_df.to_csv(prompt_file, index=False)
             print(f"✓ Saved prompt neutron candidates to {prompt_file}")
 
@@ -1225,7 +1227,7 @@ class AmBeNeutronProcessing:
                 index_df = pd.DataFrame(event_rows)
                 index_df['n_accepted_clusters'] = (index_df['n_accepted_single']
                                                    + index_df['n_accepted_multiple'])
-                index_path = f'TriggerSummary/EventIndex_{runinfo}_{run_int}.parquet'
+                index_path = str(REPOSITORY_ROOT / f'TriggerSummary/EventIndex_{runinfo}_{run_int}.parquet')
                 os.makedirs(os.path.dirname(index_path) or '.', exist_ok=True)
                 try:
                     index_df.to_parquet(index_path, index=False)
@@ -1250,7 +1252,7 @@ class AmBeNeutronProcessing:
         
         waveform_df = pd.DataFrame(waveform_summary_list)
         waveform_df = waveform_df.groupby(['sourceX', 'sourceY', 'sourceZ'], as_index=False).sum()
-        waveform_df.to_csv(f'TriggerSummary/AmBeWaveformResults_{runinfo}.csv', index=False)
+        waveform_df.to_csv(str(REPOSITORY_ROOT / f'TriggerSummary/AmBeWaveformResults_{runinfo}.csv'), index=False)
 
         if plot_ic_distributions:
             self._plot_combined_ic_from_histograms(
@@ -1270,7 +1272,7 @@ class AmBeNeutronProcessing:
             for key, val in efficiency_data.items()
         ])
         
-        efficiency_file = f'TriggerSummary/AmBeTriggerSummary_{runinfo}.csv'
+        efficiency_file = str(REPOSITORY_ROOT / f'TriggerSummary/AmBeTriggerSummary_{runinfo}.csv')
         df_eff.to_csv(efficiency_file, index=False)
         print(f"✓ Saved efficiency summary to {efficiency_file}")
         
@@ -1295,11 +1297,11 @@ class AmBeNeutronProcessing:
             'file_names': file_names,
             'efficiency_data': dict(efficiency_data),
             'output_files': {
-                'waveform_summary': f'TriggerSummary/AmBeWaveformResults_{runinfo}.csv',
+                'waveform_summary': str(REPOSITORY_ROOT / f'TriggerSummary/AmBeWaveformResults_{runinfo}.csv'),
                 'efficiency_summary': efficiency_file,
-                'neutron_candidates_pattern': f'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_{runinfo}_*.csv',
-                'prompt_candidates_pattern': f'EventAmBeNeutronCandidatesData/PromptAmBeNeutronCandidates_{runinfo}_*.csv',
-                'event_index_pattern': (f'TriggerSummary/EventIndex_{runinfo}_*.parquet'
+                'neutron_candidates_pattern': str(REPOSITORY_ROOT / f'EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_{runinfo}_*.csv'),
+                'prompt_candidates_pattern': str(REPOSITORY_ROOT / f'EventAmBeNeutronCandidatesData/PromptAmBeNeutronCandidates_{runinfo}_*.csv'),
+                'event_index_pattern': (str(REPOSITORY_ROOT / f'TriggerSummary/EventIndex_{runinfo}_*.parquet')
                                         if dump_event_index else None)
             }
         }

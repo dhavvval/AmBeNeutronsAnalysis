@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Inspect multiplicity for the second stored event selection.
 
-Run from the repository root: python -m scripts.diagnostics.selection2_multiplicity
+Run from the repository root: python -m ambe.diagnostics.selection2_multiplicity
 """
 import sys
 import argparse

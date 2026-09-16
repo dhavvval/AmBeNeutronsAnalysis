@@ -36,7 +36,7 @@ which is why `build_multiplicity` takes an explicit denominator choice and recor
 provenance rather than inferring one.
 
 Usage:
-    from ambe.stats.efficiency_fit import (
+    from ambe.efficiency_extraction.efficiency_fit import (
         load_event_index, build_multiplicity, fit_datadriven, fit_poisson)
 """
 
@@ -1126,7 +1126,7 @@ def run(ctx, argv=None):
             "  data_driven  uses the measured background shape, but inherits the\n"
             "               background run's statistics; with a small background\n"
             "               sample its chi2/ndof looks good for the wrong reason\n"
-            "               (see src/ambe/diagnostics/datadriven_chi2.py).\n"
+            "               (see src/ambe/efficiency_extraction/datadriven_chi2.py).\n"
             "Neither is a safe default, which is why you have to say.")
     nominal_model = str(nominal_model)
     if nominal_model not in NOMINAL_MODELS:

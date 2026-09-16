@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Write new products in this checkout; archived inputs remain configurable.
+AMBE_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export AMBE_OUT="${AMBE_OUT:-$AMBE_REPO/ambe_output}"
 #
 # run_ccinc_v3_ambe_stage3.sh — Stage 3 of the CCinc v3 campaign: apply the four
 # merged tank+world models to real AmBe data.
@@ -40,11 +43,11 @@
 #
 set -uo pipefail
 
-cd /exp/annie/app/users/dajana/AmBeNeutronsAnalysis
+cd "$AMBE_REPO" || exit 1
 source /exp/annie/app/users/dajana/myboy/bin/activate
 export PYTHONUNBUFFERED=1
 
-BASE=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
+BASE="${AMBE_REPO}/ambe_output"
 AMBE=$BASE/ambe_data
 STAGE=$BASE/ccinc_v3_ambe_stage3
 LOG=logs_ccinc_v3_ambe_stage3.log

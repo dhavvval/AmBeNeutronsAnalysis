@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Collect figures listed in FIGURES.md into the five presentation decks.
+"""Collect figures listed in docs/FIGURES.md into the five presentation decks.
 
 Run from the repository root: python -m scripts.presentation.collect_presentation_plots
 """
@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parents[2]
-FIGURES_MD = HERE / "FIGURES.md"
+FIGURES_MD = HERE / "docs/FIGURES.md"
 OUT = HERE / "PRESENTATION_PLOTS"
 
 # Both source trees. Order matters only for the "first match wins" lookup.
@@ -100,7 +100,7 @@ RE_PREFIX = re.compile(r"^[A-Z0-9_.]+$")
 
 
 def parse_figures_md():
-    """Ordered [(slot, group, stem, says)] from the group tables in FIGURES.md."""
+    """Ordered [(slot, group, stem, says)] from the group tables in docs/FIGURES.md."""
     if not FIGURES_MD.exists():
         raise SystemExit(f"missing {FIGURES_MD}")
     rows, group = [], None
@@ -116,10 +116,10 @@ def parse_figures_md():
                 # A row whose slot letter disagrees with its heading means the file
                 # has been edited into an inconsistent state; better to stop than to
                 # file a figure under the wrong deck.
-                raise SystemExit(f"FIGURES.md: slot {slot} sits under group {group}")
+                raise SystemExit(f"docs/FIGURES.md: slot {slot} sits under group {group}")
             rows.append((slot, group, stem, says))
     if not rows:
-        raise SystemExit("FIGURES.md: parsed no figure rows — has the table format "
+        raise SystemExit("docs/FIGURES.md: parsed no figure rows — has the table format "
                          "changed? This script reads the `| A1 | `name` | says |` rows.")
     return rows
 
@@ -146,12 +146,12 @@ def check_assignment(rows):
     unknown = sorted(set(seen) - named, key=slot_key)
     if unassigned:
         raise SystemExit(
-            f"{len(unassigned)} slot(s) in FIGURES.md belong to no deck — add them "
+            f"{len(unassigned)} slot(s) in docs/FIGURES.md belong to no deck — add them "
             f"to a DECKS order/backup list: {', '.join(unassigned)}")
     if unknown:
         raise SystemExit(
             f"{len(unknown)} slot(s) are assigned to a deck but do not exist in "
-            f"FIGURES.md: {', '.join(unknown)}")
+            f"docs/FIGURES.md: {', '.join(unknown)}")
     return seen
 
 
@@ -292,6 +292,7 @@ def stats_block(deck_key):
 def write_readme(path, deck, entries, appendix_ok, deck_key=""):
     """One README per deck: the selection in words, the statistics, the order."""
     L = [f"# {deck['title']}", "",
+         f"Figure directory: `PRESENTATION_PLOTS/{deck['dirname']}/`.", "",
          "## Selection used in this deck", "", deck["selection"], ""]
     L += stats_block(deck_key)
     L += ["## Running order", "",
@@ -345,7 +346,7 @@ def sweep_stale():
 def do_build(dry_run=False):
     rows = parse_figures_md()
     rows.sort(key=lambda r: slot_key(r[0]))
-    print(f"[figures] {len(rows)} figures named in FIGURES.md, "
+    print(f"[figures] {len(rows)} figures named in docs/FIGURES.md, "
           f"groups {''.join(sorted({r[1] for r in rows}))}")
 
     check_assignment(rows)
@@ -427,11 +428,13 @@ def do_build(dry_run=False):
                 size_bytes=src.stat().st_size, says="multi-page appendix"))
 
         if not dry_run:
-            write_readme(ddir / "README.md", deck, entries, app_ok, key)
+            readme = HERE / "docs" / "presentations" / f"{deck['dirname']}.md"
+            readme.parent.mkdir(parents=True, exist_ok=True)
+            write_readme(readme, deck, entries, app_ok, key)
         print(f"[deck] {deck['dirname']:32s} {len(entries['order']):2d} in order, "
               f"{len(entries['backup']):2d} backup, {len(app_ok)} appendix")
 
-    # Anything present in the source trees but not named in FIGURES.md. This is how
+    # Anything present in the source trees but not named in docs/FIGURES.md. This is how
     # V3AMBESPEC__classified_by_position went unnoticed — warn, do not fail.
     named = {r[2] for r in rows}
     orphans = set()
@@ -453,18 +456,18 @@ def do_build(dry_run=False):
 
     if orphans:
         print(f"\n[warn] {len(orphans)} figure(s) exist in slide_plots_ccinc_v3_merged "
-              f"but are NOT named in FIGURES.md, so they are not in any deck:")
+              f"but are NOT named in docs/FIGURES.md, so they are not in any deck:")
         for o in sorted(orphans):
             print(f"         {o}")
 
     if missing:
-        print(f"\n[FAIL] {len(missing)} figure(s) named in FIGURES.md are missing "
+        print(f"\n[FAIL] {len(missing)} figure(s) named in docs/FIGURES.md are missing "
               f"on disk:")
         for m in missing:
             print(f"         {m}")
         return 1
 
-    print(f"\n[ok] every figure named in FIGURES.md was found and copied")
+    print(f"\n[ok] every figure named in docs/FIGURES.md was found and copied")
     print(f"\ncopy the whole set with:")
     print(f"  rsync -av <user>@<node>:{OUT}/ ./PRESENTATION_PLOTS/")
     return 0

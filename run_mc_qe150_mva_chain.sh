@@ -1,4 +1,7 @@
 #!/bin/bash
+# Write new products in this checkout; archived inputs remain configurable.
+AMBE_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export AMBE_OUT="${AMBE_OUT:-$AMBE_REPO/ambe_output}"
 # CF features -> score with the FROZEN CCinc-neutrino model -> the two MVA decks.
 #
 # NOTHING IS TRAINED. src/ambe/mc/mva_analysis.py is invoked only with --score-data, against the
@@ -11,7 +14,7 @@
 # rows from vetoed events. scripts/workflows/derive_vetoon_scored.py performs that filter using the box
 # deck's own per-event is_cosmic verdict, and asserts the result. Extracting twice
 # would cost ~11 h of CPU to reproduce a row filter.
-cd /exp/annie/app/users/dajana/AmBeNeutronsAnalysis
+cd "$AMBE_REPO" || exit 1
 export PYTHONPATH=src
 PY=/exp/annie/app/users/dajana/myboy/bin/python
 R=/pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv2/QE_1.50

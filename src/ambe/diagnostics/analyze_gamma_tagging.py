@@ -1,6 +1,6 @@
 """Study gamma tags and neutron associations in MC.
 
-Run from the repository root: python -m scripts.diagnostics.analyze_gamma_tagging
+Run from the repository root: python -m ambe.diagnostics.analyze_gamma_tagging
 """
 
 from __future__ import annotations

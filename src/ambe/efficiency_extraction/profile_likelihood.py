@@ -1,3 +1,8 @@
+"""Legacy stochastic reference used by efficiency regression tests.
+
+Production fits use efficiency_fit.py. Retain this implementation to compare
+the analytic profiles against the original sampling convention.
+"""
 import numpy as np
 import scipy as sp
 
@@ -73,7 +78,7 @@ class ProfileLikelihoodBuilder(object):
         per-bin uncertainty enters only the chi-square denominator (CalcChiSquare),
         not the throw. That is the thesis behaviour and is preserved here so this
         class stays a faithful reference implementation. To fluctuate the template
-        itself, use ambe.stats.efficiency_fit.mc_profile_datadriven(bkg_unc=...).
+        itself, use ambe.efficiency_extraction.efficiency_fit.mc_profile_datadriven(bkg_unc=...).
         '''
         Profile = np.zeros(len(SignalDistribution))
         Bin_values = np.arange(0,len(SignalDistribution),1)
@@ -177,10 +182,10 @@ def run(ctx, argv=None):
     """This module is a library, not a command.
 
     The CLI entry point for the chapter 8 extraction is
-    `ambe stats efficiency`, implemented in ambe.stats.efficiency_fit.
+    `ambe stats efficiency`, implemented in ambe.efficiency_extraction.efficiency_fit.
     """
     raise SystemExit(
-        "ambe.stats.profile_likelihood is a reference library, not a command. "
+        "ambe.efficiency_extraction.profile_likelihood is a reference library, not a command. "
         "Use: ambe stats efficiency --config <config>")
 
 

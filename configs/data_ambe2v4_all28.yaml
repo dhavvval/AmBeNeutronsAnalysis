@@ -29,7 +29,7 @@ description: >
   disk, so it has never been acquired. Position (75, 50, 0) is therefore covered
   only by the LAPPD debug pair 6249/6250.
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data
+output_root: ambe_output/ambe_data
 
 inputs:
   trigger_summary:

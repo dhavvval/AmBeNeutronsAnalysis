@@ -1,7 +1,7 @@
 """
 Thesis chapter 8 efficiency figures.
 
-The numeric work lives in ambe.stats.efficiency_fit; this module only draws it, so
+The numeric work lives in ambe.efficiency_extraction.efficiency_fit; this module only draws it, so
 the fit stays headless and testable. Figure numbering follows Pershing thesis ch. 8:
 
     8.18/8.19  multiplicity distributions, source and background
@@ -19,7 +19,7 @@ from __future__ import annotations
 import numpy as np
 
 from ..plotting import save_plot, set_style
-from ..stats.efficiency_fit import (assert_interior, background_scale_factor,
+from .efficiency_fit import (assert_interior, background_scale_factor,
                                     build_multiplicity, fit_datadriven, fit_poisson,
                                     make_grid, _resolve_event_index)
 
@@ -146,76 +146,7 @@ def plot_chi2_projections(ctx, rp):
     return save_plot(fig, ctx, "eff_chi2_projections")
 
 
-def plot_capture_time(ctx, candidate_csv, run):
-    """Capture-time fit -- the evidence that a run is source-like.
-
-    Model, window and solver come from basic.py (NeutCapture, 2-67 us,
-    least_squares), so these pages are comparable with CaptureTimeFits_*.csv rather
-    than being a second, differently-defined capture time.
-    """
-    import lmfit
-    import matplotlib.pyplot as plt
-    import pandas as pd
-
-    from .basic import AmBeNeutronAnalyzer
-
-    # basic.py owns the model, the window and the solver choice. Borrow its
-    # configured analyzer rather than defining a second capture time.
-    an = AmBeNeutronAnalyzer()
-    cfg = an.fitting_config
-
-    d = pd.read_csv(candidate_csv)
-    CT = d["clusterTime"].to_numpy(float) / 1000.0
-    if ((CT > cfg['fit_min_time']) & (CT < cfg['fit_max_time'])).sum() < 50:
-        return None
-    xdata, ydata, ydata_errors, counts, bin_centers = an._prepare_fitting_data(CT)
-    try:
-        model = lmfit.Model(an.NeutCapture)
-        params = model.make_params(A=cfg['initial_amplitude'],
-                                   therm=cfg['initial_thermal_time'],
-                                   tau=cfg['initial_capture_time'],
-                                   B=cfg['initial_background'])
-        params['A'].min = cfg['amplitude_bounds'][0]
-        params['therm'].min = cfg['thermal_bounds'][0]
-        params['therm'].max = cfg['thermal_bounds'][1]
-        params['tau'].min = cfg['capture_bounds'][0]
-        params['tau'].max = cfg['capture_bounds'][1]
-        params['B'].vary = False
-        result = model.fit(ydata, params, t=xdata, weights=1 / ydata_errors,
-                           method="least_squares", scale_covar=False)
-    except Exception as exc:
-        print(f"[plots.efficiency] capture-time fit failed for run {run}: {exc}")
-        return None
-
-    therm, tau = result.params['therm'], result.params['tau']
-    xplot = np.linspace(cfg['plot_min_time'], cfg['fit_max_time'], 500)
-    curve = an.NeutCapture(xplot, result.params['A'].value, therm.value,
-                           tau.value, result.params['B'].value)
-
-    fig, ax = plt.subplots()
-    ax.hist(CT, bins=cfg['time_bins'], range=cfg['time_range'],
-            histtype="step", color="C7", label="all delayed clusters")
-    ax.errorbar(xdata, ydata, yerr=ydata_errors, fmt="o", ms=4, color="C0",
-                label=f"fit {cfg['fit_min_time']:.0f}–{cfg['fit_max_time']:.0f} "
-                      f"$\\mu$s")
-    ax.plot(xplot, curve, "k-", lw=2,
-            label=f"$\\tau$ = {tau.value:.2f} $\\pm$ {tau.stderr:.2f} $\\mu$s, "
-                  f"therm = {therm.value:.2f} $\\pm$ {therm.stderr:.2f} $\\mu$s, "
-                  f"$\\chi^2$/ndof = {result.redchi:.2f}")
-    ax.set_xlabel("Cluster Time [$\\mu$s]")
-    ax.set_ylabel("Counts")
-    ax.set_title(ctx.title(f"Capture time (LMFIT), run {run}"))
-    ax.legend(fontsize=9)
-    fig.tight_layout()
-    save_plot(fig, ctx, f"eff_capture_time_{run}")
-    return dict(run=run, tau_us=tau.value, tau_err_us=tau.stderr,
-                therm_us=therm.value, therm_err_us=therm.stderr,
-                chi2_per_ndof=result.redchi)
-
-
 def run(ctx, argv=None):
-    import glob
-
     set_style()
     fp = dict(ctx.fit_params or {})
     if not fp:
@@ -234,14 +165,22 @@ def run(ctx, argv=None):
     ei = _resolve_event_index(ctx)
     denom = fp.get("denominator", "ambe_triggers")
     num_mode = fp.get("numerator_mode", "noncosmic")
-    src = build_multiplicity(ei, src_run, n_bins, denom, num_mode)
-    bkg = build_multiplicity(ei, bkg_run, n_bins, denom, num_mode)
+    overflow_policy = fp.get("overflow_policy", "fail")
+    likelihood = fp.get("likelihood", "thesis_chi2")
+    src = build_multiplicity(ei, src_run, n_bins, denom, num_mode,
+                             overflow_policy=overflow_policy)
+    bkg = build_multiplicity(ei, bkg_run, n_bins, denom, num_mode,
+                             overflow_policy=overflow_policy)
 
     rp = fit_poisson(src, eff_grid, lam_grid, engine=engine,
-                     n_throws=int(fp.get("n_throws", 1_000_000)), rng=rng)
+                     n_throws=int(fp.get("n_throws", 1_000_000)), rng=rng,
+                     likelihood=likelihood)
     rd = fit_datadriven(src, bkg, eff_grid, engine=engine,
                         n_throws=int(fp.get("n_throws", 1_000_000)), rng=rng,
-                        bkg_scale=scale)
+                        bkg_scale=scale, likelihood=likelihood,
+                        template_fluctuate=bool(fp.get("template_fluctuate")),
+                        bkg_unc_mode=fp.get("background_uncertainty", "thesis_diagonal"),
+                        n_bootstrap=int(fp.get("n_bootstrap", 400)))
     assert_interior(rp, "poisson")
     assert_interior(rd, "data-driven")
 
@@ -254,18 +193,6 @@ def run(ctx, argv=None):
     plot_chi2_2d(ctx, rp)
     plot_chi2_projections(ctx, rp)
 
-    pats = ctx.inputs.get("candidate_csvs") or []
-    if isinstance(pats, str):
-        pats = [pats]
-    for pat in pats:
-        for path in sorted(glob.glob(str(pat))):
-            for r in (src_run, bkg_run, fp.get("crosscheck_run")):
-                if r and f"_{r}." in path:
-                    info = plot_capture_time(ctx, path, r)
-                    if info:
-                        print(f"[plots.efficiency] run {r}: tau = "
-                              f"{info['tau_us']:.1f} +/- {info['tau_err_us']:.1f} us, "
-                              f"chi2/ndof = {info['chi2_per_ndof']:.2f}")
     print(f"[plots.efficiency] figures in {ctx.plots_dir}")
 
 

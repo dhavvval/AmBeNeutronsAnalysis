@@ -35,7 +35,7 @@ description: >
   NO EFFICIENCY IS REPORTED FROM THIS DECK, of any kind. The efficiency and residual-
   efficiency heatmaps are suppressed below.
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/mc_ambe
+output_root: ambe_output/mc_ambe
 
 stage1_mc:
   dataset_root: /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv2/QE_1.50

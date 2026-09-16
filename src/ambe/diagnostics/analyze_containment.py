@@ -1,6 +1,6 @@
 """Study MC containment and boundary effects.
 
-Run from the repository root: python -m scripts.diagnostics.analyze_containment
+Run from the repository root: python -m ambe.diagnostics.analyze_containment
 """
 
 from __future__ import annotations

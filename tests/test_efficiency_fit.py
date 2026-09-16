@@ -9,7 +9,7 @@ the interval width, the zero bin, and the overflow handling.
 import numpy as np
 import pytest
 
-from ambe.stats.efficiency_fit import (
+from ambe.efficiency_extraction.efficiency_fit import (
     EMPTY_BIN_UNC_COUNTS, analytic_profile_datadriven, analytic_profile_poisson,
     background_scale_factor, build_multiplicity, delta_chi2_interval, fit_datadriven,
     fit_poisson, make_grid, mc_profile_poisson, multiplicity_from_counts)
@@ -323,7 +323,7 @@ def test_poisson_model_closure_at_thesis_reference_point():
     the vendored reference implementation) and
     test_frozen_real_data_fixture_reproduces (against recorded real bin counts).
     """
-    from ambe.stats.efficiency_fit import analytic_profile_poisson
+    from ambe.efficiency_extraction.efficiency_fit import analytic_profile_poisson
     N = 9934                       # triggers after cuts, thesis table 8.3
     p = analytic_profile_poisson(0.64, 0.073, 6)
     counts = np.round(p * N).astype(int)
@@ -340,7 +340,7 @@ def test_poisson_model_closure_at_thesis_reference_point():
 def test_analytic_matches_teal_reference_class():
     """The vendored ProfileLikelihoodBuilder and the analytic engine are the same
     model, so their profiles must agree to within MC noise."""
-    from ambe.stats.profile_likelihood import (ProfileLikelihoodBuilder,
+    from ambe.efficiency_extraction.profile_likelihood import (ProfileLikelihoodBuilder,
                                                ProfileLikelihoodBuilder2D)
     np.random.seed(3)
     bkg = np.array([0.90, 0.07, 0.02, 0.01, 0.0, 0.0]); bkg /= bkg.sum()
@@ -358,7 +358,7 @@ def test_analytic_matches_teal_reference_class():
 def test_calc_chisquare_accepts_none_background_unc():
     """The 1D BuildLikelihoodProfile lets BkgDistUnc default to None; before the fix
     that path raised TypeError on None**2."""
-    from ambe.stats.profile_likelihood import ProfileLikelihoodBuilder
+    from ambe.efficiency_extraction.profile_likelihood import ProfileLikelihoodBuilder
     B = ProfileLikelihoodBuilder()
     v = B.CalcChiSquare(np.full(4, 0.25), np.full(4, 0.25), np.full(4, 0.01), None)
     assert v == pytest.approx(0.0)
@@ -431,7 +431,7 @@ def test_frozen_fixture_profile_interval_is_narrower_than_joint():
 def test_pseudo_experiment_p_value_is_uniform_under_the_generating_model():
     """If the model IS the truth, p must be roughly uniform -- otherwise the gate
     that refuses to quote a bad fit is calibrated wrong."""
-    from ambe.stats.efficiency_fit import pseudo_experiment_p_value, _toy_unc
+    from ambe.efficiency_extraction.efficiency_fit import pseudo_experiment_p_value, _toy_unc
     rng = np.random.default_rng(11)
     p_model = analytic_profile_poisson(0.65, 0.07, 8)
     n_ev = 15628
@@ -449,7 +449,7 @@ def test_pseudo_experiment_p_value_is_uniform_under_the_generating_model():
 def test_real_data_poisson_fit_fails_goodness_of_fit():
     """The headline model on the real 6265 histogram is a BAD fit, and the code must
     be able to say so. This is what the nominal-model GoF gate exists to catch."""
-    from ambe.stats.efficiency_fit import pseudo_experiment_p_value, _toy_unc
+    from ambe.efficiency_extraction.efficiency_fit import pseudo_experiment_p_value, _toy_unc
     src = _frozen_hist(FROZEN["source"])
     rp = fit_poisson(src, make_grid({"min": 0.30, "max": 0.95, "step": 0.001}),
                      make_grid({"min": 0.00, "max": 0.60, "step": 0.002}),
@@ -463,7 +463,7 @@ def test_real_data_poisson_fit_fails_goodness_of_fit():
 # Systematics: direction, one-sidedness, and the terms that were being ignored
 # --------------------------------------------------------------------------- #
 def test_model_systematic_keeps_its_sign_and_is_one_sided():
-    from ambe.stats.efficiency_fit import systematics
+    from ambe.efficiency_extraction.efficiency_fit import systematics
     up = systematics(0.60, 0.64, n_trig_bkg=22, n_trig_src=15628)
     assert up.delta_model_signed == pytest.approx(+0.04)
     assert up.total_plus == pytest.approx(0.04)
@@ -477,7 +477,7 @@ def test_model_systematic_keeps_its_sign_and_is_one_sided():
 
 def test_housing_uncertainty_actually_changes_the_total():
     """delta_h_unc used to be accepted, stored, and never read."""
-    from ambe.stats.efficiency_fit import systematics
+    from ambe.efficiency_extraction.efficiency_fit import systematics
     bare = systematics(0.60, 0.64, 22, 15628)
     with_h = systematics(0.60, 0.64, 22, 15628, delta_h=0.0031, delta_h_unc=0.00056)
     assert with_h.total_plus > bare.total_plus
@@ -488,7 +488,7 @@ def test_housing_uncertainty_actually_changes_the_total():
 def test_housing_counts_derive_fraction_and_poisson_error():
     """Thesis 8.7.2 prose: 31 captures from 10,000 simulated neutrons. (Eq. 8.8's
     printed 1E5 denominator is a typo.)"""
-    from ambe.stats.efficiency_fit import systematics
+    from ambe.efficiency_extraction.efficiency_fit import systematics
     sb = systematics(0.60, 0.64, 22, 15628,
                      housing_n_captures=31, housing_n_simulated=10000)
     assert sb.delta_h == pytest.approx(0.0031)
@@ -499,7 +499,7 @@ def test_housing_counts_derive_fraction_and_poisson_error():
 def test_missing_livetime_makes_delta_bt_unpublishable():
     """Without livetime the count ratio is NOT the rate ratio of eq. 8.9, so it must
     be reported as a diagnostic and excluded from the total."""
-    from ambe.stats.efficiency_fit import systematics
+    from ambe.efficiency_extraction.efficiency_fit import systematics
     sb = systematics(0.60, 0.64, n_trig_bkg=22, n_trig_src=15628)
     assert sb.delta_bt is not None              # still reported
     assert sb.delta_bt_publishable is False     # but not usable
@@ -508,7 +508,7 @@ def test_missing_livetime_makes_delta_bt_unpublishable():
 
 
 def test_livetime_gives_rate_ratio_with_propagated_uncertainty():
-    from ambe.stats.efficiency_fit import systematics
+    from ambe.efficiency_extraction.efficiency_fit import systematics
     sb = systematics(0.60, 0.64, n_trig_bkg=100, n_trig_src=10000,
                      livetime_bkg_s=50.0, livetime_src_s=1000.0)
     assert sb.delta_bt_publishable is True
@@ -522,13 +522,13 @@ def test_livetime_gives_rate_ratio_with_propagated_uncertainty():
 
 
 def test_equal_livetime_rate_ratio_equals_count_ratio():
-    from ambe.stats.efficiency_fit import systematics
+    from ambe.efficiency_extraction.efficiency_fit import systematics
     eq = systematics(0.60, 0.64, 100, 10000, livetime_bkg_s=7.0, livetime_src_s=7.0)
     assert eq.delta_bt == pytest.approx(100 / 10000)
 
 
 def test_unequal_livetime_shows_why_count_ratio_is_wrong():
-    from ambe.stats.efficiency_fit import systematics
+    from ambe.efficiency_extraction.efficiency_fit import systematics
     counts_only = systematics(0.60, 0.64, 100, 10000)
     rates = systematics(0.60, 0.64, 100, 10000,
                         livetime_bkg_s=50.0, livetime_src_s=1000.0)
@@ -537,13 +537,13 @@ def test_unequal_livetime_shows_why_count_ratio_is_wrong():
 
 
 def test_zero_livetime_is_treated_as_missing_not_divided_by():
-    from ambe.stats.efficiency_fit import systematics
+    from ambe.efficiency_extraction.efficiency_fit import systematics
     sb = systematics(0.60, 0.64, 100, 10000, livetime_bkg_s=0.0, livetime_src_s=10.0)
     assert sb.delta_bt_publishable is False
 
 
 def test_zero_source_count_is_handled():
-    from ambe.stats.efficiency_fit import systematics
+    from ambe.efficiency_extraction.efficiency_fit import systematics
     sb = systematics(0.60, 0.64, n_trig_bkg=22, n_trig_src=0)
     assert sb.delta_bt is None
 

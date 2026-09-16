@@ -1,6 +1,6 @@
 """Compare ClusterSearcher and OPTICS reconstruction.
 
-Run from the repository root: python -m scripts.diagnostics.compare_clustersearcher
+Run from the repository root: python -m ambe.diagnostics.compare_clustersearcher
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import pandas as pd
 from scipy.spatial import cKDTree
 
 # Locate the ambe package (run from repo root or any parent that contains src/)
-_HERE = Path(__file__).resolve().parents[2]
+_HERE = Path(__file__).resolve().parents[3]
 
 from ambe.mc.optics import (
     run_optics_on_event,

@@ -20,7 +20,7 @@ description: >
   offset and an 8 ns tolerance -- the DirectParent arrays are ordered by
   std::map<pmtID, map<hitTime>> iteration and are NOT row-aligned with hit*.
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/mc_ambe
+output_root: ambe_output/mc_ambe
 
 inputs:
   root_files:

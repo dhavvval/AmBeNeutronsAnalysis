@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Write new products in this checkout; archived inputs remain configurable.
+AMBE_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export AMBE_OUT="${AMBE_OUT:-$AMBE_REPO/ambe_output}"
 # ============================================================
 # tmux launcher for the Lucho 100k AmBe pipeline.
 #
@@ -16,7 +19,7 @@
 # ============================================================
 set -euo pipefail
 
-REPO="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis"
+REPO="${AMBE_REPO}"
 SESSION="lucho100k"
 LOG="$REPO/logs/lucho_100k.log"
 DONE="$REPO/logs/lucho_100k.DONE"

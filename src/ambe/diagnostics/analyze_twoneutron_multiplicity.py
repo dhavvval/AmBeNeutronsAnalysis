@@ -1,10 +1,11 @@
 """Study reconstructed multiplicity in the two-neutron MC sample.
 
-Run from the repository root: python -m scripts.diagnostics.analyze_twoneutron_multiplicity
+Run from the repository root: python -m ambe.diagnostics.analyze_twoneutron_multiplicity
 """
 
 import sys
 from pathlib import Path
+from ambe.paths import DEFAULT_OUTPUT
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -15,10 +16,10 @@ import awkward as ak
 # ---------------------------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------------------------
-OUTPUT_ROOT = Path("/Users/dajana/Documents/ambe_output")
+OUTPUT_ROOT = DEFAULT_OUTPUT
 RUN_NAME    = "mc_twoneutron"
 ROOT_FILE   = "/Users/dajana/Documents/AmBe/AmBeNeutronsAnalysis/ANNIEEvent_MC_AmBe_twoneutrons.root"
-OUT_DIR     = Path(__file__).resolve().parents[2]
+OUT_DIR     = Path(__file__).resolve().parents[3]
 MAX_EVENTS  = None
 
 NEUTRON_PDG    = 2112

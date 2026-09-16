@@ -3,7 +3,7 @@ display_label: "AmBe v4 leak-free reference pair 6265 / 6266, traditional box cu
 campaign: "AmBe 2.0v4"
 description: "AmBe data: ambe2v4_refpair_box"
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data
+output_root: ambe_output/ambe_data
 
 stage1:
   data_directory: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/stage_v4/refpair

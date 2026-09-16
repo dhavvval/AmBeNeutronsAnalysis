@@ -4,7 +4,7 @@ description: >
   OPTICS training on the 896-event ANNIEEvent_MC_AmBe_withoutdarknoise_0_999.root file, which contains only one neutron per event and no dark noise. This is a "best case" scenario for OPTICS clustering, so we expect to find exactly one cluster per event with the right settings. Use this config to verify that the pipeline is working end-to-end before running on more complex files with multiple neutrons and dark noise.
 
 # Output inside workspace mount so sandbox can read parquets after running
-output_root: /Users/dajana/Documents/AmBe/AmBeNeutronsAnalysis/ambe_output
+output_root: ambe_output
 
 inputs:
   root_files:

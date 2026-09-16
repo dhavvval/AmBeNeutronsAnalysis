@@ -1,6 +1,6 @@
 """Inspect truth timing and reconstructed timing in MC.
 
-Run from the repository root: python -m scripts.diagnostics.analyze_truth_timing
+Run from the repository root: python -m ambe.diagnostics.analyze_truth_timing
 """
 
 import sys
@@ -19,7 +19,7 @@ import awkward as ak
 # CONFIGURE THIS
 # ---------------------------------------------------------------------------
 ROOT_FILE   = "/Users/dajana/Documents/ANNIEEvent_MC_AmBe_oneutron.root"
-OUT_DIR     = Path(__file__).resolve().parents[2]
+OUT_DIR     = Path(__file__).resolve().parents[3]
 WINDOW_NS   = 50.0   # the hypothesis window to test
 MAX_EVENTS  = None   # set to e.g. 200 to do a quick test; None = all events
 

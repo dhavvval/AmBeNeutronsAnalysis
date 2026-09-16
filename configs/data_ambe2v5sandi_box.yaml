@@ -3,7 +3,7 @@ display_label: "AmBe v5sandi, 3 runs, traditional box cuts"
 campaign: "AmBe 2.0v5sandi"
 description: "AmBe data: ambe2v5sandi_box"
 
-output_root: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data
+output_root: ambe_output/ambe_data
 
 stage1:
   data_directory: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/stage_v5sandi/source

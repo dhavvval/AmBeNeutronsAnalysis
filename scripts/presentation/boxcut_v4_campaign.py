@@ -365,7 +365,7 @@ def do_validation(b):
     m = m[m.config.str.startswith("Truth-tag")]
 
     # Box-cut per-position tau with B floating, so the two use one recipe.
-    from ambe.stats.capture_time import load_tag, fit, is_good
+    from ambe.plots.basic import load_tag, fit, is_good
     d = pd.concat([load_tag(TAG_GATED), load_tag(TAG_EXT)], ignore_index=True)
     recs = []
     for pos, g in d.groupby(["sourceX", "sourceY", "sourceZ"]):
@@ -509,7 +509,7 @@ def do_matched(b):
     if not SCORED.exists():
         print(f"  SKIP: {SCORED} not found")
         return
-    from ambe.stats.capture_time import fit, is_good
+    from ambe.plots.basic import fit, is_good
 
     m = pd.read_parquet(SCORED, columns=[
         "run", "event_tank_time", "cf_clusterTime", "cf_clusterPE", "cf_clusterCB",
@@ -707,7 +707,7 @@ def do_agreement(summ):
     (§6.6.1) rather than for its own decisions.
     """
     print("\n[agreement] box cuts vs MVA — both streamlines, all models, all points")
-    from ambe.stats.capture_time import fit, is_good
+    from ambe.plots.basic import fit, is_good
 
     denom = summ.set_index("pos").ambe_triggers
     bc_eff = summ.set_index("pos").efficiency
@@ -1061,7 +1061,7 @@ def do_residuals():
     AmBe data carries no per-cluster truth label, so the overlap of two selections is
     an AGREEMENT, not a purity: if both definitions admit the same background the
     overlap looks pure and is not. Absolute efficiency and purity come from the MC
-    benchmark (scripts/diagnostics/benchmark_selection_2x2.py, deck 1 B7/B8) and are quoted there.
+    benchmark (src/ambe/diagnostics/benchmark_selection_2x2.py, deck 1 B7/B8) and are quoted there.
     """
     print("\n[residuals] loading both selections")
     sb, sm = _res_summary("box"), _res_summary("mva")
@@ -1237,7 +1237,7 @@ def do_residuals():
     # Per position, never pooled: the pooled 28-run fit already fails chi2/ndof 8-12
     # because 26 positions with genuinely different light collection do not share one
     # thermalisation+exponential, so a pooled residual would be a fit artefact.
-    from ambe.stats.capture_time import fit as ct_fit
+    from ambe.plots.basic import fit as ct_fit
     tb_, tm_, keep = [], [], []
     for p in order:
         rb = ct_fit(cb.loc[cb.poslab == p, "clusterTime"].values, float_B=False,
@@ -1315,7 +1315,7 @@ CAPHEAT_BACKEND = "lmfit"
 # apart from one produced under the old recipe. Built from the module that owns the
 # constants rather than written out, so it cannot drift from the fit.
 def _fit_window():
-    from ambe.stats.capture_time import FIT_MIN, FIT_MAX
+    from ambe.plots.basic import FIT_MIN, FIT_MAX
     return f"{FIT_MIN:.0f}\u2013{FIT_MAX:.0f} \u00b5s, B fixed at 0"
 
 
@@ -1329,7 +1329,7 @@ def _fit_positions(cands, backend):
     10-67 us fit window, B held at zero. Returns one row per position carrying BOTH
     time constants, because the same fit measures both and only tau was ever kept.
     """
-    from ambe.stats.capture_time import fit as ct_fit, is_good
+    from ambe.plots.basic import fit as ct_fit, is_good
 
     recs = []
     for pos, g in cands.groupby("pos"):

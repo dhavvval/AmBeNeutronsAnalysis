@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Write new products in this checkout; archived inputs remain configurable.
+AMBE_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export AMBE_OUT="${AMBE_OUT:-$AMBE_REPO/ambe_output}"
 # run_ambe_steven_mva.sh
 # ─────────────────────────────────────────────────────────────────────────────
 # Apply the steven-multiport frozen OPTICS MVA to all AmBe data runs.
@@ -27,11 +30,10 @@
 set -euo pipefail
 
 # ── Paths ────────────────────────────────────────────────────────────────────
-REPO="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis"
+REPO="${AMBE_REPO}"
 VENV="/exp/annie/app/users/dajana/myboy/bin/activate"
-OUT="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data"
-CC_DIR="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/cc_neutrino/parquet"
-
+OUT="${AMBE_REPO}/ambe_output/ambe_data"
+CC_DIR="${AMBE_REPO}/ambe_output/cc_neutrino/parquet"
 # Frozen OPTICS model (steven multiport)
 MODEL_DIR="${REPO}/mc_steven"           # frozen .pkl + .keras files live here
 MODEL="${MODEL_DIR}/mc_steven_multiport_optics_frozen.pkl"
@@ -119,7 +121,7 @@ echo
 echo "[3] multiplicity + score PDF (Stage A → B) ..."
 STATS_ARG=""
 [[ -f "${STATS_CSV}" ]] && STATS_ARG="--stats-csv ${STATS_CSV}"
-python -m scripts.diagnostics.plot_ambe_neutron_multiplicity \
+python -m ambe.diagnostics.plot_ambe_neutron_multiplicity \
     --scored      "${SCORED}" \
     ${STATS_ARG} \
     --mc-features "${MC_FEATS}" \
@@ -135,7 +137,7 @@ CAPTURE_DIR="${OUT}/capture_stageAB_steven"
 mkdir -p "${CAPTURE_DIR}"
 # Threshold derived from steven MC test-set: rf_score @ 80% signal efficiency = 0.8423.
 # (The old 0.643 was from the cc_neutrino model — do not use it here.)
-python -m scripts.diagnostics.capture_time_stageAB_from_parquet \
+python -m ambe.diagnostics.capture_time_stageAB_from_parquet \
     --scored    "${SCORED}" \
     --score-col rf_score \
     --score-cut 0.8423 \
@@ -149,7 +151,7 @@ echo "[5] data vs MC feature comparison ..."
 COMPARE_DIR="${OUT}/compare_selections_steven"
 mkdir -p "${COMPARE_DIR}"
 
-python -m scripts.diagnostics.analyze_data_mc_comparison \
+python -m ambe.diagnostics.analyze_data_mc_comparison \
     --data-dir   "${REPO}/EventAmBeNeutronCandidatesData" \
     --mc-parquet "${MC_STEVEN_DIR}" \
     --run-name   mc_steven_multiport \

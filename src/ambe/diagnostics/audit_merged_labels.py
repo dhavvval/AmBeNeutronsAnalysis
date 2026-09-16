@@ -1,13 +1,14 @@
 #!/usr/bin/env python
 """Audit signal/background labels and composite keys in merged training samples.
 
-Run from the repository root: python -m scripts.diagnostics.audit_merged_labels
+Run from the repository root: python -m ambe.diagnostics.audit_merged_labels
 """
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
+from ambe.paths import output_root
 
 import numpy as np
 import pandas as pd
@@ -18,7 +19,7 @@ NEUTRON_CLASSES = [1, 2, 3, 4]
 
 def load(config: str, merge_runs: list[str]) -> pd.DataFrame:
     cfg = yaml.safe_load(open(config))
-    root = Path(cfg["output_root"])
+    root = output_root(cfg.get("output_root"))
     frames = []
     for run in [cfg["run_name"], *merge_runs]:
         p = root / run / "parquet" / f"{run}__cluster_features.parquet"

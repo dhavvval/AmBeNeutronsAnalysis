@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
+from ambe.paths import DEFAULT_OUTPUT
 
 import numpy as np
 import pandas as pd
@@ -55,7 +56,7 @@ HIST_SIG = dict(color=BLUE, alpha=0.85)
 LINE_COLORS = [BLUE, ORANGE, GREEN, PURPLE]
 
 HERE = Path(__file__).resolve().parents[2]
-BASE = Path("/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output")
+BASE = DEFAULT_OUTPUT
 OUTD = HERE / "slide_plots_ccinc_v3_merged"
 PREFIX = "V3MERGED__"
 
@@ -258,7 +259,7 @@ def world_outoftank_origin(stream="truthtag") -> pd.DataFrame:
     per-hit table and cached.
 
     Non-neutron background hit == truth_class == -5, exactly as
-    scripts/diagnostics/report_background_composition.py defines it.  No cc_pass gating: the
+    src/ambe/diagnostics/report_background_composition.py defines it.  No cc_pass gating: the
     out-of-tank harvest is unconditional by design (report §0).
     """
     cache = OUTD / f"cache_world_outoftank_origin_{stream}.csv"
@@ -316,7 +317,7 @@ def overlap() -> dict:
 def merged_frame(stream: str, method: str) -> pd.DataFrame:
     """
     Rebuild the merged training frame with the documented labelling rule
-    (REPORT_ccinc_v3_world_merged.md §0).  Totals are printed so they can be
+    (docs/reports/REPORT_ccinc_v3_world_merged.md §0).  Totals are printed so they can be
     checked against logs_merged_tankworld.log.
     """
     keep = (["method", "cc_pass", "dominant_class", "eventID", "is_prompt_cluster",

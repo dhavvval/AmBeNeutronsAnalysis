@@ -3,7 +3,7 @@
 
 Uses a brightest-cluster muon tag, PE >= 500, and delayed candidates with
 200 <= dt <= 70000 ns, PE < 650, hits >= 5 and 0 < CB < 0.2. This sample differs
-from tag_michel_background.py; see michel/README.md.
+from tag_michel_background.py; see docs/MICHEL.md.
 --exact-cuts is a historical partial cutflow diagnostic, not a full event selection.
 """
 from __future__ import annotations

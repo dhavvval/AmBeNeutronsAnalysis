@@ -1,6 +1,6 @@
-from cmath import tau
-from itertools import chain
-import os          
+import os
+from pathlib import Path
+from ..paths import REPOSITORY_ROOT
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -10,15 +10,18 @@ import re
 from scipy.optimize import curve_fit
 from matplotlib.backends.backend_pdf import PdfPages
 from scipy.stats import chi2
-import ast
 import lmfit
 from lmfit.models import ExponentialGaussianModel, ConstantModel
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 import matplotlib.colors as mcolors
-from scipy.special import erfc
-from scipy.optimize import minimize
-from mpl_toolkits.mplot3d import Axes3D
 
+
+
+BACKENDS = ("scipy", "lmfit")
+FIT_MIN, FIT_MAX = 2.0, 67.0
+EXPFLAT_MIN = 10.0
+USECOLS = ["eventID", "clusterTime", "sourceX", "sourceY", "sourceZ"]
+CAND_DIR = str(REPOSITORY_ROOT / "EventAmBeNeutronCandidatesData")
 
 
 class AmBeNeutronAnalyzer:
@@ -26,8 +29,8 @@ class AmBeNeutronAnalyzer:
     Modular analyzer for AmBe neutron data with separate functions for different analysis tasks.
     """
     
-    def __init__(self, data_directory: str = './EventAmBeNeutronCandidatesData/',
-                 output_pdf: str = 'AmBevtestv4ch10.pdf',
+    def __init__(self, data_directory: str = str(REPOSITORY_ROOT / 'EventAmBeNeutronCandidatesData'),
+                 output_pdf: str = str(REPOSITORY_ROOT / 'ambe_output' / 'capture_time.pdf'),
                  campaign_label: str = 'AmBe 2.0v4',
                  min_cluster_hits: int = 10,
                  selection_label: str = '',
@@ -40,11 +43,6 @@ class AmBeNeutronAnalyzer:
         # Plot-only hits cut applied in prepare_data. See the note there: it is not
         # part of any published selection, so it has to be stated, not assumed.
         self.min_cluster_hits = min_cluster_hits
-        # How this book's clusters were selected, printed on every page. Empty
-        # falls back to the box wording. Several titles used to hardcode both the
-        # campaign ('AmBe 2.0v1' on one page, 'AmBe 2.0v4' on the next, for the same
-        # run) and '(PE < 100 & CCB < 0.45)' -- which is simply false for the MVA
-        # book, whose selection has no PE or charge-balance cut at all.
         self.selection_label = selection_label or (
             'box cuts PE ≤ 100, CB < 0.45, t ≥ 2 µs, hits ≥ 5')
         self.campaign_label = campaign_label
@@ -53,21 +51,14 @@ class AmBeNeutronAnalyzer:
         self.time_fit_values = []
         self.pyMC_summary = []
         self.lmfit_summary = []
+        self.capture_fit_rows = []
         
-        # ===== FITTING CONFIGURATION - SINGLE SOURCE OF TRUTH =====
-        # Change parameters here and all fitting methods will use them automatically
+        # Model bounds and histogram settings shared by fits and plot adapters.
         self.fitting_config = {
             'time_bins': 70,
             'time_range': (0, 70),
-            # WAS 10.0. The fit window is now 2-67 us campaign-wide -- see the note
-            # on FIT_MIN in src/ambe/stats/capture_time.py, which this must stay
-            # equal to. 2 us is where the data starts (the box cut is t >= 2 us and
-            # the cosmic veto removes anything earlier), so fitting from 10 discarded
-            # the whole thermalisation rise. Every published capture time moves
-            # because of this; the tau = 30.53 +- 0.26 us anchor was a 10-67 number
-            # and is superseded.
-            'fit_min_time': 2.0,
-            'fit_max_time': 67.0,
+            'fit_min_time': FIT_MIN,
+            'fit_max_time': FIT_MAX,
             # Where the fitted curve is DRAWN from. Now equal to fit_min_time, so the
             # drawn curve and the fitted range coincide and there is no extrapolated
             # segment to distinguish. Kept as its own key so the two can be separated
@@ -145,11 +136,7 @@ class AmBeNeutronAnalyzer:
                 print(f"No data in file: {filename}")
                 continue
 
-            ###### Correct hitID swap as per johannes' suggestion ########
-            # DATA-SPECIFIC PMT correction, and a blunt one: the test below matches any
-            # hitID string merely CONTAINING "453" or "455", so 1453 and 4553 trip it
-            # too. MC detector IDs would be silently relabelled by it, so the MC configs
-            # set cuts.apply_hitid_swap: false. Default stays True for every data caller.
+            # Legacy data PMT correction; MC callers disable it with apply_hitid_swap.
             id1, id2 = 453, 455
             if self.apply_hitid_swap and \
                     df['hitID'].astype(str).str.contains(f'{id1}|{id2}').any():
@@ -162,12 +149,6 @@ class AmBeNeutronAnalyzer:
                 if (df['hitID'] != original_hitids).any():
                     print(f"Swapped hitID {id1} and {id2} in file: {filename}")
 
-            # The run number is parsed above and was then thrown away. Keep it: pooled
-            # per-position frames span many runs, and the event key must be
-            # (run, eventTankTime). In MC eventTankTime is eventNumber (0-999), so
-            # without this every one of the 50 files at a position would contribute an
-            # event to the same group -- drop_duplicates below would keep 1,000 of
-            # 50,000 events and the multiplicity would read ~50 for every event.
             if 'run' not in df.columns:
                 df['run'] = run_number
 
@@ -184,31 +165,14 @@ class AmBeNeutronAnalyzer:
         # Convert cluster time to microseconds
         combined_df['clusterTime'] = combined_df['clusterTime'] / 1000
 
-        # PLOT-ONLY CUT, now explicit. This used to be a hardcoded
-        # `clusterHits >= 10`, applied on top of whatever selection produced the
-        # candidate CSVs. Two reasons it had to become a parameter:
-        #   * It is NOT part of the published box (which requires hits >= 5), so the
-        #     per-position pages did not show the selection they were labelled with.
-        #   * Under the MVA neutron definition there is no hits requirement at all,
-        #     so leaving it hardcoded would silently reimpose one and make the
-        #     "no box" deck a hits-cut deck.
-        # Default stays 10 so existing callers reproduce their old pages; the deck
-        # configs set it explicitly, and identically, so the two decks stay
-        # comparable. None / 0 disables it.
+        # Optional plotting cut, applied after the configured candidate selection.
         if self.min_cluster_hits:
             n_before = len(combined_df)
             combined_df = combined_df[combined_df['clusterHits'] >= self.min_cluster_hits]
             print(f"  plot cut clusterHits >= {self.min_cluster_hits}: "
                   f"{n_before:,} -> {len(combined_df):,} clusters")
 
-        # THE EVENT KEY IS (run, eventTankTime), NEVER eventTankTime ALONE.
-        # These per-position frames pool every run at that position. In data
-        # eventTankTime is a globally unique ns timestamp and adding run changes
-        # nothing; in MC it is eventNumber (0-999), so eventTankTime alone would merge
-        # one event from each of the 50 files at this position into a single group --
-        # drop_duplicates would keep 1,000 of 50,000 events and every multiplicity would
-        # read ~50. A single string key is used so groupby / unique / isin /
-        # drop_duplicates all work unchanged below.
+        # Runs reuse event numbers in MC, so pooled event keys must include the run.
         if 'run' in combined_df.columns:
             combined_df = combined_df.copy()
             combined_df['_evkey'] = (combined_df['run'].astype(str) + ':'
@@ -715,29 +679,15 @@ class AmBeNeutronAnalyzer:
         # Use centralized data preparation - guarantees consistency
         xdata, ydata, ydata_errors, counts, bin_centers = self._prepare_fitting_data(CT)
 
-        # Use configuration parameters instead of hardcoded values
-        init = [self.fitting_config['initial_amplitude'], 
-                self.fitting_config['initial_thermal_time'], 
-                self.fitting_config['initial_capture_time'], 
-                self.fitting_config['initial_background']]
-
-        # Perform fit using configuration bounds
         try:
-            bounds = ([self.fitting_config['amplitude_bounds'][0], 
-                      self.fitting_config['thermal_bounds'][0],
-                      self.fitting_config['capture_bounds'][0], 
-                      self.fitting_config['background_bounds'][0]],
-                     [self.fitting_config['amplitude_bounds'][1], 
-                      self.fitting_config['thermal_bounds'][1],
-                      self.fitting_config['capture_bounds'][1], 
-                      self.fitting_config['background_bounds'][1]])
-            
-            popt, pcov = curve_fit(self.NeutCapture, xdata, ydata, p0=init, 
-                                 sigma=ydata_errors, absolute_sigma=True,
-                                 bounds=bounds)
-            perr = np.sqrt(np.diag(pcov))
+            fitted = fit(CT, float_B=True, backend="scipy", analyzer=self,
+                         min_counts=0, initial_background=self.fitting_config['initial_background'])
+            if fitted is None:
+                raise ValueError("capture-time fit failed")
+            popt = np.array([fitted[k] for k in ("A", "therm", "tau", "B")])
+            perr = np.array([fitted[k + "_err"] for k in ("A", "therm", "tau", "B")])
             ydata_expected = self.NeutCapture(xdata, *popt)
-            
+
             # Calculate chi-square statistics
             chi2_value = np.sum(((ydata - ydata_expected) ** 2) / (ydata_errors ** 2))
             ndof = len(ydata) - len(popt)
@@ -800,51 +750,14 @@ class AmBeNeutronAnalyzer:
         xdata, ydata, ydata_errors, counts, bin_centers = self._prepare_fitting_data(CT)
 
         try:
-            model = lmfit.Model(self.NeutCapture)
-            # Use configuration parameters - same as scipy method
-            params = model.make_params(
-                A=self.fitting_config['initial_amplitude'], 
-                therm=self.fitting_config['initial_thermal_time'], 
-                tau=self.fitting_config['initial_capture_time'], 
-                B=self.fitting_config['initial_background']
-            )
-            # Apply consistent bounds
-            params['A'].min = self.fitting_config['amplitude_bounds'][0]
-            params['therm'].min = self.fitting_config['thermal_bounds'][0]
-            params['therm'].max = self.fitting_config['thermal_bounds'][1]
-            params['tau'].min = self.fitting_config['capture_bounds'][0]
-            params['tau'].max = self.fitting_config['capture_bounds'][1]
-            params['B'].vary = False
-            
-            # method="least_squares", NOT "basinhopping" and NOT lmfit's default
-            # "leastsq". Two separate reasons, both measured on this campaign:
-            #
-            #   leastsq (lmfit default) imposes min/max by transforming the
-            #   parameters internally, and on the high-statistics positions that
-            #   transform settles in a worse local minimum and reports no error bars
-            #   at all. At (0,-100,-75) it returns therm = 0.33 -- effectively pinned
-            #   at the 0.1 bound -- and tau = 33.21 with stderr None; 2 of 26
-            #   positions failed outright that way.
-            #
-            #   basinhopping is a global-minimum search wrapped around a local one.
-            #   It is far slower per position and its covariance is not on the same
-            #   footing as curve_fit's, so the per-page numbers could not be compared
-            #   with CaptureTimeFits_*.csv or with the 30.53 +- 0.26 anchor.
-            #
-            # least_squares IS scipy.optimize.least_squares -- the bounded TRF solver
-            # curve_fit uses -- so these pages reproduce the frozen fits to every
-            # digit they print. scale_covar=False keeps the stderr absolute
-            # (curve_fit's absolute_sigma=True) rather than rescaled by sqrt(redchi).
-            result = model.fit(ydata, params, t=xdata, weights=1 / ydata_errors,
-                               method="least_squares", scale_covar=False)
+            fitted = fit(CT, float_B=False, backend="lmfit", analyzer=self, min_counts=0, include_result=True)
+            if fitted is None:
+                raise ValueError("capture-time fit failed or covariance unavailable")
+            result = fitted.pop("_result")
+            self.capture_fit_rows.append({**fitted, "pos": source_key})
             print(f"LMFIT results for position {source_key}:")
             print(result.fit_report())
             
-            # Evaluate the fitted model on a dense grid over the DISPLAY range
-            # (plot_min_time -> fit_max_time), not on xdata. result.best_fit is the
-            # model at the fit points only, i.e. 10-67 us, which is why the curve
-            # used to start at 10. Same parameters either way -- this extends the
-            # drawn line across the thermalisation rise the fit already describes.
             xplot = np.linspace(self.fitting_config['plot_min_time'],
                                 self.fitting_config['fit_max_time'], 500)
             best_fit_curve = self.NeutCapture(
@@ -875,11 +788,6 @@ class AmBeNeutronAnalyzer:
                 fr"$\tau = {result.params['tau'].value:.2f} \pm {result.params['tau'].stderr:.2f}\ \mu s$" + "\n"
                 fr"$\chi^2 = {result.chisqr:.2f},\ \mathrm{{ndof}} = {result.nfree}$, " + "\n"
                 fr"$\frac{{\chi^2}}{{\mathrm{{ndof}}}} = {result.redchi:.2f}$" + "\n"
-                # The window is stated on every page. It is not decoration: these
-                # numbers are NOT comparable with anything fitted on the old 10-67
-                # window, and a page that does not say which window it used cannot be
-                # told apart from one that did. Built from the config rather than
-                # written out, so it cannot drift from the fit that produced it.
                 + (fr"fit {self.fitting_config['fit_min_time']:.0f}–"
                    fr"{self.fitting_config['fit_max_time']:.0f} $\mu s$"
                    if self.fitting_config['plot_min_time']
@@ -1050,7 +958,7 @@ class AmBeNeutronAnalyzer:
         pivot_lenEvents = pivot_lenEvents.reindex(columns=self.port_order)
 
         # Create output directory
-        os.makedirs("OutputPlots", exist_ok=True)
+        Path(self.output_pdf).parent.mkdir(parents=True, exist_ok=True)
 
         # Capture time heatmap
         plt.figure(figsize=(8, 6))
@@ -1062,7 +970,7 @@ class AmBeNeutronAnalyzer:
         plt.ylabel("Y Position")
         plt.gca().invert_yaxis()
         plt.tight_layout()
-        plt.savefig(f"OutputPlots/CaptureTime_AmBeNeutrons_{self.campaign_tag}_LMFIT.png", dpi=300, bbox_inches='tight')
+        plt.savefig(f"{Path(self.output_pdf).parent}/CaptureTime_AmBeNeutrons_{self.campaign_tag}_LMFIT.png", dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
 
@@ -1076,7 +984,7 @@ class AmBeNeutronAnalyzer:
         plt.ylabel("Y Position")
         plt.gca().invert_yaxis()
         plt.tight_layout()
-        plt.savefig(f"OutputPlots/ThermalTime_AmBeNeutrons_{self.campaign_tag}_LMFIT.png", dpi=300, bbox_inches='tight')
+        plt.savefig(f"{Path(self.output_pdf).parent}/ThermalTime_AmBeNeutrons_{self.campaign_tag}_LMFIT.png", dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
 
@@ -1090,7 +998,7 @@ class AmBeNeutronAnalyzer:
         plt.ylabel("Y Position")
         plt.gca().invert_yaxis()
         plt.tight_layout()
-        plt.savefig(f"OutputPlots/Statistics_AmBeNeutronEvents_{self.campaign_tag}.png", dpi=300, bbox_inches='tight')
+        plt.savefig(f"{Path(self.output_pdf).parent}/Statistics_AmBeNeutronEvents_{self.campaign_tag}.png", dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
 
@@ -1129,7 +1037,7 @@ class AmBeNeutronAnalyzer:
 
         return Info
 
-    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_fullwindowtest_*.csv',
+    def run_analysis(self, file_pattern,
                     tasks: List[str] = None):
         """
         Run the complete analysis with specified tasks.
@@ -1145,17 +1053,12 @@ class AmBeNeutronAnalyzer:
         if tasks is None:
             tasks = ['2d_histograms', '1d_histograms', 'lmfit_fit', 'summary']
 
-        # Load and group data. A list of patterns is accepted so a campaign split
-        # across several tags on disk can be loaded as one sample: grouping is by
-        # source position and load_and_group_data appends rather than resetting, so
-        # the tags merge per position. Only pass several patterns when they cover
-        # DISJOINT positions -- overlapping tags would double-count silently.
         for pat in ([file_pattern] if isinstance(file_pattern, str) else file_pattern):
             self.load_and_group_data(pat)
         print(f"[basic] grouped into {len(self.source_groups)} source positions")
 
         # Create output directory
-        os.makedirs("OutputPlots", exist_ok=True)
+        Path(self.output_pdf).parent.mkdir(parents=True, exist_ok=True)
 
         with PdfPages(self.output_pdf) as pdf:
             for source_key, df_list in self.source_groups.items():
@@ -1200,32 +1103,6 @@ class AmBeNeutronAnalyzer:
         return None
 
 
-def main():
-    """Example usage of the AmBeNeutronAnalyzer class."""
-    
-    # Initialize analyzer
-    analyzer = AmBeNeutronAnalyzer()
-    
-    # Example 1: Run analysis with LMFIT-based summary plots
-    print("=== Running analysis with LMFIT-based summary plots ===")
-    analyzer.run_analysis(tasks=['2d_histograms', '1d_histograms'])
-
-    # Example 2: Run full analysis with all tasks (both scipy and lmfit, summary uses lmfit)
-    # print("=== Running full analysis ===")
-    # analyzer.run_analysis(tasks=['2d_histograms', '1d_histograms', 'scipy_fit', 'lmfit_fit', 'pymc_fit', 'summary'])
-    
-    # Example 3: Run only lmfit fitting and summary
-    # print("=== Running only LMFIT fitting and summary ===")
-    # analyzer.run_analysis(tasks=['lmfit_fit', 'summary'])
-
-
-if __name__ == "__main__":
-    main()
-
-
-# ---------------------------------------------------------------------------
-# ambe CLI integration
-# ---------------------------------------------------------------------------
 def run(ctx, argv=None):
     """Run basic plots using paths and cuts from RunContext.
 
@@ -1234,7 +1111,6 @@ def run(ctx, argv=None):
     the per-port-position view for whichever selection the config names.
     """
     from ..io import inputs_from_ctx
-    from pathlib import Path
     import glob as _glob
     csv_paths = inputs_from_ctx(ctx, "candidate_csvs")
     data_dir = str(ctx.run_dir / "candidate_csvs") if not csv_paths else str(csv_paths[0].parent)
@@ -1244,10 +1120,7 @@ def run(ctx, argv=None):
     # PDF, which no downstream stage could find.
     out_pdf = str(ctx.plot_path("basic_plots", "pdf"))
 
-    # Derive the glob from the config instead of letting run_analysis fall back to
-    # its default 'EventAmBeNeutronCandidates_fullwindowtest_*.csv'. That default
-    # matches nothing for any current campaign, so this entry point used to produce
-    # an empty book in silence -- load_and_group_data simply found no files.
+    # Use only candidate patterns named by this config.
     patterns = sorted({Path(str(p)).name for p in ctx.inputs.get("candidate_csvs", [])})
     if not patterns:
         raise SystemExit("config declares no inputs.candidate_csvs")
@@ -1279,27 +1152,176 @@ def run(ctx, argv=None):
     if fc:
         analyzer.update_fitting_config(**{k: v for k, v in fc.items()
                                           if k in analyzer.fitting_config})
-    # 'lmfit_fit' was NOT in this list, which is why the per-position capture-time
-    # fits did not exist anywhere in the decks: lmfit_analysis() emits one fitted page
-    # per source position carrying BOTH time constants -- therm and tau with their
-    # errors, chi2 and chi2/ndof -- and it was unreachable from this entry point, so
-    # the per-position book stopped at the raw histograms. Adding it here puts the
-    # fits in the book for WHICHEVER selection the config names, which is what makes
-    # the box and MVA appendices twins.
-    #
-    # 'summary' is deliberately NOT added. It runs generate_summary_plots(), whose
-    # capture/thermal port x y heatmaps are now produced as deck figures by
-    # scripts/presentation/boxcut_v4_campaign.py --do captureheat (J9/J10, K9/K10) with a convergence gate,
-    # masked cells and the weighted mean in the title. Worse, it writes to
-    # OutputPlots/{Capture,Thermal}Time_AmBeNeutrons_<campaign_tag>_LMFIT.png, and
-    # campaign_tag is 'AmBe2.0v4' for BOTH selections -- so running the box book and
-    # then the MVA book would silently overwrite one with the other under a filename
-    # that names neither. Two differently-computed versions of the same map is the
-    # trap; the deck figures are the ones to quote.
     analyzer.run_analysis(file_pattern=patterns,
                           tasks=["2d_histograms", "1d_histograms", "lmfit_fit"])
+    if analyzer.capture_fit_rows:
+        pd.DataFrame(analyzer.capture_fit_rows).to_csv(ctx.csv_path("capture_time_fits"), index=False)
     print(f"[plots.basic] wrote {out_pdf}")
 
 
 def cli(ctx, argv=None):
     run(ctx, argv)
+
+# Presentation adapters use the same model and histogram preparation as this analyzer.
+NeutCapture = AmBeNeutronAnalyzer.NeutCapture
+
+
+def prepare(ct_us, fit_min=None):
+    analyzer = AmBeNeutronAnalyzer()
+    if fit_min is not None:
+        analyzer.update_fitting_config(fit_min_time=fit_min)
+    return analyzer._prepare_fitting_data(ct_us)[:3]
+
+
+def fit(ct_us, float_B, backend, *, analyzer=None, min_counts=50,
+        initial_background=1.0, include_result=False):
+    """Fit capture times with the basic analyzer model and configuration."""
+    analyzer = analyzer or AmBeNeutronAnalyzer()
+    cfg = analyzer.fitting_config
+    names = ("A", "therm", "tau", "B")
+    init = dict(zip(names, [cfg[k] for k in ("initial_amplitude", "initial_thermal_time", "initial_capture_time", "initial_background")]))
+    bounds = dict(zip(names, [cfg[k] for k in ("amplitude_bounds", "thermal_bounds", "capture_bounds", "background_bounds")]))
+    if backend not in BACKENDS:
+        raise ValueError(f"backend must be one of {BACKENDS}, got {backend!r}")
+    if backend == "lmfit":
+        result = _fit_lmfit(ct_us, float_B, analyzer, min_counts, initial_background)
+        if result is not None and not include_result:
+            result.pop("_result", None)
+        return result
+    x, y, err, _, _ = analyzer._prepare_fitting_data(ct_us)
+    if y.sum() < min_counts:
+        return None
+    if float_B:
+        p0 = [init["A"], init["therm"], init["tau"], initial_background]
+        lo = [bounds[k][0] for k in ("A", "therm", "tau", "B")]
+        hi = [bounds[k][1] for k in ("A", "therm", "tau", "B")]
+        f = NeutCapture
+    else:
+        p0 = [init["A"], init["therm"], init["tau"]]
+        lo = [bounds[k][0] for k in ("A", "therm", "tau")]
+        hi = [bounds[k][1] for k in ("A", "therm", "tau")]
+        def f(t, A, therm, tau):
+            return NeutCapture(t, A, therm, tau, init["B"])
+    try:
+        popt, pcov = curve_fit(f, x, y, p0=p0, sigma=err,
+                               absolute_sigma=True, bounds=(lo, hi),
+                               maxfev=200000)
+    except Exception as exc:                                # noqa: BLE001
+        print(f"    fit failed: {exc}")
+        return None
+    perr = np.sqrt(np.diag(pcov))
+    resid = (y - f(x, *popt)) / err
+    ndof = len(x) - len(popt)
+    out = dict(A=popt[0], A_err=perr[0], therm=popt[1], therm_err=perr[1],
+               tau=popt[2], tau_err=perr[2],
+               chi2=float((resid ** 2).sum()), ndof=ndof,
+               redchi=float((resid ** 2).sum() / ndof), N=int(y.sum()))
+    out["B"], out["B_err"] = (popt[3], perr[3]) if float_B else (init["B"], 0.0)
+    return out
+
+
+def _fit_lmfit(ct_us, float_B, analyzer, min_counts, initial_background):
+    """Bounded lmfit fit with absolute covariance scaling."""
+    x, y, err, _, _ = analyzer._prepare_fitting_data(ct_us)
+    if y.sum() < min_counts:
+        return None
+    cfg = analyzer.fitting_config
+    names = ("A", "therm", "tau", "B")
+    init = dict(zip(names, [cfg[k] for k in ("initial_amplitude", "initial_thermal_time", "initial_capture_time", "initial_background")]))
+    bounds = dict(zip(names, [cfg[k] for k in ("amplitude_bounds", "thermal_bounds", "capture_bounds", "background_bounds")]))
+    model = lmfit.Model(NeutCapture)
+    params = model.make_params(A=init["A"], therm=init["therm"], tau=init["tau"],
+                               B=initial_background if float_B else init["B"])
+    for k in ("A", "therm", "tau", "B"):
+        params[k].min = bounds[k][0]
+        params[k].max = bounds[k][1]
+    if not float_B:
+        params["B"].value = init["B"]
+        params["B"].vary = False
+    try:
+        res = model.fit(y.astype(float), params, t=x, weights=1.0 / err,
+                        scale_covar=False, nan_policy="omit",
+                        method="least_squares")
+    except Exception as exc:                                # noqa: BLE001
+        print(f"    lmfit fit failed: {exc}")
+        return None
+    if not res.success or res.covar is None:
+        print("    lmfit fit did not converge / no covariance")
+        return None
+
+    def val(name):
+        p = res.params[name]
+        return float(p.value), float(p.stderr) if p.stderr is not None else 0.0
+
+    A, A_err = val("A")
+    therm, therm_err = val("therm")
+    tau, tau_err = val("tau")
+    B, B_err = val("B")
+    ndof = len(x) - int(res.nvarys)
+    chi2 = float(res.chisqr)
+    return dict(A=A, A_err=A_err, therm=therm, therm_err=therm_err,
+                tau=tau, tau_err=tau_err, chi2=chi2, ndof=ndof,
+                redchi=chi2 / ndof, N=int(y.sum()), B=B, B_err=B_err, _result=res)
+
+
+def fit_expflat(ct_us):
+    """Tail-only exponential plus constant fit on 10–67 us for closure diagnostics."""
+    x, y, err = prepare(ct_us, fit_min=EXPFLAT_MIN)
+    if y.sum() < 50:
+        return None
+    f = lambda t, A, tau, B: A * np.exp(-t / tau) + B      # noqa: E731
+    try:
+        popt, pcov = curve_fit(f, x, y, p0=[y[0] * 1.5, 30.0, y[-1] * 0.5],
+                               sigma=err, absolute_sigma=True,
+                               bounds=([0, 5.0, 0], [np.inf, 200.0, np.inf]),
+                               maxfev=200000)
+    except Exception as exc:                                # noqa: BLE001
+        print(f"    expflat fit failed: {exc}")
+        return None
+    perr = np.sqrt(np.diag(pcov))
+    resid = (y - f(x, *popt)) / err
+    ndof = len(x) - 3
+    # pedestal fraction: flat counts / total counts inside the fit window
+    flat_frac = popt[2] * len(x) / max(y.sum(), 1)
+    return dict(A=popt[0], A_err=perr[0], tau=popt[1], tau_err=perr[1],
+                B=popt[2], B_err=perr[2], flat_frac=flat_frac,
+                chi2=float((resid ** 2).sum()), ndof=ndof,
+                redchi=float((resid ** 2).sum() / ndof), N=int(y.sum()))
+
+
+def is_good(t):
+    """Quality mask for weighted means of capture-time fits."""
+    return ((t.tau_err > 0) & (t.therm_err > 0)
+            & (t.tau > 10.0 + 1e-6) & (t.tau < 70.0 - 1e-6)
+            & (t.therm > 0.1 + 1e-6)
+            & (t.redchi < 3.0))
+
+
+def load(tag, run):
+    p = os.path.join(CAND_DIR, f"EventAmBeNeutronCandidates_{tag}_{run}.csv")
+    if not os.path.exists(p):
+        return None
+    d = pd.read_csv(p, usecols=USECOLS)
+    d["clusterTime"] = d["clusterTime"] / 1000.0        # ns -> us, as basic.py:143
+    d["run"] = run
+    return d
+
+
+def load_tag(tag):
+    """Read all candidate CSVs with the given tag; cluster times are returned in us."""
+    pat = os.path.join(CAND_DIR, f"EventAmBeNeutronCandidates_{tag}_*.csv")
+    frames = []
+    for p in sorted(glob.glob(pat)):
+        m = re.search(rf"EventAmBeNeutronCandidates_{re.escape(tag)}_(\d+)\.csv$", p)
+        if not m:
+            continue
+        d = load(tag, int(m.group(1)))
+        if d is not None and len(d):
+            frames.append(d)
+    if not frames:
+        raise SystemExit(f"[tagset] no candidate CSVs matched {pat} — refusing to "
+                         f"fit an empty sample")
+    out = pd.concat(frames, ignore_index=True)
+    print(f"  tag {tag:24s}: {out.run.nunique():3d} runs, {len(out):8,d} clusters, "
+          f"{out.groupby(['sourceX','sourceY','sourceZ']).ngroups:3d} positions")
+    return out

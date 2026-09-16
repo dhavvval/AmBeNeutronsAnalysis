@@ -2,7 +2,7 @@ run_name: mc_steven_port5_z100
 campaign: "MC AmBe Steven multiport — port5 z100"
 description: "Pure neutron signal, ~50k events, port5 z100 position"
 
-output_root: /Users/dajana/Documents/AmBe/AmBeNeutronsAnalysis/ambe_output
+output_root: ambe_output
 
 inputs:
   root_files:

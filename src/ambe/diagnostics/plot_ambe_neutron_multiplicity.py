@@ -1,6 +1,6 @@
 """Plot accepted cluster multiplicity with scored-data comparisons.
 
-Run from the repository root: python -m scripts.diagnostics.plot_ambe_neutron_multiplicity
+Run from the repository root: python -m ambe.diagnostics.plot_ambe_neutron_multiplicity
 """
 
 from __future__ import annotations

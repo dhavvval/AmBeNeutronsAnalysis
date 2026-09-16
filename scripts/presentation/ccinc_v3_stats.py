@@ -32,7 +32,7 @@ SCORE_COLS = {"rf_score": "Random Forest", "gbt_score": "GBT",
 SHORT = {"Random Forest": "RF", "GBT": "GBT", "XGBoost": "XGB",
          "Neural Network": "NN"}
 
-# Published merged test AUCs — REPORT_ccinc_v3_world_merged.md §5. These are the
+# Published merged test AUCs — docs/reports/REPORT_ccinc_v3_world_merged.md §5. These are the
 # guard's reference values, not an input to any calculation.
 REPORTED_AUC = {
     ("truthtag", "optics"):        {"Random Forest": 0.656, "GBT": 0.661,
@@ -75,7 +75,7 @@ def load_scores(stream: str, method: str, verbose: bool = True) -> pd.DataFrame:
     The merged score table with a trustworthy label in column `y`.
 
     `mva_label` when the training wrote it; otherwise the documented vertex rule
-    (REPORT_ccinc_v3_world_merged.md §0): out-of-tank interaction -> background
+    (docs/reports/REPORT_ccinc_v3_world_merged.md §0): out-of-tank interaction -> background
     regardless of composition, in-tank -> neutron-dominated. The table is already
     the training frame, so the in-tank/outside-FV rows were dropped upstream and
     the FV term of the rule has nothing left to do here.
@@ -103,7 +103,7 @@ def load_scores(stream: str, method: str, verbose: bool = True) -> pd.DataFrame:
 def guard(verbose: bool = True) -> dict:
     """
     Recompute all 16 merged test AUCs from the stored scores and assert they
-    reproduce REPORT_ccinc_v3_world_merged.md §5. Exits non-zero on any mismatch.
+    reproduce docs/reports/REPORT_ccinc_v3_world_merged.md §5. Exits non-zero on any mismatch.
 
     This is the primary test of the whole analysis: it is what proves the
     re-derived truth-tag/OPTICS label is the same label the model was trained on.
@@ -350,7 +350,7 @@ def crosscheck_effpurity(cmp: pd.DataFrame) -> None:
 # ════════════════════════════════════════════════════════════════════════════
 def event_overlap_check() -> dict:
     """
-    Re-confirm the event-level overlap from REPORT_ccinc_v3_streamlines.md §1.1
+    Re-confirm the event-level overlap from docs/reports/REPORT_ccinc_v3_streamlines.md §1.1
     (truthtag 81,790 / recotag 41,418 / both 40,442). Cached by the plots module.
     Guards against the cluster-level join below changing the population silently.
     """
@@ -815,7 +815,7 @@ SPUR_PRETTY = {"muminus": r"$\mu^-$", "muplus": r"$\mu^+$",
                "pizero": r"$\pi^0$", "proton": "p", "neutron": "n",
                "kplus": r"$K^+$", "kminus": r"$K^-$", "other": "other",
                NO_ORIGIN_LABEL: "no non-EM origin"}
-# The integrated shares this section must reproduce — REPORT_ccinc_v3_world_merged.md
+# The integrated shares this section must reproduce — docs/reports/REPORT_ccinc_v3_world_merged.md
 # §4.2, as percentages of the traced non-neutron background light. Same role as
 # REPORTED_AUC: a reference to check against, never an input.
 REPORTED_SPECIES_PCT = {"muminus": 53.3, "piplus": 25.5, "pizero": 7.2,
@@ -1110,7 +1110,7 @@ def spurious_species_shares(d: pd.DataFrame, stream: str,
             for x in bad:
                 print("   ", x)
             sys.exit("[spurious] the origin-species axis no longer matches "
-                     "REPORT_ccinc_v3_world_merged.md §4.2 — refusing to continue")
+                     "docs/reports/REPORT_ccinc_v3_world_merged.md §4.2 — refusing to continue")
         print("[spurious] species closure PASS — truth-tag/OPTICS reproduces "
               "world report §4.2")
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare saved multiplicity distributions across selections.
 
-Run from the repository root: python -m scripts.diagnostics.plot_multiplicity_compare
+Run from the repository root: python -m ambe.diagnostics.plot_multiplicity_compare
 """
 import sys
 import argparse

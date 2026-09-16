@@ -1,6 +1,6 @@
 """Inspect debug ROOT branches and truth/cluster associations.
 
-Run from the repository root: python -m scripts.diagnostics.analyze_debug_files
+Run from the repository root: python -m ambe.diagnostics.analyze_debug_files
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import awkward as ak
 ROOT_FILE_1 = "/Users/dajana/Documents/ANNIEEvent_MC_AmBe_wcsim_oneneutron.root"
 ROOT_FILE_2 = "/Users/dajana/Documents/ANNIEEvent_MC_AmBe_wcsim_oneneutrononepion.root"
 
-OUT_DIR   = Path(__file__).resolve().parents[2]
+OUT_DIR   = Path(__file__).resolve().parents[3]
 PDF_OUT   = OUT_DIR / "debug_files_analysis.pdf"
 TXT_OUT   = OUT_DIR / "debug_files_summary.txt"
 MAX_EVENTS = None   # set e.g. 200 for a quick test; None = all

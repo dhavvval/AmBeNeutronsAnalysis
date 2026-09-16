@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Write new products in this checkout; archived inputs remain configurable.
+AMBE_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export AMBE_OUT="${AMBE_OUT:-$AMBE_REPO/ambe_output}"
 # run_ambe_lucho_mva.sh
 # ─────────────────────────────────────────────────────────────────────────────
 # Apply the lucho100k frozen OPTICS+CF MVA models to ALL AmBe data runs, end to
@@ -25,9 +28,9 @@ JOBS="${JOBS:-2}"                       # parallel files for CF extraction (core
 SIG_EFF="${SIG_EFF:-0.80}"              # MC signal-efficiency working point for the cut
 
 # ── Paths ────────────────────────────────────────────────────────────────────
-REPO="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis"
+REPO="${AMBE_REPO}"
 VENV="/exp/annie/app/users/dajana/myboy/bin/activate"
-OUT="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/ambe_data"
+OUT="${AMBE_REPO}/ambe_output/ambe_data"
 DATA_DIR="/pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v1"
 GATE_DIR="${REPO}/EventAmBeNeutronCandidatesData"
 GEOM="/exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv"
@@ -180,7 +183,7 @@ PYEOF
   local STATS_ARG=""
   [[ -f "${STATS_CSV}" ]] && STATS_ARG="--stats-csv ${STATS_CSV}"
   echo "  [${METHOD}] multiplicity + score PDF ..."
-  python -m scripts.diagnostics.plot_ambe_neutron_multiplicity \
+  python -m ambe.diagnostics.plot_ambe_neutron_multiplicity \
       --scored "${CANON}" ${STATS_ARG} \
       --mc-features "${MC_FEATS}" \
       --score-col gbt_score --score-cut 0.5 \
@@ -192,7 +195,7 @@ PYEOF
   mkdir -p "${CAPDIR}"
   if [[ "${RF_THR}" != "nan" && -n "${RF_THR}" ]]; then
     echo "  [${METHOD}] capture-time fit (lmfit, rf>${RF_THR}) ..."
-    python -m scripts.diagnostics.capture_time_stageAB_from_parquet \
+    python -m ambe.diagnostics.capture_time_stageAB_from_parquet \
         --scored "${CANON}" --score-col rf_score --score-cut "${RF_THR}" \
         --out-dir "${CAPDIR}" --methods lmfit \
         || echo "  WARN: capture-time fit ${METHOD} failed (continuing)"
@@ -204,7 +207,7 @@ PYEOF
   local CMPDIR="${OUT}/compare_selections_lucho_${METHOD}"
   mkdir -p "${CMPDIR}"
   echo "  [${METHOD}] data/MC comparison ..."
-  python -m scripts.diagnostics.analyze_data_mc_comparison \
+  python -m ambe.diagnostics.analyze_data_mc_comparison \
       --data-dir "${GATE_DIR}" \
       --mc-parquet "${LUCHO_DIR}" \
       --run-name mc_lucho_100k \

@@ -1,6 +1,6 @@
 """Fit scored OPTICS cluster times with the shared basic plotting analyzer.
 
-Run from the repository root: python -m scripts.diagnostics.capture_time_stageAB_from_parquet
+Run from the repository root: python -m ambe.diagnostics.capture_time_stageAB_from_parquet
 """
 import argparse
 from pathlib import Path
@@ -10,15 +10,6 @@ matplotlib.use("Agg")
 import numpy as np
 import pandas as pd
 from matplotlib.backends.backend_pdf import PdfPages
-
-import sys
-# scipy>=1.13 removed scipy.signal.gaussian (moved to scipy.signal.windows). arviz
-# (pulled in by `import pymc` at the top of ambe.plots.basic) still imports the old
-# name, which otherwise breaks the whole basic.py import. Re-expose it before that.
-import scipy.signal
-import scipy.signal.windows as _scipy_windows
-if not hasattr(scipy.signal, "gaussian"):
-    scipy.signal.gaussian = _scipy_windows.gaussian
 
 from ambe.plots.basic import AmBeNeutronAnalyzer
 from ambe.data.processor import AmBeNeutronProcessing
@@ -55,20 +46,7 @@ def main():
     analyzer = AmBeNeutronAnalyzer(
         data_directory="./EventAmBeNeutronCandidatesData/",
         output_pdf=str(out / "stageAB_capture.pdf"))
-    # capture_bounds uses class default (10.0, 70.0) — fit starts at 10 µs,
-    # thermalization region excluded.
-
-    # lmfit_analysis hardcodes method="basinhopping", which does NOT populate
-    # parameter stderr -> Tau_err/Thermal_err come back None. Force leastsq (via a
-    # lmfit.Model.fit shim) so we get covariance-based per-position uncertainties.
-    # Does not touch basic.py; only overrides the optimizer for the .fit() call.
-    if "lmfit" in args.methods:
-        import lmfit
-        _orig_fit = lmfit.Model.fit
-        def _fit_leastsq(self, *a, **kw):
-            kw["method"] = "leastsq"
-            return _orig_fit(self, *a, **kw)
-        lmfit.Model.fit = _fit_leastsq
+    # Use the shared fit window, optimizer and covariance convention.
 
     method_pdf = {m: PdfPages(out / f"stageAB_capture_{m}.pdf") for m in args.methods}
 

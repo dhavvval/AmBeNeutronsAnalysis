@@ -9,7 +9,7 @@ _truth_label_cluster`).  Nothing in that rule looks at *when* the hits arrived. 
 module asks whether the time structure of the hits, measured against a physics t0,
 separates neutron-capture light from background light better than composition does --
 and, if so, where the boundary actually sits.  The ~50 ns figure that motivated the
-study is a hypothesis inherited from `scripts/diagnostics/analyze_truth_timing.py` (AmBe MC), not a result.
+study is a hypothesis inherited from `src/ambe/diagnostics/analyze_truth_timing.py` (AmBe MC), not a result.
 
 Two scales, measured separately
 -------------------------------
@@ -35,7 +35,7 @@ be accepted or fixed in the clusterer.
 
 t0 choice
 ---------
-Both the median and the first-hit t0 are computed and reported.  `scripts/diagnostics/analyze_truth_timing.py`
+Both the median and the first-hit t0 are computed and reported.  `src/ambe/diagnostics/analyze_truth_timing.py`
 uses the median, which is robust but is itself pulled by a second neutron's light --
 exactly the effect under study -- so the first-hit reference is carried alongside it
 rather than being chosen on faith.

@@ -19,14 +19,14 @@ from scripts.presentation.make_plots_ccinc_v3_merged import (
     BASE, MSFX, CONFIGS, CFG_LBL, OUTD, BLUE, GREY, ORANGE, GREEN,
     LINE_COLORS, bare, table_axes)
 import scripts.presentation.ccinc_v3_stats as S
-from ambe.stats.capture_time import (fit as fit_neutcapture, fit_expflat,
-                                              BOUNDS_LO, BOUNDS_HI)
+from ambe.plots.basic import (fit as fit_neutcapture, fit_expflat,
+                              AmBeNeutronAnalyzer)
 
 HERE = Path(__file__).resolve().parents[2]
 STAGE = BASE / "ccinc_v3_ambe_stage3"
 
 # RE-DERIVED on the 2-67 us window (was 30.53 +- 0.26 on 10-67), 20 runs / 19
-# positions. See the FIT_MIN note in src/ambe/stats/capture_time.py.
+# positions. See FIT_MIN in src/ambe/plots/basic.py.
 TAU_ANCHOR, TAU_ANCHOR_ERR = 29.417, 0.221
 
 SCORE_COLS = S.SCORE_COLS
@@ -190,7 +190,7 @@ def agreement(mc: pd.DataFrame, data: pd.DataFrame, cfg) -> pd.DataFrame:
 # ════════════════════════════════════════════════════════════════════════════
 # physics closure
 # ════════════════════════════════════════════════════════════════════════════
-TAU_LO, TAU_HI = BOUNDS_LO["tau"], BOUNDS_HI["tau"]      # 10 and 70 us
+TAU_LO, TAU_HI = AmBeNeutronAnalyzer().fitting_config["capture_bounds"]
 MAX_REDCHI = 5.0
 MAX_TAU_ERR = 10.0
 
@@ -486,7 +486,7 @@ def classify_by_position(d: pd.DataFrame, cfg, wp: pd.DataFrame,
     """
     The same split, per source position.
 
-    This is the measurement §6.4 of ANALYSIS_ccinc_v3_FULL.md could only infer from
+    This is the measurement §6.4 of docs/reports/ANALYSIS_ccinc_v3_FULL.md could only infer from
     one run: the score scale moves with where the source sits, because the leading
     features are light-yield features and the yield depends on the distance to the
     PMTs. 19 positions is the first sample that can actually measure it.

@@ -4,6 +4,7 @@ Run from the repository root: python -m scripts.presentation.make_collab_slides_
 """
 from __future__ import annotations
 from pathlib import Path
+from ambe.paths import DEFAULT_OUTPUT
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -24,7 +25,7 @@ GOLD   = "#CEB888"   # FSU gold
 NAVY   = "#1f4e79"
 ORANGE = "#d35400"
 
-BASE = Path("/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output")
+BASE = DEFAULT_OUTPUT
 RUN  = "cc_neutrino_xi02_compcut"
 NEUT = [1, 2, 3, 4]
 EVENT_KEYS = ["run", "event_tank_time"]

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Write new products in this checkout; archived inputs remain configurable.
+AMBE_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export AMBE_OUT="${AMBE_OUT:-$AMBE_REPO/ambe_output}"
 # Stage 1 + Stage 2 for BOTH neutron definitions, campaign and special runs.
 #
 # Four tags, none of them protected, so nothing that backs a published number is at
@@ -19,7 +22,7 @@
 # Optional: WAIT_PID=<pid> to start only after an already-running job finishes.
 set -uo pipefail
 
-cd /exp/annie/app/users/dajana/AmBeNeutronsAnalysis
+cd "$AMBE_REPO" || exit 1
 source /exp/annie/app/users/dajana/myboy/bin/activate
 export MPLBACKEND=Agg PYTHONPATH=src
 

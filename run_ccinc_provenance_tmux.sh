@@ -1,4 +1,7 @@
 #!/bin/bash
+# Write new products in this checkout; archived inputs remain configurable.
+AMBE_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export AMBE_OUT="${AMBE_OUT:-$AMBE_REPO/ambe_output}"
 # Remaining CCinc v3 cluster-provenance / hit-time-window runs, queued for tmux.
 #
 # Run under tmux so the work survives losing the terminal:
@@ -10,7 +13,7 @@
 # per-stage timings unreadable.
 set -u   # NOT -e: one failing stage must not silently cancel the ones after it
 
-cd /exp/annie/app/users/dajana/AmBeNeutronsAnalysis
+cd "$AMBE_REPO" || exit 1
 PY=/exp/annie/app/users/dajana/myboy/bin/python
 
 run () {            # run <logfile> <args...>

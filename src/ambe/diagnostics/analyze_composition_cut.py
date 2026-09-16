@@ -1,10 +1,11 @@
 """Inspect truth composition and proposed MC composition cuts.
 
-Run from the repository root: python -m scripts.diagnostics.analyze_composition_cut
+Run from the repository root: python -m ambe.diagnostics.analyze_composition_cut
 """
 
 import sys
 from pathlib import Path
+from ambe.paths import DEFAULT_OUTPUT
 from itertools import product
 
 import numpy as np
@@ -17,9 +18,9 @@ from matplotlib.colors import LogNorm
 # ---------------------------------------------------------------------------
 # CONFIGURE
 # ---------------------------------------------------------------------------
-OUTPUT_ROOT = Path("/Users/dajana/Documents/ambe_output")
+OUTPUT_ROOT = DEFAULT_OUTPUT
 RUN_NAME    = "mc_twoneutron"
-OUT_DIR     = Path(__file__).resolve().parents[2]
+OUT_DIR     = Path(__file__).resolve().parents[3]
 
 # Threshold grids to sweep
 N_NEUTRON_THRESHOLDS  = [1, 2, 3, 4, 5]        # reject if n_neutron <= this

@@ -3,7 +3,7 @@ Stage-1 waveform selection figures: source vs no-source comparison.
 
 Reads TriggerSummary/WaveformFeatures_<tag>_<run>.parquet (written by
 data/processor.py) and the event index. Rationale and results:
-EFFICIENCY_EXTRACT/WAVEFORM_STUDY.md.
+docs/efficiency/WAVEFORM_STUDY.md.
 
 Usage:  ambe plots waveformcuts --config configs/data_ambe2v4_effpair_box.yaml
 """
@@ -16,6 +16,8 @@ from pathlib import Path
 import numpy as np
 
 from ..plotting import save_plot, set_style
+from ..paths import REPOSITORY_ROOT
+from ..data.processor import AmBeNeutronProcessing, WaveformConfig
 
 
 ROLE_COLOUR = {"source": "C0", "no-source": "C3", "cross-check": "C2"}
@@ -36,22 +38,39 @@ def _features_path(ctx, run: int) -> Path:
     if not tag:
         raise SystemExit("[plots.waveformcuts] config has no stage1.tag and no "
                          "inputs.waveform_features")
-    cand = Path("TriggerSummary") / f"WaveformFeatures_{tag}_{run}.parquet"
+    cand = REPOSITORY_ROOT / "TriggerSummary" / f"WaveformFeatures_{tag}_{run}.parquet"
+    if not cand.exists() and cand.with_suffix(".csv").exists():
+        cand = cand.with_suffix(".csv")
     if not cand.exists():
         raise SystemExit(f"[plots.waveformcuts] missing {cand}. Run "
-                         f"`ambe data process --config <this config>` first.")
+                         f"`ambe data process --config <this config> --selection box` first.")
     return cand
 
 
 def load_features(ctx, run: int):
     """One row per recorded waveform, minus the timestamp=0 placeholder row."""
     import pandas as pd
-    df = pd.read_parquet(_features_path(ctx, run))
+    path = _features_path(ctx, run)
+    df = pd.read_csv(path) if path.suffix == ".csv" else pd.read_parquet(path)
+    required = {"timestamp", "IC_adjusted", "second_pulse", "accepted"}
+    if required - set(df):
+        raise ValueError(f"{path}: missing waveform feature columns {sorted(required - set(df))}")
     n_raw = len(df)
     df = df[df["timestamp"] > 0].copy()
     if n_raw != len(df):
         print(f"[plots.waveformcuts] run {run}: dropped {n_raw - len(df)} "
               f"placeholder row(s) with timestamp = 0")
+    if df.empty:
+        raise ValueError(f"{path}: no recorded waveforms after removing placeholders")
+    lo, hi = _ic_window(ctx)
+    processor = AmBeNeutronProcessing(WaveformConfig(pulse_gamma=lo, pulse_max=hi))
+    for column in ("second_pulse", "accepted"):
+        if not df[column].isin([True, False, 0, 1]).all():
+            raise ValueError(f"{path}: {column} must contain booleans")
+        df[column] = df[column].astype(bool)
+    expected = df.apply(processor.passes_selection, axis=1).astype(bool)
+    if not df["accepted"].equals(expected):
+        raise ValueError(f"{path}: saved gate differs from stage1 IC bounds/veto; regenerate with the matching processor config")
     return df
 
 
@@ -225,7 +244,7 @@ def run(ctx, argv=None):
 
     ambe_trig = {}
     try:
-        from ..stats.efficiency_fit import _resolve_event_index
+        from ..efficiency_extraction.efficiency_fit import _resolve_event_index
         ei = _resolve_event_index(ctx)
         for run_, _, _ in runs:
             g = ei[ei["run"] == run_]

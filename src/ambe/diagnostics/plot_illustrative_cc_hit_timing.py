@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Draw illustrative CC-inclusive hit timing distributions.
 
-Run from the repository root: python -m scripts.diagnostics.plot_illustrative_cc_hit_timing
+Run from the repository root: python -m ambe.diagnostics.plot_illustrative_cc_hit_timing
 """
 import argparse
 import sys
 from pathlib import Path
+from ambe.paths import DEFAULT_OUTPUT
 
 import numpy as np
 import matplotlib
@@ -156,7 +157,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument(
         "--out-dir",
-        default="/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/cc_neutrino_xi02_compcut/plots",
+        default=str(DEFAULT_OUTPUT / "cc_neutrino_xi02_compcut" / "plots"),
     )
     args = p.parse_args()
     make_plot(Path(args.out_dir))

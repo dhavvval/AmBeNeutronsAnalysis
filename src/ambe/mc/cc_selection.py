@@ -845,7 +845,7 @@ def _persist_cc_tables(ctx: RunContext, table: pd.DataFrame, stream: str,
           value, any cut combination, any other stream, and any N-1 study can be
           recomputed from this file in seconds. This is the no-information-loss
           guarantee — keep it even if the parquet of hits is deleted.
-      csv/<run>__cc_<stream>_cutflow.csv / .md
+      csv/<run>__cc_<stream>_cutflow.csv (Markdown in docs/generated/<run>/)
           The sequential cut-flow table, ready to paste into a note or slide.
       csv/<run>__cc_<stream>_omitted.csv
           Only if a cut was skipped for a missing branch — so a silently shorter
@@ -882,7 +882,7 @@ def _persist_cc_tables(ctx: RunContext, table: pd.DataFrame, stream: str,
          for name, before, after in cut_log])
     cf_out = ctx.csv_path(f"{ctx.run_name}__cc_{stream}_cutflow")
     cf.to_csv(cf_out, index=False)
-    md_out = ctx.csv_dir / f"{ctx.run_name}__cc_{stream}_cutflow.md"
+    md_out = ctx.markdown_path(f"{ctx.run_name}__cc_{stream}_cutflow")
     md_out.write_text(cutflow_markdown(cut_log, n, stream, omitted))
 
     if omitted:
@@ -1085,7 +1085,7 @@ def run_streams(ctx: RunContext, stream_names: Sequence[str],
 
         # Markdown cut-flow table (Selection cut | Events | % total | % prev).
         md = cutflow_markdown(cut_log, n, stream, omitted)
-        md_out = ctx.csv_dir / f"{ctx.run_name}__cc_{stream}_cutflow.md"
+        md_out = ctx.markdown_path(f"{ctx.run_name}__cc_{stream}_cutflow")
         md_out.write_text(md); written.append(md_out)
 
         if omitted:

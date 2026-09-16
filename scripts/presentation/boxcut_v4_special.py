@@ -54,7 +54,7 @@ SPECIAL_NOTE = {
     6266: "behaves source-in (diagnostics tau 36.4 us)",
     6270: "behaves source-in; BeamCluster is the CORRUPTED merge (FIX_6270.md)",
 }
-# Independently established in ANALYSIS_ccinc_v3_FULL.md §6.7 via the MVA path.
+# Independently established in docs/reports/ANALYSIS_ccinc_v3_FULL.md §6.7 via the MVA path.
 # Asserted here so the two routes cannot silently disagree.
 EXPECT_GATED = {6264: 149, 6265: 2150, 6266: 2171, 6270: 2312}
 
@@ -291,7 +291,7 @@ def fig_shapes(cands, summ):
 DIAG_PREFIX = "V4SPECDIAG__"
 
 # The Stage-1 IC waveform gate, stated once and reused in every title. Same numbers
-# as ambe.stats.waveform applies; named here so a deck-5 slide can be read alone.
+# as ambe.data.processor applies; named here so a deck-5 slide can be read alone.
 IC_LO, IC_HI = WAVEFORM_CONFIG.pulse_gamma, WAVEFORM_CONFIG.pulse_max
 IC_GATE = f"IC gate {IC_LO:.0f} < IC_adjusted < {IC_HI:.0f} + second-pulse veto"
 
@@ -750,7 +750,7 @@ def attach_gate(cl, tr, wf):
     of magnitude.
 
     `accepted` in the pipeline parquet is exactly (in_window & ~second_pulse) -- the
-    IC gate as ambe.stats.waveform applies it -- checked for all five runs. It is NOT
+    IC gate as ambe.data.processor applies it -- checked for all five runs. It is NOT
     the diagnostics' step4_joined `passes_ic`: that file covers a tenth of the part
     range (4,124 of 41,249 waveforms for 6265), so its absolute counts are smaller
     while its ACCEPTANCE FRACTION agrees to a percent (52.1% vs 50.8%). Deck 5 uses

@@ -3,7 +3,7 @@ display_label: "Simulated AmBe Spectrum"
 campaign: "MC AmBe Local"
 description: "OPTICS training on local ANNIETree_MC.root file."
 
-output_root: /Users/dajana/Documents/ambe_output
+output_root: ambe_output
 
 inputs:
   root_files:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare box and frozen MVA selection on matched MC/data samples.
 
-Run from the repository root: python -m scripts.diagnostics.benchmark_selection_2x2
+Run from the repository root: python -m ambe.diagnostics.benchmark_selection_2x2
 """
 import sys
 import argparse

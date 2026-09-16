@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from ambe.paths import DEFAULT_OUTPUT
 
 import pandas as pd
 
@@ -20,7 +21,7 @@ PORT_Z_COMBOS = [
     for zlabel in ["z0", "z50", "z100", "zminus50", "zminus100"]
 ]
 
-BASE_OUTPUT_ROOT = Path("/Users/dajana/Documents/AmBe/AmBeNeutronsAnalysis/ambe_output")
+BASE_OUTPUT_ROOT = DEFAULT_OUTPUT
 COMBINED_RUN_NAME = "mc_steven_multiport"
 
 

@@ -19,7 +19,7 @@ import scipy.signal
 import scipy.signal.windows as _w
 if not hasattr(scipy.signal, "gaussian"):
     scipy.signal.gaussian = _w.gaussian
-from ambe.plots.basic import AmBeNeutronAnalyzer            # noqa: E402
+from ambe.plots.basic import AmBeNeutronAnalyzer, fit as fit_capture            # noqa: E402
 from ambe.data.processor import AmBeNeutronProcessing       # noqa: E402
 
 SOURCE_POSITIONS = AmBeNeutronProcessing().source_positions  # run -> (x,y,z) cm
@@ -225,7 +225,7 @@ def signal_mask(d):
 
     On a MERGED tank+world frame dominant_class ALONE IS WRONG — an out-of-tank
     capture is neutron-dominated and is still background, because no in-tank
-    neutrino made it (see REPORT_ccinc_v3_world_merged.md §0). src/ambe/mc/mva_analysis.py
+    neutrino made it (see docs/reports/REPORT_ccinc_v3_world_merged.md §0). src/ambe/mc/mva_analysis.py
     persists the training target as `mva_label`; use it when present, else rebuild
     it from origin_in_tank the same way the training did.
     """
@@ -675,31 +675,20 @@ def _fit_and_plot_capture(pdf, analyzer, CT_us, title):
     """Fit one CT array with the analyzer's NeutCapture model and draw a styled page.
 
     Reuses analyzer._prepare_fitting_data + analyzer.NeutCapture + fitting_config so
-    the binning/window/bounds are identical to scripts/diagnostics/capture_time_stageAB_from_parquet.py.
+    the binning/window/bounds are identical to src/ambe/diagnostics/capture_time_stageAB_from_parquet.py.
     Returns (tau, tau_err) or (nan, nan) on failure.
     """
-    import lmfit
     cfg = analyzer.fitting_config
     xdata, ydata, yerr, counts, bin_centers = analyzer._prepare_fitting_data(CT_us)
     try:
-        model = lmfit.Model(analyzer.NeutCapture)
-        params = model.make_params(A=cfg["initial_amplitude"],
-                                   therm=cfg["initial_thermal_time"],
-                                   tau=cfg["initial_capture_time"],
-                                   B=cfg["initial_background"])
-        params["A"].min = cfg["amplitude_bounds"][0]
-        params["therm"].min, params["therm"].max = cfg["thermal_bounds"]
-        params["tau"].min, params["tau"].max = cfg["capture_bounds"]
-        params["B"].vary = False
-        # leastsq (not basinhopping) -> covariance-based stderr, same as the
-        # pipeline's shim in scripts/diagnostics/capture_time_stageAB_from_parquet.py
-        result = model.fit(ydata, params, t=xdata, weights=1 / yerr, method="leastsq")
-        tau = result.params["tau"].value
-        tau_err = result.params["tau"].stderr or float("nan")
-        therm = result.params["therm"].value
-        therm_err = result.params["therm"].stderr or float("nan")
-        best = result.best_fit
-        redchi = result.redchi
+        fitted = fit_capture(CT_us, False, "lmfit", analyzer=analyzer,
+                             min_counts=0, include_result=True)
+        if fitted is None:
+            raise ValueError("capture fit failed or covariance unavailable")
+        result = fitted["_result"]
+        tau, tau_err = fitted["tau"], fitted["tau_err"]
+        therm, therm_err = fitted["therm"], fitted["therm_err"]
+        best, redchi = result.best_fit, fitted["redchi"]
     except Exception as e:                       # pragma: no cover
         print(f"  fit failed for {title}: {e}")
         tau = tau_err = therm = therm_err = redchi = float("nan")
@@ -734,7 +723,6 @@ def capture_pages(pdf, scored, score_cut):
     analyzer = AmBeNeutronAnalyzer(
         data_directory="./EventAmBeNeutronCandidatesData/",
         output_pdf="/tmp/_unused_presentable.pdf")
-    analyzer.update_fitting_config(capture_bounds=(2.0, 70.0))   # same as pipeline
 
     sel = scored[scored[ "rf_score"] >= score_cut].copy()
     pos = sel["run"].map(lambda r: SOURCE_POSITIONS.get(int(r)))
@@ -785,17 +773,13 @@ def _combined_pooled_page(pdf, analyzer, CT_us, tau_w, tau_w_err,
     """Pooled-histogram combined page; legend tau = inverse-variance weighted mean
     of the 21 per-position fits (NOT the pooled-fit tau). The green curve is still
     the pooled-shape fit, drawn as a visual guide."""
-    import lmfit
     cfg = analyzer.fitting_config
     xdata, ydata, yerr, counts, bc = analyzer._prepare_fitting_data(CT_us)
-    model = lmfit.Model(analyzer.NeutCapture)
-    params = model.make_params(A=cfg["initial_amplitude"], therm=cfg["initial_thermal_time"],
-                               tau=cfg["initial_capture_time"], B=cfg["initial_background"])
-    params["A"].min = cfg["amplitude_bounds"][0]
-    params["therm"].min, params["therm"].max = cfg["thermal_bounds"]
-    params["tau"].min, params["tau"].max = cfg["capture_bounds"]
-    params["B"].vary = False
-    result = model.fit(ydata, params, t=xdata, weights=1 / yerr, method="leastsq")
+    fitted = fit_capture(CT_us, False, "lmfit", analyzer=analyzer,
+                         min_counts=0, include_result=True)
+    if fitted is None:
+        raise ValueError("pooled capture fit failed or covariance unavailable")
+    result = fitted["_result"]
 
     fig, ax = plt.subplots(figsize=(9.5, 6.0))
     ax.hist(CT_us, bins=cfg["time_bins"], range=cfg["time_range"],
