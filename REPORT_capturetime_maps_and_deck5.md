@@ -27,7 +27,7 @@ discarded output. The fit is
 τ gives therm**, and `therm` / `therm_err` have been sitting in
 `TriggerSummary/CaptureTimeFits_v4_all28.csv` and in
 `boxcut_v4_capturetime_by_position.csv` since the campaign was fitted. `do_capture()` in
-`boxcut_v4_campaign.py` reads that CSV and consumes the `tau` columns only. Nothing else
+`scripts/presentation/boxcut_v4_campaign.py` reads that CSV and consumes the `tau` columns only. Nothing else
 read the `therm` columns. That is now J10 / K10.
 
 **(c) The code to draw exactly these two maps already existed and was unreachable.**
@@ -43,7 +43,7 @@ analyzer.run_analysis(file_pattern=patterns,
 
 — no `lmfit_fit`, no `summary`. So neither `lmfit_analysis()` (the per-position fit
 pages) nor `generate_summary_plots()` (the two maps) was reachable from `ambe plots
-basic`, and the deck build goes through `boxcut_v4_campaign.py` and `ambe plots heatmap`,
+basic`, and the deck build goes through `scripts/presentation/boxcut_v4_campaign.py` and `ambe plots heatmap`,
 neither of which touches them. The capability was written, then stranded behind a task
 list that does not include it.
 
@@ -64,8 +64,8 @@ overwrite one map with the other under a filename naming neither.
 `fit_capture_time_fprompt_compare.fit()` now takes a **required** `backend` argument,
 `"scipy"` or `"lmfit"`, and the CLI takes a **required** `--fit-backend`. No default on
 either: a silent default would let one recipe's number be attributed to the other. All
-existing call sites (`boxcut_v4_campaign.py` ×5, `boxcut_v4_appendix.py`,
-`ccinc_v3_ambe_closure.py`) are pinned to `"scipy"`, so the backend change on its own
+existing call sites (`scripts/presentation/boxcut_v4_campaign.py` ×5, `scripts/presentation/boxcut_v4_appendix.py`,
+`scripts/presentation/ccinc_v3_ambe_closure.py`) are pinned to `"scipy"`, so the backend change on its own
 moved nothing. (The *window* change of §7 did move everything, separately and
 deliberately.)
 
@@ -88,7 +88,7 @@ choice.
 
 ## 3. The two new maps
 
-`python -u boxcut_v4_campaign.py --do captureheat` → four figures + one CSV.
+`python -u -m scripts.presentation.boxcut_v4_campaign --do captureheat` → four figures + one CSV.
 
 | | box cuts | MVA neutron |
 |---|---:|---:|
@@ -139,7 +139,7 @@ Fixed rather than only documented: the absolute reference is now printed into th
 ## 5. Deck 5 — the special runs as their own analysis
 
 `PRESENTATION_PLOTS/deck5_special_runs/`, 20 figures in the running order plus 6 in
-backup and 2 appendix books, built by `python -u boxcut_v4_special.py --do diag` then
+backup and 2 appendix books, built by `python -u -m scripts.presentation.boxcut_v4_special --do diag` then
 `--do all`.
 
 **Legends name what a curve IS, not its run number** — "dummy trigger (LAPPD on)", "dummy
@@ -361,14 +361,14 @@ wildly different composition and gets the same answer every time.
 
 | file | change |
 |---|---|
-| `fit_capture_time_fprompt_compare.py` | `fit(..., backend)` required; `_fit_lmfit()` added; `--fit-backend` required |
-| `boxcut_v4_campaign.py` | `--do captureheat`; `_fit_positions()`, `_heat()`, `do_captureheat()`; existing call sites pinned to `"scipy"` |
-| `boxcut_v4_special.py` | deck-5 section: `--do diag` + 11 per-product choices, `load_wf()`, `load_clusters_ungated()`, descriptive run labels, normalised+counts twins, re-ranged after-cut panels, per-run IC pages, per-run appendix book — 20 figures, 2 books, 2 CSVs |
-| `boxcut_v4_appendix.py`, `ccinc_v3_ambe_closure.py` | call sites pinned to `"scipy"` |
+| `src/ambe/stats/capture_time.py` | `fit(..., backend)` required; `_fit_lmfit()` added; `--fit-backend` required |
+| `scripts/presentation/boxcut_v4_campaign.py` | `--do captureheat`; `_fit_positions()`, `_heat()`, `do_captureheat()`; existing call sites pinned to `"scipy"` |
+| `scripts/presentation/boxcut_v4_special.py` | deck-5 section: `--do diag` + 11 per-product choices, `load_wf()`, `load_clusters_ungated()`, descriptive run labels, normalised+counts twins, re-ranged after-cut panels, per-run IC pages, per-run appendix book — 20 figures, 2 books, 2 CSVs |
+| `scripts/presentation/boxcut_v4_appendix.py`, `scripts/presentation/ccinc_v3_ambe_closure.py` | call sites pinned to `"scipy"` |
 | `src/ambe/plots/heatmap.py` | statistics heatmap now names its own 100 % reference |
 | `src/ambe/plots/basic.py` | `lmfit_fit` added to the CLI task list, so the per-position lmfit fits (therm AND tau) land in `APPENDIX_perposition_{boxcuts,mvaneutron}.pdf`; minimiser `basinhopping` → `least_squares` |
 | `FIGURES.md` | J9/J10, K9/K10, new group **M** (M1–M12) |
-| `collect_presentation_plots.py` | group regexes widened to `[A-HJ-NZ]`; deck5 added; H1–H4 and F4/F5 reassigned |
+| `scripts/presentation/collect_presentation_plots.py` | group regexes widened to `[A-HJ-NZ]`; deck5 added; H1–H4 and F4/F5 reassigned |
 
 New CSVs: `boxcut_v4_captureheat_by_position.csv`,
 `boxcut_v4_specialdiag_cutflow.csv`, `boxcut_v4_specialdiag_summary.csv`.
@@ -378,8 +378,8 @@ New CSVs: `boxcut_v4_captureheat_by_position.csv`,
 ```bash
 source /exp/annie/app/users/dajana/myboy/bin/activate
 cd /exp/annie/app/users/dajana/AmBeNeutronsAnalysis
-MPLBACKEND=Agg python -u boxcut_v4_campaign.py --do captureheat     # J9/J10, K9/K10
-MPLBACKEND=Agg python -u boxcut_v4_special.py  --do diag            # M1-M19 + both books
+MPLBACKEND=Agg python -u -m scripts.presentation.boxcut_v4_campaign --do captureheat     # J9/J10, K9/K10
+MPLBACKEND=Agg python -u -m scripts.presentation.boxcut_v4_special  --do diag            # M1-M19 + both books
 MPLBACKEND=Agg PYTHONPATH=src python -u -m ambe.cli plots heatmap \
     --config configs/data_ambe2v4_all28_box.yaml                    # J2 with its 100 % named
 MPLBACKEND=Agg PYTHONPATH=src python -u -m ambe.cli plots heatmap \
@@ -388,7 +388,7 @@ MPLBACKEND=Agg PYTHONPATH=src python -u -m ambe.cli plots basic \
     --config configs/data_ambe2v4_all28_box.yaml                    # per-position lmfit book
 MPLBACKEND=Agg PYTHONPATH=src python -u -m ambe.cli plots basic \
     --config configs/data_ambe2v4_all28_mva.yaml                    # its MVA twin
-python -u collect_presentation_plots.py --do build                  # all five decks
+python -u -m scripts.presentation.collect_presentation_plots --do build                  # all five decks
 ```
 
 ---
@@ -469,19 +469,19 @@ cannot drift silently:
 ### Reproduce
 
 ```bash
-python -u fit_capture_time_fprompt_compare.py --mode tagset \
+python -u -m ambe.stats.capture_time --mode tagset \
     --tags AmBe2.0v4_gated,AmBe2.0v4_ext --out-label v4_all28 --fit-backend scipy
-python -u fit_capture_time_fprompt_compare.py --mode fpcompare --fit-backend scipy
-python -u boxcut_v4_campaign.py --do capture       # G4/G5
-python -u boxcut_v4_campaign.py --do captureheat   # J9/J10/K9/K10
-python -u ccinc_v3_ambe_closure.py --do classify --dataset ambepipe_v4neutron
-python -u ccinc_v3_ambe_closure.py --do closure  --dataset ambe6266
-python -u boxcut_v4_campaign.py --do validation    # G8/G9
-python -u boxcut_v4_campaign.py --do matched       # G13
-python -u boxcut_v4_campaign.py --do agreement     # G14/G15/G16
-python -u boxcut_v4_campaign.py --do residuals     # L1-L6
-python -u boxcut_v4_appendix.py  --do byposition
+python -u -m ambe.stats.capture_time --mode fpcompare --fit-backend scipy
+python -u -m scripts.presentation.boxcut_v4_campaign --do capture       # G4/G5
+python -u -m scripts.presentation.boxcut_v4_campaign --do captureheat   # J9/J10/K9/K10
+python -u -m scripts.presentation.ccinc_v3_ambe_closure --do classify --dataset ambepipe_v4neutron
+python -u -m scripts.presentation.ccinc_v3_ambe_closure --do closure  --dataset ambe6266
+python -u -m scripts.presentation.boxcut_v4_campaign --do validation    # G8/G9
+python -u -m scripts.presentation.boxcut_v4_campaign --do matched       # G13
+python -u -m scripts.presentation.boxcut_v4_campaign --do agreement     # G14/G15/G16
+python -u -m scripts.presentation.boxcut_v4_campaign --do residuals     # L1-L6
+python -u -m scripts.presentation.boxcut_v4_appendix  --do byposition
 PYTHONPATH=src python -u -m ambe.cli plots basic --config configs/data_ambe2v4_all28_box.yaml
 PYTHONPATH=src python -u -m ambe.cli plots basic --config configs/data_ambe2v4_all28_mva.yaml
-python -u collect_presentation_plots.py --do build
+python -u -m scripts.presentation.collect_presentation_plots --do build
 ```

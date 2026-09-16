@@ -16,10 +16,10 @@
 |---|---|---|---|
 | 0 | `ambe mc process` | 376 ROOT files | per-hit `__pulses.parquet` + `__clusterfinder.parquet` |
 | 1 | `ambe mc features` | pulses parquet | per-cluster `__cluster_features.parquet` (OPTICS + CF) |
-| 2 | `mva_analysis.py --keep-prompt-bkg --save-model` | features parquet | frozen model `.pkl` + scores + summary + ROC pdf |
-| pick | `pick_best_model_cut.py` | scores parquet | best model + 80%-eff cut (→ rf, 0.52) |
+| 2 | `src/ambe/mc/mva_analysis.py --keep-prompt-bkg --save-model` | features parquet | frozen model `.pkl` + scores + summary + ROC pdf |
+| pick | `scripts/workflows/pick_best_model_cut.py` | scores parquet | best model + 80%-eff cut (→ rf, 0.52) |
 | 3 | score data + rate + multiplicity + capture-time | data feature parquets | per-streamline scored parquet, rate CSV, capture CSV, multiplicity pdf |
-| 4 | `benchmark_selection_2x2.py` | features + frozen model | box-cut vs MVA eff/purity CSV+pdf |
+| 4 | `scripts/diagnostics/benchmark_selection_2x2.py` | features + frozen model | box-cut vs MVA eff/purity CSV+pdf |
 
 ---
 
@@ -91,7 +91,7 @@ vs OLD starved model (prompt-excluded, 1,773/side): RF AUC 0.587. **The prompt-i
 
 **Top features (RF importance):** pe_total (0.124), n_hits (0.067), beta1 (0.061), spatial_rms (0.054), n_hits_early (0.050), charge_bal_legacy (0.043). `pe_total` dominates (GBT importance 0.45).
 
-**Operating point (adaptive, via `pick_best_model_cut.py`):** BEST_SCORE_COL = **rf_score**, BEST_SCORE_CUT = **0.52** (80% MC signal efficiency). Replaces the stale hardcoded 0.643 (which gave only 35% eff on this model).
+**Operating point (adaptive, via `scripts/workflows/pick_best_model_cut.py`):** BEST_SCORE_COL = **rf_score**, BEST_SCORE_CUT = **0.52** (80% MC signal efficiency). Replaces the stale hardcoded 0.643 (which gave only 35% eff on this model).
 
 ---
 

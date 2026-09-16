@@ -170,7 +170,7 @@ Merging the world sample multiplied the background from 8,392 to 36,008 clusters
 class (4.3×; 9.6× for reco-tag, whose tank-only background was only 3,178).
 
 **All 16 merged test AUCs** (world report §5), reproduced from the stored score tables
-before anything downstream runs — `python ccinc_v3_stats.py --do guard` asserts them to
+before anything downstream runs — `python -m scripts.presentation.ccinc_v3_stats --do guard` asserts them to
 1e-3 and exits non-zero otherwise:
 
 | configuration | RF | GBT | XGB | NN | gain vs tank-only |
@@ -247,7 +247,7 @@ Figures: `V3MERGED__bkg_composition_tank_vs_world`, `V3MERGED__bkg_composition_s
 
 ## 5. Background anatomy — one particle, or several? *(new)*
 
-`python ccinc_v3_stats.py --do spurious`. Read-only over the four merged score tables,
+`python -m scripts.presentation.ccinc_v3_stats --do spurious`. Read-only over the four merged score tables,
 behind the 16-AUC guard, and it asserts the integrated species shares still reproduce
 world report §4.2 before computing anything.
 
@@ -296,7 +296,7 @@ Figures: `V3SPUR__purity`, `V3SPUR__n_species`, `V3SPUR__cooccurrence`,
 
 ### 5.3 Per-particle feature plots and per-particle discrimination
 
-`make_presentable_optics_rf_plots.py --bkg-split origin` replaces the single grey
+`scripts/presentation/make_presentable_optics_rf_plots.py --bkg-split origin` replaces the single grey
 "Background" histogram with one curve per dominant background particle, on the same
 ranked features, for all four configurations. `--bkg-split none` reproduces the
 established pages byte-for-byte (verified).
@@ -337,7 +337,7 @@ Figures (per configuration prefix `TT_CF_GBT__`, `TT_OPTICS_XGB__`, `RT_OPTICS_G
 CSV: `ccinc_v3_species_separation.csv` (per config × particle × feature: importance,
 medians, σ separation, and the four one-vs-signal AUCs).
 
-**How this differs from `V3BG__*`.** `ccinc_v3_bg_differential.py` shows the
+**How this differs from `V3BG__*`.** `scripts/presentation/ccinc_v3_bg_differential.py` shows the
 **composition of a bin** along a feature axis (hit-weighted, deciles): "what is this bin
 made of". §5.3 shows the **distribution of each particle** overlaid on the signal: "where
 does this particle live". Both are kept; they answer different questions and should not
@@ -348,7 +348,7 @@ be presented as alternatives.
 ## 6. AmBe validation — run 6266 (AmBe2.0v4) *(new)*
 
 `bash run_ccinc_v3_ambe6266.sh all` then
-`python ccinc_v3_ambe_closure.py --do all --dataset ambe6266`.
+`python -m scripts.presentation.ccinc_v3_ambe_closure --do all --dataset ambe6266`.
 
 ### 6.1 What this can and cannot test
 
@@ -356,7 +356,7 @@ AmBe data has no truth labels: there is no efficiency and no purity here. Two th
 measurable — **data/MC score agreement** and **capture-time closure** against the
 τ = **30.53 ± 0.26 µs** anchor (`REPORT_fprompt_waveform_cut.md` §7; the older 29.16
 anchor is dead, the CSVs it was fitted on no longer exist). The fitter is **imported**
-from `fit_capture_time_fprompt_compare.py` so the binning, 10–67 µs window and functional
+from `src/ambe/stats/capture_time.py` so the binning, 10–67 µs window and functional
 form match the anchor. Capture time comes from `t_mean`.
 
 **This is a one-run pilot.** Run 6266 is a genuine source-in run (special-runs
@@ -369,7 +369,7 @@ recorded rate at 0.5 Hz. Yields and shapes are fine; rates are not.
 
 No `EventAmBeNeutronCandidates_*_6266.csv` exists anywhere — that directory stops at run
 6242. The gate was derived from the diagnostics join
-`step4_joined_6266.parquet` via `make_gate_csvs_from_parquet.py --source step4`:
+`step4_joined_6266.parquet` via `scripts/workflows/make_gate_csvs_from_parquet.py --source step4`:
 **2,171 of 4,182** IC candidates pass. `timestamp` there **is** `eventTimeTank`, verified:
 all 4,182 match a BeamCluster `eventTimeTank` exactly. Both gates were then run, so the
 gate's effect is measured rather than assumed.
@@ -464,7 +464,7 @@ on this run. Before pooling 6266 with the June runs, its port must be added to
 ## 6.6 The new neutron definition on the AmBe pipeline's own neutrons *(new)*
 
 `bash run_ccinc_v3_ambe6266.sh --campaign v4gated all` then
-`python ccinc_v3_ambe_closure.py --do classify --dataset ambepipe_v4gated`.
+`python -m scripts.presentation.ccinc_v3_ambe_closure --do classify --dataset ambepipe_v4gated`.
 
 ### 6.6.1 What is being compared
 
@@ -616,7 +616,7 @@ is superseded by this one.)
 ## 6.7 The special runs — reported separately *(new)*
 
 `bash run_ccinc_v3_ambe6266.sh --campaign v4special all` then
-`python ccinc_v3_ambe_closure.py --do classify --dataset ambepipe_v4special`.
+`python -m scripts.presentation.ccinc_v3_ambe_closure --do classify --dataset ambepipe_v4special`.
 
 Six runs are not ordinary source runs and are **never merged** into a capture time or
 efficiency number. The split follows the diagnostics' own
@@ -654,7 +654,7 @@ merge — 11,195 duplicated events of 46,211 (24%), stale chunk still in scratch
 (`FIX_6270.md`). Its numbers are reported but should not be quoted without that.
 
 Positions for the four come from the run/port/Z table and live in `SPECIAL_POSITIONS` in
-`ccinc_v3_ambe_closure.py`, **deliberately not** added to `src/ambe/data/processor.py`'s
+`scripts/presentation/ccinc_v3_ambe_closure.py`, **deliberately not** added to `src/ambe/data/processor.py`'s
 `source_positions`: that map drives the pipeline's own efficiency heatmaps, and putting
 labelled-no-source runs into it would silently fold them into the campaign efficiency.
 
@@ -664,8 +664,8 @@ Figures: `V3AMBESPEC__classified_fraction`, `V3AMBESPEC__classified_by_position`
 
 ## 6.8 The traditional box cuts, over the whole v4 campaign *(new)*
 
-`python fit_capture_time_fprompt_compare.py --mode tagset --tags AmBe2.0v4_gated,AmBe2.0v4_ext --out-label v4_all28`
-then `python boxcut_v4_campaign.py --do all`.
+`python -m ambe.stats.capture_time --mode tagset --tags AmBe2.0v4_gated,AmBe2.0v4_ext --out-label v4_all28`
+then `python -m scripts.presentation.boxcut_v4_campaign --do all`.
 
 **No MVA and no MC appear anywhere in this section.** The neutron definition is the AmBe
 pipeline's own, and the point is to establish that it behaves as expected across all 26
@@ -712,7 +712,7 @@ grid transfer first.
 | **= neutron triggers (Stage 2)** | **217,532** | **45.87%** |
 
 The 217,532 and the 236,792 candidate rows behind it reproduce `PIPELINE_REFERENCE` in
-`ccinc_v3_ambe_closure.py` **exactly**, so the box-cut route and the MVA route are
+`scripts/presentation/ccinc_v3_ambe_closure.py` **exactly**, so the box-cut route and the MVA route are
 demonstrably reading the same sample.
 
 ### 6.8.3 Efficiency — and the consistency statement that matters
@@ -745,7 +745,7 @@ Two shape checks come out flat, as they should:
 
 Fits use the anchor's own recipe, reused rather than reimplemented: 70 bins over 0–70 µs,
 10–67 µs window, `A(1−e^{−t/therm})e^{−t/τ} + B` with **B fixed at 0**, and the `is_good`
-quality gate. `fit_capture_time_fprompt_compare.py` gained a `--mode` argument (no
+quality gate. `src/ambe/stats/capture_time.py` gained a `--mode` argument (no
 default: `fpcompare` keeps its original behaviour, `tagset` fits an arbitrary campaign),
 so there is one fit recipe in the repo and not two.
 
@@ -775,7 +775,7 @@ efficiency_by_position,consistency,capturetime_by_position}.csv`.
 
 ## 6.9 Box cuts on the special runs, separately *(new)*
 
-`python boxcut_v4_special.py --do all`.
+`python -m scripts.presentation.boxcut_v4_special --do all`.
 
 Same cuts, same code path (`processor.py`'s `cosmic_cut` / `ambe_single_cut` /
 `ambe_multiple_cut`), **no efficiency and no τ**. Stage 1 comes from the diagnostics join
@@ -826,9 +826,9 @@ Figures: `V4BOXSPEC__cutflow_table`, `V4BOXSPEC__yield_per_trigger`,
 
 ## 6.10 The MVA definition validated against the box cuts — and June retired *(new)*
 
-`python ccinc_v3_ambe_closure.py --do all --dataset june` (reproduction) and
+`python -m scripts.presentation.ccinc_v3_ambe_closure --do all --dataset june` (reproduction) and
 `--do closure --dataset ambepipe_v4neutron` (the v4-native replacement), then
-`python boxcut_v4_campaign.py --do validation`.
+`python -m scripts.presentation.boxcut_v4_campaign --do validation`.
 
 ### 6.10.1 What "June" was, and why it had to be replaced
 
@@ -837,7 +837,7 @@ throughout §6.4 come from a sample built in June from 31 gated runs on **old ha
 
 **Correction: that sample is AmBe2.0v1 only, not "v1/v3 pooled".** The label
 "June v1/v3" in §6.4's table, and the `--dataset june` docstring in
-`ccinc_v3_ambe_closure.py:112` ("the pooled AmBe2.0v1/v3 features"), are both wrong.
+`scripts/presentation/ccinc_v3_ambe_closure.py:112` ("the pooled AmBe2.0v1/v3 features"), are both wrong.
 Counted directly from the staged score table, the 31 runs are **4499–4687 — every one in
 the 4xxx range**, i.e. the v1 campaign minus 4604/4605. The `AmBe2.0v3` tag is entirely
 5xxx (5740–5828) and **contributes zero runs**. So the June reference is one campaign
@@ -854,7 +854,7 @@ anchor.
 τ = **31.303 ± 2.283 µs** at truth-tag/ClusterFinder GBT eff80, and GBT data median
 0.5464 with KS 0.1147 to MC signal against 0.1827 to MC background — closer to signal, as
 documented. Nothing has drifted. (The `d_wall [cm]` mislabel is already fixed in
-`make_presentable_optics_rf_plots.py:170`; it survives only on the old June-16 poster
+`scripts/presentation/make_presentable_optics_rf_plots.py:170`; it survives only on the old June-16 poster
 PDFs, which this code does not regenerate.)
 
 ### 6.10.2 The v4-native validation, and why it must be per position
@@ -941,7 +941,7 @@ Figures: `V4BOX__matched_boxcut_vs_mva_table`. CSV: `boxcut_v4_matched_mva.csv`.
 
 ### 6.10.4 The full cross-method agreement — both streamlines, all models, all points
 
-`python boxcut_v4_campaign.py --do agreement`. §6.10.3 answers the question at one working
+`python -m scripts.presentation.boxcut_v4_campaign --do agreement`. §6.10.3 answers the question at one working
 point on one streamline; this is the same comparison everywhere, on three axes.
 
 **Capture time** (GBT, per position, B = 0, identical clusters):
@@ -1062,18 +1062,18 @@ export PYTHONUNBUFFERED=1
 cd /exp/annie/app/users/dajana/AmBeNeutronsAnalysis
 
 # 0. the guard — run this first, everything else asserts it internally
-python ccinc_v3_stats.py --do guard          # PASS: all 16 AUCs reproduce to 0.001
+python -m scripts.presentation.ccinc_v3_stats --do guard          # PASS: all 16 AUCs reproduce to 0.001
 
 # 1. classifier selection, dirt-neutron decomposition, background anatomy
-python ccinc_v3_stats.py --do models
-python ccinc_v3_stats.py --do dirtn
-python ccinc_v3_stats.py --do spurious       # §5.1-5.2
-python ccinc_v3_bg_differential.py --config all
+python -m scripts.presentation.ccinc_v3_stats --do models
+python -m scripts.presentation.ccinc_v3_stats --do dirtn
+python -m scripts.presentation.ccinc_v3_stats --do spurious       # §5.1-5.2
+python -m scripts.presentation.ccinc_v3_bg_differential --config all
 
 # 2. per-species feature plots (§5.3), one call per configuration.
 #    --bkg-split none reproduces the established pages byte-for-byte.
 B=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
-python make_presentable_optics_rf_plots.py \
+python -m scripts.presentation.make_presentable_optics_rf_plots \
   --mc-scores $B/cc_neutrino_v3_truthtag/parquet/cc_neutrino_v3_truthtag__mva_scores__keepprompt__merged__cf.parquet \
   --frozen    $B/cc_neutrino_v3_truthtag/parquet/cc_neutrino_v3_truthtag__mva_frozen__keepprompt__merged__cf.pkl \
   --style poster --rank-model gbt --mc-only --score-cut auto \
@@ -1087,13 +1087,13 @@ python make_presentable_optics_rf_plots.py \
 
 # 3. AmBe run 6266 (§6) — ~15 min, dominated by the ungated extraction
 bash run_ccinc_v3_ambe6266.sh --campaign run6266 all
-python ccinc_v3_ambe_closure.py --do all --dataset ambe6266
-python ccinc_v3_ambe_closure.py --do all --dataset june      # the June reference
+python -m scripts.presentation.ccinc_v3_ambe_closure --do all --dataset ambe6266
+python -m scripts.presentation.ccinc_v3_ambe_closure --do all --dataset june      # the June reference
 
 # 4. The AmBe pipeline's own neutrons (§6.6) — all 28 source runs, ~45 min.
 #    Stage 1 first for the 8 runs that were never processed, under a SEPARATE tag so
 #    the 20-run TriggerSummary (plain to_csv, no append) is not overwritten:
-MPLBACKEND=Agg python -u run_waveform_gated_pipeline.py \
+MPLBACKEND=Agg python -u -m scripts.workflows.run_waveform_gated_pipeline \
   --dataset /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4 \
   --runinfo AmBe2.0v4_ext --runs 6243,6244,6246,6247,6249,6250,6251,6252
 #    Then gate/extract/score/classify. The gate stage stages a TAG-FILTERED symlink
@@ -1101,11 +1101,11 @@ MPLBACKEND=Agg python -u run_waveform_gated_pipeline.py \
 #    (AmBe2.0v4_gated and _fprompt share runs and build_gate_sets would union them,
 #    +18.6% on run 6062).
 bash run_ccinc_v3_ambe6266.sh --campaign v4neutron all
-python ccinc_v3_ambe_closure.py --do classify --dataset ambepipe_v4neutron
+python -m scripts.presentation.ccinc_v3_ambe_closure --do classify --dataset ambepipe_v4neutron
 
 # 5. The special runs (§6.7) — separate results, never merged. ~3 min.
 bash run_ccinc_v3_ambe6266.sh --campaign v4special all
-python ccinc_v3_ambe_closure.py --do classify --dataset ambepipe_v4special
+python -m scripts.presentation.ccinc_v3_ambe_closure --do classify --dataset ambepipe_v4special
 
 # 6. The traditional box cuts, whole v4 campaign (§6.8) — ~4 min, no ROOT reads.
 #    The fitter's --mode has NO default: fpcompare is the original baseline-vs-fprompt
@@ -1113,27 +1113,27 @@ python ccinc_v3_ambe_closure.py --do classify --dataset ambepipe_v4special
 #    fprompt2d, recovered) are refused so the frozen anchor cannot be overwritten.
 #    Run the regression FIRST — it must reproduce CaptureTimeFits_baseline.csv
 #    byte-identically and return 30.529 +- 0.260.
-python -u fit_capture_time_fprompt_compare.py --mode tagset \
+python -u -m ambe.stats.capture_time --mode tagset \
   --tags AmBe2.0v4_gated --out-label regress20
-python -u fit_capture_time_fprompt_compare.py --mode tagset \
+python -u -m ambe.stats.capture_time --mode tagset \
   --tags AmBe2.0v4_gated,AmBe2.0v4_ext --out-label v4_all28
-MPLBACKEND=Agg python -u boxcut_v4_campaign.py --do all
+MPLBACKEND=Agg python -u -m scripts.presentation.boxcut_v4_campaign --do all
 
 # 7. Box cuts on the special runs (§6.9) — ~2 min. Reads BeamCluster directly, so
 #    this one does hit dCache. No efficiency and no tau is produced, by design.
-MPLBACKEND=Agg python -u boxcut_v4_special.py --do all
+MPLBACKEND=Agg python -u -m scripts.presentation.boxcut_v4_special --do all
 
 # 8. The MVA-vs-box-cut validation and the June reproduction (§6.10).
-python -u ccinc_v3_ambe_closure.py --do all     --dataset june               # ~20 min
-python -u ccinc_v3_ambe_closure.py --do closure --dataset ambepipe_v4neutron # ~25 min
-MPLBACKEND=Agg python -u boxcut_v4_campaign.py --do validation
-MPLBACKEND=Agg python -u boxcut_v4_campaign.py --do matched     # §6.10.3, identical clusters
-MPLBACKEND=Agg python -u boxcut_v4_campaign.py --do agreement   # §6.10.4, all streamlines/models/points
+python -u -m scripts.presentation.ccinc_v3_ambe_closure --do all     --dataset june               # ~20 min
+python -u -m scripts.presentation.ccinc_v3_ambe_closure --do closure --dataset ambepipe_v4neutron # ~25 min
+MPLBACKEND=Agg python -u -m scripts.presentation.boxcut_v4_campaign --do validation
+MPLBACKEND=Agg python -u -m scripts.presentation.boxcut_v4_campaign --do matched     # §6.10.3, identical clusters
+MPLBACKEND=Agg python -u -m scripts.presentation.boxcut_v4_campaign --do agreement   # §6.10.4, all streamlines/models/points
 
 # 9. Collect every talk figure into ONE folder (PDF + PNG + MANIFEST.csv with the
 #    absolute source path of each). Reads figure names from FIGURES.md, so that file
 #    stays the single source of truth. --do check reports without writing.
-python -u collect_presentation_plots.py --do build
+python -u -m scripts.presentation.collect_presentation_plots --do build
 ```
 
 **Two output trees, one letter apart.** `slide_plots_ccinc_v3_merged/` lives under
@@ -1141,7 +1141,7 @@ python -u collect_presentation_plots.py --do build
 `AmBeNeutronsAnalysis/ambe_output/ambe_data/<run_name>/plots/` (**no** `s`). Both exist.
 Step 9 above is the only thing that should be copied off the node.
 
-**Environment traps.** `matplotlib.use("Agg")` is forced in `mva_analysis.py` — with
+**Environment traps.** `matplotlib.use("Agg")` is forced in `src/ambe/mc/mva_analysis.py` — with
 `DISPLAY` set it picked TkAgg and a training died in Tk teardown with exit 134 after
 writing its scores but before its importance CSV. `PYTHONUNBUFFERED=1` matters because
 stdout into a `tee` pipe block-buffers and a silent multi-hour stage is

@@ -159,7 +159,7 @@ and `γ` are skipped, the join-not-zip rule, and the `-5` sentinel — is docume
 composition percentage.
 
 Delayed window `t > 10000 ns`, CC-passing events only. Stage 1b
-(`report_background_composition.py`) reports three ancestry axes; the physics axis is **`origin`** =
+(`scripts/diagnostics/report_background_composition.py`) reports three ancestry axes; the physics axis is **`origin`** =
 first ancestor in the lineage chain that is neither e± nor γ.
 
 Totals: **231,664 non-neutron hits over 81,790 CC events = 2.83 hits/event** (truthtag);

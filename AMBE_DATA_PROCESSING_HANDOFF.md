@@ -26,7 +26,7 @@ running when the SSH session was about to be closed.
    module, not on the live import path, but kept consistent per your call).
 3. `src/ambe/plots/heatmap.py` — added missing `(0, -60, 102): "Port 3"` to
    `PORT_INFO` (run 6187's y=-60 doesn't sit on the historical y-grid).
-4. **`run_waveform_gated_pipeline.py` — real bug found and fixed**: this
+4. **`scripts/workflows/run_waveform_gated_pipeline.py` — real bug found and fixed**: this
    script hardcoded `wf.pulse_gamma = 400` / `wf.pulse_max = 575` (v1's
    window) regardless of `WaveformConfig`'s active default. This silently
    applied the WRONG cut to the first attempt at processing v4
@@ -44,7 +44,7 @@ Per your explicit correction mid-session: **do not use the MVA/frozen-model/
 score-cut pipeline for this.** Use `src/ambe/plots` directly on the raw
 waveform-gated candidate CSVs:
 
-1. **Processing**: `run_waveform_gated_pipeline.py --dataset <dir> --runinfo
+1. **Processing**: `scripts/workflows/run_waveform_gated_pipeline.py --dataset <dir> --runinfo
    <tag> [--pulse-gamma N --pulse-max N]` → writes
    `EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_<tag>_<run>.csv`
    and `TriggerSummary/AmBeTriggerSummary_<tag>.csv` /
@@ -149,7 +149,7 @@ reporting artifact.
 tag `AmBe2.0v4_test`) to see if narrowing at 700-1200 was leaving efficiency
 on the table:
 ```
-python -u run_waveform_gated_pipeline.py --dataset /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4 \
+python -u -m scripts.workflows.run_waveform_gated_pipeline --dataset /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4 \
     --runinfo AmBe2.0v4_test --pulse-gamma 600 --pulse-max 1400
 ```
 Log: `/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/logs/waveform_gated_AmBe2.0v4_test_stage12.log`
@@ -181,7 +181,7 @@ To check on `AmBev4` after reconnecting: `tmux attach -t AmBev4` (or
    background that gets vetoed downstream by `ambe_single_cut`?).
 3. Investigate the 2-70 µs fit failure before deciding whether to keep
    10-67 or fix something else.
-4. Commit `configs/data_ambe2v4.yaml` and the `run_waveform_gated_pipeline.py`
+4. Commit `configs/data_ambe2v4.yaml` and the `scripts/workflows/run_waveform_gated_pipeline.py`
    fix if not already committed (check `git status`).
 5. Decide on the final IC window for v4 (700-1200 vs 600-1400 vs something
    else derived from where efficiency actually plateaus).

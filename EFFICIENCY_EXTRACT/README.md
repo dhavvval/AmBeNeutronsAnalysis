@@ -74,7 +74,7 @@ statistical error is added to the χ² denominator (thesis eq. 8.5).
 - Data-driven looks fine only because **6264 has 22 AmBe triggers**. Its template
   uncertainty dominates the χ² denominator from bin 2 upward, so big residuals go
   unpenalised. Drop σ_bkg and the same fit moves 0.640 → 0.351 with χ²/ndof ≈ 854.
-  Reproduce: `scripts/diagnose_datadriven_chi2.py --source 6265 --bkg 6264`. The background
+  Reproduce: `src/ambe/diagnostics/datadriven_chi2.py --source 6265 --bkg 6264`. The background
   run needs N ≳ 50 triggers before its own statistics stop dominating.
 
 So Poisson is nominal, and the **signed** gap to the data-driven fit (+0.035) is the δ_m
@@ -445,7 +445,7 @@ artefact documented in §1c. Ungated it has **6,312** triggers: the error collap
 result — essentially vanishes.
 
 Its χ²/ndof also goes honest, 200/9 instead of 3.07/7. That is the artefact disappearing,
-exactly as `scripts/diagnose_datadriven_chi2.py` predicted would happen past N ≳ 50.
+exactly as `src/ambe/diagnostics/datadriven_chi2.py` predicted would happen past N ≳ 50.
 
 **(c) λ_n is invariant under gating: 0.076 → 0.078 (6265), 0.084 → 0.086 (6266).** The
 background candidate rate per trigger is the same whether or not the waveform gate is

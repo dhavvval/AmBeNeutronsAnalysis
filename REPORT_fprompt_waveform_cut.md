@@ -123,7 +123,7 @@ Confirms the interpretation rather than assuming it:
 | File | Change |
 |---|---|
 | `src/ambe/data/processor.py` | `WaveformConfig`: `selection_mode`, `fprompt_*`, `width_threshold`. New `compute_waveform_features()` (single pass, all features) and `passes_selection()`. `analyze_waveform()` now returns `(IC_adjusted, baseline, is_accepted, features)`. `process_run_waveforms()` gained `feature_dump_path`; `run_complete_analysis_pipeline()` gained `dump_features` (default `True`) and logs the active selection. |
-| `run_waveform_gated_pipeline.py` | `--selection-mode`, `--fprompt-min`, `--fprompt-max`, `--no-feature-dump`, `--runs` |
+| `scripts/workflows/run_waveform_gated_pipeline.py` | `--selection-mode`, `--fprompt-min`, `--fprompt-max`, `--no-feature-dump`, `--runs` |
 | `tune_waveform_fprompt.py` | **new** — offline cut tuning from the parquet dumps |
 | `configs/data_ambe2v4_fprompt.yaml` | **new** — heatmap config for the widened-window tag |
 
@@ -314,7 +314,7 @@ and *negative*. With `B` pinned at zero an accidental pedestal has nowhere to
 go and would push τ **up**; it went slightly down. Combined with the shape
 tests above, the extra statistics are recovered signal.
 
-Script: `fit_capture_time_fprompt_compare.py`. Per-position fits in
+Script: `src/ambe/stats/capture_time.py`. Per-position fits in
 `TriggerSummary/CaptureTimeFits_{baseline,fprompt2d,recovered}.csv`.
 
 Plotted in `verbose/fprompt_capture_time_recovered_vs_baseline.{pdf,png}` via
@@ -477,7 +477,7 @@ Note the baseline CSV's own 6242 row is stale as a result — it reports
 ```bash
 cd /exp/annie/app/users/dajana/AmBeNeutronsAnalysis
 source /exp/annie/app/users/dajana/myboy/bin/activate
-MPLBACKEND=Agg python -u run_waveform_gated_pipeline.py \
+MPLBACKEND=Agg python -u -m scripts.workflows.run_waveform_gated_pipeline \
     --dataset /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4 \
     --runinfo AmBe2.0v4_fprompt \
     --runs 6046,6056,6060,6061,6062,6165,6166,6186,6187,6188,6189,6230,6231,6232,6234,6235,6237,6239,6241,6242 \
@@ -491,7 +491,7 @@ Log: `logs/waveform_fprompt2d_v4_stage12.log`. New tag, so nothing overwrites
 
 ```bash
 source /exp/annie/app/users/dajana/myboy/bin/activate
-MPLBACKEND=Agg python -u fit_capture_time_fprompt_compare.py
+MPLBACKEND=Agg python -u -m ambe.stats.capture_time
 ```
 
 Self-contained — replicates `ambe.plots.basic`'s histogram, 10-67 µs mask and
@@ -513,7 +513,7 @@ python tune_waveform_fprompt.py --runinfo AmBe2.0v4_fprompt \
   holds for v1 (4499) and v4 (6062), but **v3 (5740, 5789) carries the pulse in
   `BRF_` and its `RWM_` is flat noise**. `campaign=1` → `RWM_`, `campaign=2` →
   `BRF_` already handles this; the misleading comment in
-  `run_waveform_gated_pipeline.py` was corrected.
+  `scripts/workflows/run_waveform_gated_pipeline.py` was corrected.
 - **Runs 6264, 6265, 6266, 6270** sit in the v4 dataset dir but have no
   `source_positions` entry, so an unfiltered pipeline run raises partway through.
   That is what `--runs` is for. I don't know where those sources were, so no

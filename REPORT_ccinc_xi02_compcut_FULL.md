@@ -20,10 +20,10 @@ This report is **standalone** — every number comes from this run only. There a
 |---|---|---|---|
 | 0 | ROOT → per-hit parquet, apply CC-truth selection, ClusterFinder sidecar | `ambe mc process` | `__pulses.parquet`, `__clusterfinder.parquet` |
 | 1 | OPTICS clustering + 31-feature extraction, truth-match each cluster | `ambe mc features` | `__cluster_features.parquet` |
-| 2 | Train 4 classifiers (RF/GBT/XGBoost/NN) on signal vs background, freeze | `mva_analysis.py --keep-prompt-bkg --save-model` | `__mva_frozen__keepprompt.pkl`, scores, plots |
+| 2 | Train 4 classifiers (RF/GBT/XGBoost/NN) on signal vs background, freeze | `src/ambe/mc/mva_analysis.py --keep-prompt-bkg --save-model` | `__mva_frozen__keepprompt.pkl`, scores, plots |
 | — | Composition cut applied to MC clusters (training/benchmark side only) | inline filter | `__cluster_features_compcut.parquet` |
-| 3 | Score AmBe data, per-run neutron rate, multiplicity, capture-time | `mva_analysis.py --score-data` + downstream | `ccinc_xi02cc_{optics,cf}_mcbkg/` |
-| 4 | MC efficiency/purity benchmark: box-cut vs frozen MVA | `benchmark_selection_2x2.py` | `ccinc_xi02cc_{optics,cf}_boxcuts/benchmark/` |
+| 3 | Score AmBe data, per-run neutron rate, multiplicity, capture-time | `src/ambe/mc/mva_analysis.py --score-data` + downstream | `ccinc_xi02cc_{optics,cf}_mcbkg/` |
+| 4 | MC efficiency/purity benchmark: box-cut vs frozen MVA | `scripts/diagnostics/benchmark_selection_2x2.py` | `ccinc_xi02cc_{optics,cf}_boxcuts/benchmark/` |
 
 ---
 
@@ -379,7 +379,7 @@ Both compared against the same composition truth (`dominant_class ∈ {1,2,3,4}`
 
 ## 4.1 Box-cut definition & provenance (unified across all stages)
 
-**(a) Exact definition.** The box cut is **exactly** `pe_total < 80 AND charge_bal_legacy < 0.45 AND n_hits > 9` (NaN charge-balance is *kept*). This single definition is now used at **every stage** of the analysis — the Stage-4 benchmark (`benchmark_selection_2x2.py:45`), the Stage-3 multiplicity comparison bars (`plot_ambe_neutron_multiplicity.py:50-52`), the `passes_stage1` flag baked into the data feature parquets (`analyze_optics_beamcluster_data.py:87-89`, imported by `extract_cf_features_beamcluster_data.py`), and the auxiliary capture/multiplicity comparison scripts.
+**(a) Exact definition.** The box cut is **exactly** `pe_total < 80 AND charge_bal_legacy < 0.45 AND n_hits > 9` (NaN charge-balance is *kept*). This single definition is now used at **every stage** of the analysis — the Stage-4 benchmark (`scripts/diagnostics/benchmark_selection_2x2.py:45`), the Stage-3 multiplicity comparison bars (`scripts/diagnostics/plot_ambe_neutron_multiplicity.py:50-52`), the `passes_stage1` flag baked into the data feature parquets (`scripts/workflows/analyze_optics_beamcluster_data.py:87-89`, imported by `scripts/workflows/extract_cf_features_beamcluster_data.py`), and the auxiliary capture/multiplicity comparison scripts.
 
 These three thresholds (80 / 0.45 / 9) were **not optimized in this analysis** — no MC sweep produced them. They are the inherited legacy ANNIE "Selection-2" preselection box.
 
@@ -397,7 +397,7 @@ These three thresholds (80 / 0.45 / 9) were **not optimized in this analysis** �
 
 The §4 table is computed on the **whole** composition-cut population, which includes the clusters each model trained on — so its purity is *in-sample-optimistic*. This sub-section is the **proper held-out benchmark**, following the standard recipe:
 
-1. **Complete separation.** The train/test split is done at the **event level** (`event_train_test_split`, `random_state=42`, `test_size=0.2`, stratified — all clusters of an event go to the same side), so no event seen in training appears in the test set. The held-out test events are read directly from the `in_test` flag that `mva_analysis.py` writes into the scored sample. Verified: **OPTICS 1,665 test events, CF 1,622 test events**.
+1. **Complete separation.** The train/test split is done at the **event level** (`event_train_test_split`, `random_state=42`, `test_size=0.2`, stratified — all clusters of an event go to the same side), so no event seen in training appears in the test set. The held-out test events are read directly from the `in_test` flag that `src/ambe/mc/mva_analysis.py` writes into the scored sample. Verified: **OPTICS 1,665 test events, CF 1,622 test events**.
 2. **Apply the model to the full natural population**, then keep only clusters belonging to the **held-out test events** — this recovers *all* signal and background (including the signal clusters that 1:1 down-sampling had discarded) at their **true physical abundance** (no reweighting). Test N: **OPTICS 6,484 (sig 6,144 / bkg 340); CF 6,240 (sig 5,885 / bkg 355)**.
 3. **Apply the frozen threshold** — each model's training-time 80%-efficiency cut (RF 0.547, GBT 0.553, NN 0.569 for OPTICS; RF 0.509, GBT 0.512, NN 0.543 for CF). The cut is **not** re-tuned on the test set; we apply it and read off the result.
 4. **Metrics** (on the full test-set statistics, signal = `dominant_class ∈ {1,2,3,4}`, all clusters — no prompt sub-filter):

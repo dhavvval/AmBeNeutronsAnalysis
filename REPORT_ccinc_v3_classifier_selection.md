@@ -101,7 +101,7 @@ composition; in-tank ⇒ neutron-dominated). Re-deriving it from `dominant_class
 the trap: an out-of-tank capture is neutron-dominated and still background, and that
 mistake reads AUC 0.54 instead of 0.66.
 
-So `ccinc_v3_stats.py` **asserts all 16 merged AUCs reproduce world report §5 to 1e-3
+So `scripts/presentation/ccinc_v3_stats.py` **asserts all 16 merged AUCs reproduce world report §5 to 1e-3
 before computing anything**, and exits non-zero otherwise. It passes:
 
 ```
@@ -313,7 +313,7 @@ is the easiest part in every configuration, and the tank muon/pion background is
 hardest, at 0.584 against the tank-only model's own 0.605. Two consequences for this
 report: the §2 model ranking is a ranking on a background that is 64% dirt neutrons by
 cluster count, and §3.1's finding that μ⁻ is the irreducible component is reproduced from
-a second direction. Reproduce with `python ccinc_v3_stats.py --do dirtn`.
+a second direction. Reproduce with `python -m scripts.presentation.ccinc_v3_stats --do dirtn`.
 
 ### 3.5 Context that stops this being over-read
 
@@ -441,7 +441,7 @@ Figure: `V3AMBE__score_data_mc_overlay`.
 
 ### 5.2 Physics closure — capture time
 
-Fitted with the *imported* fitter from `fit_capture_time_fprompt_compare.py`, so the
+Fitted with the *imported* fitter from `src/ambe/stats/capture_time.py`, so the
 binning, 10–67 µs fit window and functional form are the ones that produced the anchor
 **τ = 30.53 ± 0.26 µs** (`REPORT_fprompt_waveform_cut.md` §7, 20 runs / 19 positions).
 A τ fitted any other way would not be comparable. Capture time is `t_mean`/1000 µs for
@@ -557,15 +557,15 @@ Figures: `V3AMBE__capture_time_selected`, `V3AMBE__tau_summary`.
 cd /exp/annie/app/users/dajana/AmBeNeutronsAnalysis
 source /exp/annie/app/users/dajana/myboy/bin/activate
 
-python ccinc_v3_stats.py --do guard          # the AUC assertion alone
-python ccinc_v3_stats.py --do models         # §2  -> ccinc_v3_model_comparison.csv
-python ccinc_v3_stats.py --do truthreco      # §4  -> ccinc_v3_truthreco_*.csv
-python ccinc_v3_stats.py --do dirtn          # §3.4 + world report §4.4/§4.5
+python -m scripts.presentation.ccinc_v3_stats --do guard          # the AUC assertion alone
+python -m scripts.presentation.ccinc_v3_stats --do models         # §2  -> ccinc_v3_model_comparison.csv
+python -m scripts.presentation.ccinc_v3_stats --do truthreco      # §4  -> ccinc_v3_truthreco_*.csv
+python -m scripts.presentation.ccinc_v3_stats --do dirtn          # §3.4 + world report §4.4/§4.5
                                              #     -> ccinc_v3_dirtn_*.csv
-python ccinc_v3_bg_differential.py --config all      # §3 -> ccinc_v3_bg_*.csv
+python -m scripts.presentation.ccinc_v3_bg_differential --config all      # §3 -> ccinc_v3_bg_*.csv
 
 bash run_ccinc_v3_ambe_stage3.sh all         # §5 scoring (~4 min, 8 passes)
-python ccinc_v3_ambe_closure.py --do all     # §5 -> ccinc_v3_ambe_{agreement,closure}.csv
+python -m scripts.presentation.ccinc_v3_ambe_closure --do all     # §5 -> ccinc_v3_ambe_{agreement,closure}.csv
 ```
 
 None of these has a silent default — every entry point requires you to name what you

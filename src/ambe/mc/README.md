@@ -8,6 +8,8 @@ This folder contains the Monte Carlo analysis pipeline used by the `ambe mc ...`
 |---|---|---|
 | `ambe mc process --config <yaml>` | `processor.py` | Reads ROOT files and writes per-hit parquet with truth matching. |
 | `ambe mc optics --config <yaml>` | `optics.py` | Runs OPTICS sweeps and ClusterFinder baseline, then writes per-event metrics. |
+| `ambe mc mva --config <yaml>` | `mva_analysis.py` | Train or apply classifiers using saved cluster features. |
+| `ambe mc timewindows --config <yaml>` | `hit_time_windows.py` | Compare truth-separated hit-time windows. |
 | `ambe mc features --config <yaml>` | `cluster_features.py` | Extracts per-cluster physics features for MVA and diagnostic plots. |
 | `ambe mc discriminate --config <yaml>` | `cluster_discrimination.py` | Cluster-level discrimination helper command. |
 | `ambe mc match --config <yaml>` | `cluster_matching.py` | Cluster-to-truth matching diagnostics. |

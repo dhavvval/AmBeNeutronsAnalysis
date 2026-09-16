@@ -40,6 +40,7 @@ ambe = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = [".", "src"]
 markers = [
     "slow: coverage tests that run >=1000 pseudo-experiments (deselect with -m 'not slow')",
 ]

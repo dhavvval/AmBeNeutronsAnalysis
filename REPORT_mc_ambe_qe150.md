@@ -18,7 +18,7 @@ residual-efficiency heatmaps are suppressed in all four decks.
 **No classifier was trained.** The MVA decks score with the frozen CCinc-neutrino model
 `cc_neutrino_v3_truthtag__mva_frozen__keepprompt__merged__cf.pkl`, GBT, eff80,
 threshold **0.423621** — the same model and cut already used on the AmBe v4 data.
-Only `mva_analysis.py --score-data` was invoked.
+Only `src/ambe/mc/mva_analysis.py --score-data` was invoked.
 
 ## 1. The four decks
 
@@ -175,7 +175,7 @@ capture-time fits in `TriggerSummary/`; candidate CSVs in
   string merely containing "453"/"455". MC configs set `apply_hitid_swap: false`.
 - **The veto-ON scored table is derived, not extracted.** The prompt veto is a per-event
   `continue` taken before any feature is computed, so veto-ON is exactly veto-OFF minus
-  rows from vetoed events; `derive_vetoon_scored.py` does that filter against the deck's
+  rows from vetoed events; `scripts/workflows/derive_vetoon_scored.py` does that filter against the deck's
   own `is_cosmic` verdict and asserts the result. Extracting twice costs ~11 h for a row
   filter.
 - **`ambe data processmc` is a separate command from `ambe data process`** and reads a

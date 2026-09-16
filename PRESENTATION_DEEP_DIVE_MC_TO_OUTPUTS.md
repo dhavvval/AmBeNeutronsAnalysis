@@ -22,7 +22,7 @@ output disagree, both are shown and the artifact is marked as ground truth.
    **6,729 : 6,729** (confirmed live from the `.pkl` metadata and cross-checked against the
    scored parquet).
 3. **"412 GENIE-WCSim files" is a frozen snapshot from 2026-06-11**, hardcoded in the report and
-   in `make_collab_slides_xi02_compcut.py` — not computed live. A live glob of the same input
+   in `scripts/presentation/make_collab_slides_xi02_compcut.py` — not computed live. A live glob of the same input
    directory today (2026-07-20) returns **459** files. If you state a file count on a slide, say
    "as of the June analysis" or re-run the count.
 4. **`cc_neutrino_xi02_compcut.yaml` has a one-off config anomaly, likely a bug.** Its `residual:`
@@ -301,7 +301,7 @@ notes them as "scale-free."
 (NN row differs from the previously-circulated report — see correction #1 at the top.)
 
 ### How "best model" + operating cut are chosen
-`pick_best_model_cut.py`: best = highest test-set AUC (currently RF, by 0.001 over GBT — all four
+`scripts/workflows/pick_best_model_cut.py`: best = highest test-set AUC (currently RF, by 0.001 over GBT — all four
 are statistically close). Operating cut = the score below which only `100×(1−efficiency)`% of true
 *test-set signal* falls — e.g., the 20th percentile of the signal-class test scores gives an 80%
 signal-efficiency cut, by construction (not tuned against data).
@@ -331,7 +331,7 @@ the only one where both RF and NN land in the physically correct band with stabl
 AmBe source positions**, which is the actual justification for "why 80%" rather than a
 data-optimized number.
 
-### Per-run neutron rate (`summarize_ambe_neutrons.py`)
+### Per-run neutron rate (`scripts/workflows/summarize_ambe_neutrons.py`)
 One row = one AmBe run = one source position (31 runs). Key columns: `n_events` (beam triggers with
 ≥1 delayed cluster — the denominator), `n_events_with_neutron`, `frac_events_with_neutron` (the
 quoted "detection rate" — **conditional on delayed activity already existing**, not an absolute
@@ -352,7 +352,7 @@ purity (fewer events fragmented into multiple fakes). OPTICS under-counts vs. CF
 an open item, plausibly because the tighter ξ=0.02 splits some real captures below `min_samples=8`
 or below the MVA cut.
 
-### Capture-time fit (`capture_time_stageAB_from_parquet.py`, lmfit)
+### Capture-time fit (`scripts/diagnostics/capture_time_stageAB_from_parquet.py`, lmfit)
 Fits a thermalization + exponential-capture + flat-background model (`NeutCapture`) to the cluster
 time distribution, bounded to the 2–70 µs capture window.
 
@@ -370,7 +370,7 @@ gives the tightest, lowest τ.
 
 ## Stage 4 — MC selection benchmark (efficiency / purity / fakes, natural population)
 
-`benchmark_selection_2x2.py`, evaluated on the *natural* cluster population (not the artificially
+`scripts/diagnostics/benchmark_selection_2x2.py`, evaluated on the *natural* cluster population (not the artificially
 balanced 1:1 training sample — the report explicitly flags this distinction since a "63–66% purity"
 number sometimes floats around from the training-sample denominator and is not the number to quote).
 
@@ -412,10 +412,10 @@ OPTICS + RF MVA is the cleanest selector: 99.6% purity at 83% efficiency, only 8
 | OPTICS clustering | `src/ambe/mc/optics.py` |
 | ClusterFinder membership lookup | `src/ambe/mc/optics.py::assign_clusterfinder_labels`, sidecar written in `processor.py` |
 | Feature extraction / truth labeling | `src/ambe/mc/cluster_features.py` |
-| MVA training | `mva_analysis.py`; frozen artifacts under `ambe_output/cc_neutrino_xi02_compcut/parquet/` |
-| Threshold selection | `pick_best_model_cut.py` |
+| MVA training | `src/ambe/mc/mva_analysis.py`; frozen artifacts under `ambe_output/cc_neutrino_xi02_compcut/parquet/` |
+| Threshold selection | `scripts/workflows/pick_best_model_cut.py` |
 | Data scoring pipeline | `run_ccinc_xi02_compcut.sh` |
-| Per-run rate | `summarize_ambe_neutrons.py` |
-| Capture-time fit | `capture_time_stageAB_from_parquet.py` |
-| MC benchmark | `benchmark_selection_2x2.py` |
+| Per-run rate | `scripts/workflows/summarize_ambe_neutrons.py` |
+| Capture-time fit | `scripts/diagnostics/capture_time_stageAB_from_parquet.py` |
+| MC benchmark | `scripts/diagnostics/benchmark_selection_2x2.py` |
 | Narrative numbers (partially stale — see corrections) | `REPORT_xi02_compcut_dualmodel.md` |

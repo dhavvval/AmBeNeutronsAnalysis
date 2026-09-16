@@ -44,7 +44,7 @@ production label (`cluster_features.py:_truth_label_cluster`, mirrored in
 
 Whether the *time structure* of the hits gives a cleaner separation had never been tested on
 CCinc. The ~50 ns figure that motivated the question is a hypothesis inherited from
-`analyze_truth_timing.py` (AmBe MC), not a result.
+`scripts/diagnostics/analyze_truth_timing.py` (AmBe MC), not a result.
 
 ---
 

@@ -1,3 +1,7 @@
+> Historical API notes. For the maintained config-driven CLI and current waveform
+> selection, see [WORKFLOWS.md](docs/WORKFLOWS.md). The interactive main described
+> below has been retired.
+
 # AmBeNeutronEff.py - User Manual
 
 ## Overview

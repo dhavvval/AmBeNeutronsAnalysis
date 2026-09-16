@@ -302,7 +302,7 @@ question, which shifts the discriminating power toward `d_wall` and `vtx_y`.
 | composite split key `(_source_run, eventID)` | **PASS** — 2 events would have been wrongly merged by a bare `eventID` |
 | tank baseline unchanged by the new code | **PASS** — 0.602 / 0.605 / 0.584 / 0.599 reproduced exactly |
 
-Reproduce with `python audit_merged_labels.py --config configs/cc_neutrino_v3_truthtag.yaml
+Reproduce with `python -m scripts.diagnostics.audit_merged_labels --config configs/cc_neutrino_v3_truthtag.yaml
 --merge-run cc_neutrino_v3world_truthtag --method optics`.
 
 ---
@@ -415,7 +415,7 @@ out-of-tank capture light. The obvious objection is that a capture is a capture:
 background is mostly the same 2.2 MeV capture the signal is, the model should not be able
 to separate it, and an AUC that improves when that population is added looks suspicious.
 This section answers that objection with measurements rather than argument. Everything
-here is `python ccinc_v3_stats.py --do dirtn`, read-only over the merged score tables and
+here is `python -m scripts.presentation.ccinc_v3_stats --do dirtn`, read-only over the merged score tables and
 behind the same 16-AUC guard as §2–§4 of the classifier-selection report.
 
 **The normalised background budget.** §4.2 quotes two tables with different denominators
@@ -579,7 +579,7 @@ background. That is worth *testing*, not assuming: it also shrinks a background 
 
 Tank-only baseline → merged, test-set AUC. **All four merged trainings finished on
 2026-08-05** (truth-tag/OPTICS 11:05, truth-tag/CF 11:24, reco-tag/OPTICS 11:42,
-reco-tag/CF 11:58). Regenerate the table with `python make_plots_ccinc_v3_merged.py`,
+reco-tag/CF 11:58). Regenerate the table with `python -m scripts.presentation.make_plots_ccinc_v3_merged`,
 which parses the AUCs straight out of `logs_merged_tankworld.log` — they are not written
 to any CSV.
 
@@ -627,14 +627,14 @@ its larger feature separations (§4.3) and its larger background.
 > since been recovered.** It aborted in matplotlib/Tk teardown *after* computing the AUCs
 > and writing the score table, model and plots, so the numbers above were never in doubt —
 > but its `__mva_summary__keepprompt__merged__cf.csv` (feature importances) was not
-> written. Fixed at the source: `mva_analysis.py` now calls `matplotlib.use("Agg")` before
+> written. Fixed at the source: `src/ambe/mc/mva_analysis.py` now calls `matplotlib.use("Agg")` before
 > importing pyplot, since with `DISPLAY` set it was picking TkAgg.
 > **RESOLVED 2026-08-05:** that single training was re-run to completion (exit 0, log
 > `logs_merged_tt_cf_rerun.log`), reproducing AUC 0.665 / 0.672 / 0.669 / 0.667 exactly and
 > writing the missing CSV. **All four merged configurations now have a complete artifact
 > set** — importance CSV, ROC/discriminator PDF, score table, frozen model + NN.
 >
-> A separate naming hazard was fixed in the same pass. `mva_analysis.py`'s `mode_tag` does
+> A separate naming hazard was fixed in the same pass. `src/ambe/mc/mva_analysis.py`'s `mode_tag` does
 > **not** encode `--method`, so every method writes to the same
 > `__keepprompt__merged.*` filenames and the second training silently overwrites the
 > first — the trap `run_ccinc_xi02_compcut.sh` documents and guards against. The first
@@ -727,7 +727,7 @@ fix (see §6). Recorded here only so nobody mistakes them for the merged result.
   out-of-tank capture light, a model trained this way learns "did an in-tank neutrino
   make this" and not "is this a neutron capture". That is the intended target for a
   CC-inclusive selection, but it is not a neutron tagger in the AmBe sense.
-- **`mva_analysis.py` now writes `mva_label` into the score tables** (added 2026-08-05).
+- **`src/ambe/mc/mva_analysis.py` now writes `mva_label` into the score tables** (added 2026-08-05).
   Score tables produced before that — including the truth-tag / OPTICS merged one — lack
   it, and re-deriving the label from `dominant_class` alone gives the **wrong** answer on
   a merged frame (out-of-tank captures are neutron-dominated but labelled background); it
@@ -749,7 +749,7 @@ bash /exp/annie/data/users/dajana/ccinc_v3_streamlines/run_world_merged.sh
 
 # §4.4 / §4.5 — read-only over the merged score tables, trains nothing (~1 min)
 source /exp/annie/app/users/dajana/myboy/bin/activate
-python ccinc_v3_stats.py --do dirtn
+python -m scripts.presentation.ccinc_v3_stats --do dirtn
 ```
 
 §4.4 / §4.5 outputs: `ccinc_v3_dirtn_budget.csv` (background light budget, one
@@ -767,7 +767,7 @@ Merged artifacts are tagged `__merged` so they never overwrite the tank-only bas
 
 ```bash
 source /exp/annie/app/users/dajana/myboy/bin/activate
-python make_plots_ccinc_v3_merged.py
+python -m scripts.presentation.make_plots_ccinc_v3_merged
 ```
 
 Writes `slide_plots_ccinc_v3_merged/` — one standalone PDF **and** PNG (200 dpi) per
@@ -828,7 +828,7 @@ the multi-page `*_ALL.pdf`.
 
 ```bash
 B=/exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output
-python make_presentable_optics_rf_plots.py \
+python -m scripts.presentation.make_presentable_optics_rf_plots \
   --mc-scores $B/cc_neutrino_v3_recotag/parquet/cc_neutrino_v3_recotag__mva_scores__keepprompt__merged__cf.parquet \
   --frozen    $B/cc_neutrino_v3_recotag/parquet/cc_neutrino_v3_recotag__mva_frozen__keepprompt__merged__cf.pkl \
   --style bw --rank-model gbt --mc-only --score-cut auto \

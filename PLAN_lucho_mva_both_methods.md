@@ -26,7 +26,7 @@ clusterfinder)** so the trees (rf/gbt/xgb) can be compared.
 - **Feature extractor is method-agnostic:** `compute_cluster_features(df_cluster, geo, source_pos_m)`
   in `src/ambe/mc/cluster_features.py:502` takes a per-hit dataframe `[x,y,z,t,pe,pmtID]` and emits
   the same 47 features (33 feed the MVA) regardless of OPTICS vs CF origin.
-- **OPTICS data worker** = `analyze_optics_beamcluster_data.py:extract_features_one_file()` (605-712).
+- **OPTICS data worker** = `scripts/workflows/analyze_optics_beamcluster_data.py:extract_features_one_file()` (605-712).
   It reads BeamCluster files, applies a **cosmic veto** (any CF cluster with clusterTime<2000ns OR
   clusterPE>100 → drop whole event), a **prompt-window cut** (keep t>2000ns), runs OPTICS, then calls
   `compute_cluster_features(..., source_pos_m=None)`. The CF extractor must mirror every one of these
@@ -38,7 +38,7 @@ clusterfinder)** so the trees (rf/gbt/xgb) can be compared.
   So for event i, cluster j: hits are `Cluster_HitX[i][j]`, `Cluster_HitT[i][j]`, etc. The existing
   `load_file()` (263-306) only reads FLAT per-event hit arrays + cluster summaries — it does NOT read
   these nested per-cluster hit arrays. That's the one new read path needed.
-- **Score column derivation** (`summarize_ambe_neutrons.py:mc_threshold`, line 41) keys on
+- **Score column derivation** (`scripts/workflows/summarize_ambe_neutrons.py:mc_threshold`, line 41) keys on
   `dominant_class ∈ {1,2,3,4}` and `in_test`. The lucho MC scores have these. CF-method thresholds
   (already computable from the existing file): rf=0.6164, gbt=0.5086, xgb=0.5513 @ 80% sig-eff.
 
@@ -46,8 +46,8 @@ clusterfinder)** so the trees (rf/gbt/xgb) can be compared.
 
 ### Part A — Produce CF-method DATA features from BeamCluster ntuples (NEW code)
 
-New script `extract_cf_features_beamcluster_data.py` in the repo, closely modeled on
-`analyze_optics_beamcluster_data.py`'s feature path. Per file/run:
+New script `scripts/workflows/extract_cf_features_beamcluster_data.py` in the repo, closely modeled on
+`scripts/workflows/analyze_optics_beamcluster_data.py`'s feature path. Per file/run:
 - Read the `Event` tree's nested cluster-hit branches with uproot/awkward
   (`numberOfClusters`, `clusterTime/PE/ChargeBalance/Hits`, `Cluster_HitX/Y/Z/T/Q/Chankey`).
 - Apply the **same** event gating + cosmic veto + (NO prompt cut on CF hits — the CF clusters are
@@ -71,13 +71,13 @@ New script `extract_cf_features_beamcluster_data.py` in the repo, closely modele
 
 Score the optics MC cluster_features through `mc_lucho_100k_optics_frozen.pkl` to produce
 `mc_lucho_100k__mva_scores_optics.parquet` (carrying dominant_class + in_test + rf/gbt/xgb/nn_score),
-giving a valid optics threshold. Use `mva_analysis.py --score-data --model` (the optics MC features
+giving a valid optics threshold. Use `src/ambe/mc/mva_analysis.py --score-data --model` (the optics MC features
 already exist in `mc_lucho_100k__cluster_features.parquet`, method='optics' subset).
 The CF MC anchor already exists (`mc_lucho_100k__mva_scores.parquet`).
 
 ### Part C — The two-method pipeline runner (`run_ambe_lucho_mva.sh`)
 
-Mirror `run_ambe_steven_mva.sh`. Differences handled: call `mva_analysis.py --score-data --model`
+Mirror `run_ambe_steven_mva.sh`. Differences handled: call `src/ambe/mc/mva_analysis.py --score-data --model`
 directly (the shared `score_real_data.sh` hard-codes steven filenames at lines 43-44 — leave it
 untouched). For EACH method (optics, clusterfinder):
 - **Stage 1** score the method's data rows with the matching lucho frozen pkl →
@@ -94,11 +94,11 @@ Run in tmux, `set -euo pipefail`, tee to `logs_ambe_lucho_mva.log`.
 
 ## Files
 
-- **New:** `extract_cf_features_beamcluster_data.py` (Part A), `run_ambe_lucho_mva.sh` (Part C).
+- **New:** `scripts/workflows/extract_cf_features_beamcluster_data.py` (Part A), `run_ambe_lucho_mva.sh` (Part C).
 - **Reused unchanged:** `compute_cluster_features` + helpers in `src/ambe/mc/cluster_features.py`,
-  `analyze_optics_beamcluster_data.py` helpers (imported), `mva_analysis.py`,
-  `summarize_ambe_neutrons.py`, `plot_ambe_neutron_multiplicity.py`,
-  `capture_time_stageAB_from_parquet.py`, `analyze_data_mc_comparison.py`.
+  `scripts/workflows/analyze_optics_beamcluster_data.py` helpers (imported), `src/ambe/mc/mva_analysis.py`,
+  `scripts/workflows/summarize_ambe_neutrons.py`, `scripts/diagnostics/plot_ambe_neutron_multiplicity.py`,
+  `scripts/diagnostics/capture_time_stageAB_from_parquet.py`, `scripts/diagnostics/analyze_data_mc_comparison.py`.
 - **No edits** to `score_real_data.sh` or any steven config.
 
 ## Open item to resolve during implementation (do NOT guess)
@@ -111,7 +111,7 @@ exactly; this is the single correctness-critical detail.
 
 ## Verification
 
-- `bash -n run_ambe_lucho_mva.sh`; `python -c "import ast; ast.parse(open('extract_cf_features_beamcluster_data.py').read())"`.
+- `bash -n run_ambe_lucho_mva.sh`; `python -c "import ast; ast.parse(open('scripts/workflows/extract_cf_features_beamcluster_data.py').read())"`.
 - Smoke-test Part A on ONE BeamCluster file (`--max-events` small) → confirm the 33 feature columns
   exist, dtypes match the optics parquet, `method=='clusterfinder'`, and row count is sane vs the
   file's total `clusterHits`.

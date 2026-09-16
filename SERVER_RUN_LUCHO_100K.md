@@ -3,7 +3,7 @@
 Run the full 100k-event Lucho AmBe MC pipeline (process → features → MVA freeze)
 on a remote server with the same codebase. Produces two frozen MVA artifacts
 (OPTICS + ClusterFinder methods, both trained vs. all MC non-neutron background)
-ready for application to real AmBe data with `mva_analysis.py --score-data`.
+ready for application to real AmBe data with `src/ambe/mc/mva_analysis.py --score-data`.
 
 No `ambe mc optics` grid-sweep step is run — features step does its own internal
 OPTICS clustering with the production parameters.
@@ -17,7 +17,7 @@ Two Python virtual envs:
 | Venv | Used by | Required packages |
 |---|---|---|
 | `~/venvs/annie`   | `ambe mc process`, `ambe mc features` | `uproot`, `awkward`, `pandas`, `pyarrow`, `numpy`, `scikit-learn`, `pyyaml`, plus the local `ambe` package (`pip install -e .` from the repo root) |
-| `~/venvs/annie311`| `python mva_analysis.py --save-model`    | everything above **plus** `tensorflow` (for the NN), `xgboost`, `joblib`, `matplotlib` |
+| `~/venvs/annie311`| `python -m ambe.mc.mva_analysis --save-model`    | everything above **plus** `tensorflow` (for the NN), `xgboost`, `joblib`, `matplotlib` |
 
 If the venvs are at different paths on this server, edit the two `VENV_*` lines
 near the top of `run_lucho_100k.sh` (see step 3).
@@ -114,8 +114,8 @@ On Dhaval's M-series laptop (~6 cores used):
 |---|---|
 | `ambe mc process`   (10 ROOT files → 2.84M hits)  | ~1.5 min |
 | `ambe mc features`  (OPTICS+CF on 95k events)     | ~50 min (~33 ev/s) |
-| `mva_analysis.py --method optics --save-model`    | ~10–20 min |
-| `mva_analysis.py --method clusterfinder --save-model` | ~10–20 min |
+| `src/ambe/mc/mva_analysis.py --method optics --save-model`    | ~10–20 min |
+| `src/ambe/mc/mva_analysis.py --method clusterfinder --save-model` | ~10–20 min |
 | **Total** | **~90–120 min** |
 
 A 16-core server should run features in ~20 min and total wall in ~45–60 min.
@@ -140,7 +140,7 @@ The four files starting with `mc_lucho_100k_*_frozen` are the artifacts to ship
 back. With them in hand, scoring real data is one command per method:
 
 ```bash
-python mva_analysis.py --config configs/mc_lucho_100k.yaml \
+python -m ambe.mc.mva_analysis --config configs/mc_lucho_100k.yaml \
     --score-data <real_data_features>.parquet \
     --model ambe_output/mc_lucho_100k/parquet/mc_lucho_100k_optics_frozen.pkl
 ```
@@ -166,7 +166,7 @@ python mva_analysis.py --config configs/mc_lucho_100k.yaml \
 
 - **MVA freeze flags.** The runner uses `--method {optics,clusterfinder} --bkg-mode all
   --all-events --save-model <path>`. `--all-events` disables the default
-  `--cc-only` filter inside `mva_analysis.py` (same reason as above — AmBe has
+  `--cc-only` filter inside `src/ambe/mc/mva_analysis.py` (same reason as above — AmBe has
   no CC events).
 
 - **Process step is single-threaded per file** but `awkward`/`uproot` are fast.

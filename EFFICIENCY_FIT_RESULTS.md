@@ -63,7 +63,7 @@ The data-driven fit is not the better alternative. Its p ≈ 0.39 is an artefact
 background run 6264 having **22 AmBe triggers**: the template's per-bin uncertainty
 dominates the χ² denominator from bin 2 upward, so large residuals go unpenalised.
 Removing σ_bkg moves the same fit from 0.640 to 0.351 with χ²/ndof ≈ 854. Run
-`scripts/diagnose_datadriven_chi2.py --source 6265 --bkg 6264` to reproduce the scan;
+`src/ambe/diagnostics/datadriven_chi2.py --source 6265 --bkg 6264` to reproduce the scan;
 it also shows the crossover — the background run would need roughly N ≳ 50 triggers
 before its χ²/ndof stops being dominated by its own statistics.
 
@@ -282,7 +282,7 @@ detector property.
 | `src/ambe/stats/profile_likelihood.py` | Teal's classes, kept as reference; four defects fixed |
 | `src/ambe/data/selection.py` | the neutron definitions + the shared delayed window |
 | `src/ambe/data/processor.py` | two-pass event loop; `legacy_ordering` for the old one |
-| `scripts/diagnose_datadriven_chi2.py` | the σ_bkg-dominance scan behind §"Why neither model" |
+| `src/ambe/diagnostics/datadriven_chi2.py` | the σ_bkg-dominance scan behind §"Why neither model" |
 | `configs/data_ambe2v4_effpair_box.yaml` | the deck, with `dump_event_index: true` |
 | `tests/test_efficiency_fit.py` | fitter closure, coverage, GoF, systematics |
 | `tests/test_selection.py` | cut boundaries for both selections |
