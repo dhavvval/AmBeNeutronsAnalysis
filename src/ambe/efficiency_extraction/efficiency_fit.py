@@ -48,9 +48,8 @@ CHOICES = {
 
 def _require_choice(name: str, value, exc=ValueError):
     """Reject a mode string that is not one of CHOICES[name], and return it."""
-    # Checked at the config boundary AND again at the function boundary, on purpose.
-    # The config check fails in milliseconds rather than after the parquet load; the
-    # function check is what the library contract promises a direct caller.
+    # Checked at the config boundary as well as here, so a typo fails before the
+    # parquet load rather than after it.
     if value not in CHOICES[name]:
         raise exc(f"{name} must be one of {CHOICES[name]}, got {value!r}")
     return value
@@ -74,10 +73,8 @@ class MultiplicityHist:
 
     def __post_init__(self):
         """Every acquisition in the denominator must land in exactly one bin."""
-        # Overflow acquisitions used to be counted in n_overflow and then dropped from
-        # counts, so normed renormalised over a shrunken total and inflated every bin
-        # fraction, bin 0 most of all. The model profiles clip overflow into the top
-        # bin, so data and model were on opposite conventions whenever overflow existed.
+        # Overflow used to be counted and then dropped, so normed renormalised over a
+        # shrunken total and inflated every bin fraction, bin 0 most of all.
         total = int(round(float(self.counts.sum())))
         if total != self.denominator:
             raise ValueError(
@@ -124,8 +121,7 @@ class MultiplicityHist:
 
 def load_event_index(paths: Iterable[Path] | Path) -> pd.DataFrame:
     """Read one or more EventIndex parquets, one row per Stage-1-admitted event."""
-    # n_accepted_clusters is synthesised if absent, matching icscan.py:193-195 so the
-    # two modules agree on what an accepted cluster count is.
+    # n_accepted_clusters is synthesised if absent, matching icscan.py:193-195.
     paths = [paths] if isinstance(paths, (str, Path)) else list(paths)
     frames = []
     for p in paths:
@@ -145,16 +141,10 @@ def build_multiplicity(event_index: pd.DataFrame, run: int, n_bins: int = 8,
                        provenance: str = "EventIndex",
                        overflow_policy: str = "fail") -> MultiplicityHist:
     """Build the multiplicity histogram for one run, zero bin included."""
-    # numerator_mode='noncosmic' lets an event contribute only if it is not
-    # cosmic-vetoed, consistent with a denominator that excludes cosmics.
-    # 'production' reproduces the production accumulator, which counts a vetoed event
-    # in the numerator while subtracting it from the denominator (icscan.py:368-406) --
-    # inconsistent, but it is what the published numbers count. On run 6062 the two
-    # differ by 2.8 points, more than the whole systematic budget of table 8.6, so both
-    # are offered and the caller is expected to report both.
-    # overflow_policy='fail' treats multiplicity >= n_bins as an error (merging
-    # physically different multiplicities is not a choice to make implicitly, and these
-    # runs have none); 'clip' folds it into the top bin, which then means ">= n_bins-1".
+    # numerator_mode='production' counts a cosmic-vetoed event in the numerator while
+    # subtracting it from the denominator (icscan.py:368-406) -- inconsistent, but it is
+    # what the published numbers count. On run 6062 it differs from 'noncosmic' by 2.8
+    # points, more than the whole systematic budget of table 8.6, so both are reported.
     _require_choice("denominator", denominator, SystemExit)
     _require_choice("numerator_mode", numerator_mode, SystemExit)
     _require_choice("overflow_policy", overflow_policy, SystemExit)
@@ -167,7 +157,6 @@ def build_multiplicity(event_index: pd.DataFrame, run: int, n_bins: int = 8,
     total_events = int(len(grp))
     cosmic_events = int(cosmic.sum())
 
-    # Which events are allowed to contribute candidates to the numerator.
     contributing = grp if numerator_mode == "production" else grp[~cosmic]
     mult = contributing["n_accepted_clusters"].to_numpy(int)
     mult = mult[mult > 0]
@@ -180,11 +169,9 @@ def build_multiplicity(event_index: pd.DataFrame, run: int, n_bins: int = 8,
             f"Raise n_bins so every multiplicity has its own bin, or set "
             f"overflow_policy='clip' to fold them into bin {n_bins - 1} and read "
             f"that bin as '>= {n_bins - 1}' everywhere.")
-    # Clip rather than discard. The model profiles already clip
-    # (analytic_profile_poisson / analytic_profile_datadriven), so discarding here
-    # would leave data and model on opposite conventions and shrink counts.sum()
-    # below the denominator. bincount raises on a negative multiplicity, which the
-    # old min(int(k), n_bins-1) loop silently folded into the TOP bin via counts[-1].
+    # Clip rather than discard: the model profiles clip too, so discarding would put
+    # data and model on opposite conventions. bincount also raises on a negative
+    # multiplicity, which the old min(k, n_bins-1) loop folded into the TOP bin.
     counts = np.bincount(np.minimum(mult, n_bins - 1),
                          minlength=n_bins).astype(float)
 
@@ -246,8 +233,8 @@ def multiplicity_from_counts(run: int, nonzero: dict[int, int], denominator_tota
 def background_scale_factor(acq_window_ns: float, sig_start_ns: float,
                             bkg_start_ns: float) -> float:
     """Rescale a flat background rate from one time window to another (phase2.py:169)."""
-    # Equals 1 whenever the two windows start together, as they do for the 6264/6265
-    # pair, but is kept explicit so it cannot silently go wrong if they diverge.
+    # Equals 1 when the two windows start together, as they do for 6264/6265, but is
+    # kept explicit so it cannot silently go wrong if they diverge.
     num = acq_window_ns - sig_start_ns
     den = acq_window_ns - bkg_start_ns
     if den <= 0:
@@ -272,15 +259,13 @@ def analytic_profile_poisson(eff, lam, n_bins: int) -> np.ndarray:
     dominant cost of fit_poisson.
     """
     # P(M=k) = eff * Pois(k-1; lam) + (1-eff) * Pois(k; lam). Not an approximation of
-    # the toy MC -- the same model in closed form. It removes the MC sampling noise
-    # that otherwise makes delta-chi2 contours jitter between grid points.
+    # the toy MC but the same model in closed form, without its sampling noise.
     pois = poisson_pmf(np.arange(n_bins), np.asarray(lam)[..., None])
     shifted = np.zeros_like(pois)
     shifted[..., 1:] = pois[..., :-1]
     e = np.asarray(eff, dtype=float)[..., None]
     p = (1.0 - e) * pois + e * shifted
-    # Everything above the top bin clips into it, matching the MC path's
-    # np.histogram(range=(0, n_bins)) so the two engines compare bin for bin.
+    # Everything above the top bin clips into it, as the MC path's histogram does.
     p[..., -1] += np.clip(1.0 - p.sum(axis=-1), 0.0, None)
     return p / p.sum(axis=-1, keepdims=True)
 
@@ -317,8 +302,7 @@ def analytic_profile_datadriven(eff: float, bkg_p: np.ndarray, n_bins: int) -> n
     `bkg_p` may carry leading axes, so the bootstrap branch of fit_datadriven convolves
     all its Dirichlet replicas in one call instead of a Python loop per grid point.
     """
-    # Written as (1-eff)*b_k + eff*b_{k-1} rather than np.convolve with [1-eff, eff]:
-    # the two are the same thing, but this way the Bernoulli stays visible.
+    # (1-eff)*b_k + eff*b_{k-1} rather than np.convolve, to keep the Bernoulli visible.
     p = np.asarray(bkg_p, dtype=float)
     p = p / p.sum(axis=-1, keepdims=True)
     out = np.zeros(p.shape[:-1] + (n_bins,))
@@ -339,9 +323,8 @@ def thesis_chi2(model: np.ndarray, data: np.ndarray, data_unc: np.ndarray,
     and a whole (n_eff, n_lam, n_bins) scan cube returns the (n_eff, n_lam) surface.
     That is the only reason this is not three near-copies any more.
     """
-    # The data-driven model carries the background histogram's statistical uncertainty
-    # in the denominator because that template is itself measured; the Poisson model
-    # does not, because its background is a fitted parameter rather than a measurement.
+    # Only the data-driven model passes bkg_unc: its template is measured, whereas the
+    # Poisson model's background is a fitted parameter.
     den = data_unc if bkg_unc is None else np.sqrt(data_unc ** 2 + bkg_unc ** 2)
     if np.any(den <= 0):
         raise SystemExit("[efficiency_fit] zero uncertainty in a chi2 denominator -- "
@@ -351,22 +334,16 @@ def thesis_chi2(model: np.ndarray, data: np.ndarray, data_unc: np.ndarray,
 
 def multinomial_deviance(model: np.ndarray, counts: np.ndarray) -> np.ndarray:
     """-2 ln L against the saturated model, for observed COUNTS; bins on the last axis."""
-    # thesis_chi2 treats the normalised bins as independent Gaussians with variance
-    # p_i/N. They are neither: multiplicity bins are multinomial, so they are
-    # anti-correlated (Cov = -p_i p_j / N, the probabilities must sum to one) and the
-    # diagonal variance is p_i(1-p_i)/N. The gap is largest where it matters most --
-    # bin 0 holds most of the mass, so the diagonal form overestimates the uncertainty
-    # of the single most constraining bin. Offered as `likelihood: multinomial` with
-    # the thesis chi2 still the default, so the shift is a measured number.
+    # thesis_chi2 treats the normalised bins as independent Gaussians of variance
+    # p_i/N; they are actually multinomial, anti-correlated, with diagonal variance
+    # p_i(1-p_i)/N. That overestimates the uncertainty of bin 0, which holds most of
+    # the mass and constrains the fit most. Opt-in, so the shift is a measured number.
     c = np.asarray(counts, dtype=float)
-    # xlogy gives 0*log(0) = 0 exactly, which is what the old np.where + errstate
-    # dance was emulating for empty bins. The 1e-300 clip is load-bearing and stays:
-    # without it a model bin of exactly zero against a non-empty count returns -inf,
-    # and np.argmin on a surface containing nan returns the nan's index. The whole
+    # The 1e-300 clip is load-bearing: without it a model bin of exactly zero against
+    # a non-empty count gives -inf, and np.argmin returns the index of a nan. The whole
     # lambda = 0 column of the scan cube is exactly zero above bin 1.
-    # Subtract the saturated model per bin, not per histogram: it keeps the summation
-    # order of the scalar form this replaces, so the statistic is bit-identical to the
-    # pre-refactor numbers rather than merely equal to 1e-15.
+    # Subtract the saturated model per bin, not per histogram -- that summation order
+    # is what keeps this bit-identical to the scalar form it replaces.
     sat = xlogy(c, c / c.sum())
     m = np.clip(np.asarray(model, dtype=float), 1e-300, None)
     m = m / m.sum(axis=-1, keepdims=True)
@@ -376,13 +353,11 @@ def multinomial_deviance(model: np.ndarray, counts: np.ndarray) -> np.ndarray:
 def bootstrap_background_templates(bkg: "MultiplicityHist", n_draws: int,
                                    rng: np.random.Generator) -> np.ndarray:
     """Dirichlet-resample the background template `n_draws` times."""
-    # The thesis adds the background histogram's per-bin uncertainty straight into the
-    # chi2 denominator, but the fitted model is a Bernoulli CONVOLUTION of the template:
-    # an uncertainty in background bin k propagates into model bins k and k+1, weighted
-    # by the efficiency, not into bin k alone. The per-bin approximation matters most
-    # when the background run is small -- exactly this regime, 6264 has 22 triggers.
-    # Jeffreys prior (alpha = counts + 1/2) rather than a plain multinomial bootstrap,
-    # so bins observed as zero still carry mass instead of being frozen at zero.
+    # The thesis adds the template's per-bin sigma straight into the chi2 denominator,
+    # but the model is a Bernoulli CONVOLUTION of it, so an uncertainty in background
+    # bin k reaches model bins k and k+1, not bin k alone. That approximation hurts
+    # most when the background run is small -- 6264 has 22 triggers. Jeffreys prior
+    # (alpha = counts + 1/2), so bins observed as zero still carry mass.
     alpha = np.asarray(bkg.counts, dtype=float) + 0.5
     return rng.dirichlet(alpha, size=int(n_draws))
 
@@ -391,18 +366,15 @@ def pseudo_experiment_p_value(model_p: np.ndarray, n_events: int, chi2_obs: floa
                               data_unc_fn, n_toys: int,
                               rng: np.random.Generator) -> float:
     """Fraction of toy datasets with a chi2 at least as large as the observed one."""
-    # Preferred over the analytic chi2 CDF because that CDF's assumptions do not hold
-    # here: the bins are normalised and hence correlated, the empty-bin floor distorts
-    # the statistic, and the fitted parameters do not cost exactly one dof each.
-    # data_unc_fn(counts, n_tot) supplies a toy's per-bin denominator, so toy and real
-    # fit share one uncertainty convention, floor included.
+    # Preferred over the analytic chi2 CDF, whose assumptions fail here: the bins are
+    # normalised and hence correlated, the empty-bin floor distorts the statistic, and
+    # the fitted parameters do not cost exactly one dof each.
     p = np.clip(np.asarray(model_p, dtype=float), 0.0, None)
     p = p / p.sum()
     n_tot = int(n_events)
-    # One batched draw rather than n_toys sequential ones. numpy fills the batch in
-    # the same order, so both the toys and the generator state afterwards are
-    # identical to the loop -- which matters, because `rng` is shared across the two
-    # fits in run() and the published p-values depend on that stream.
+    # One batched draw, not n_toys sequential ones: numpy fills it in the same order,
+    # so the toys AND the generator state afterwards match the loop. That matters --
+    # run() shares one rng across both fits and the published p-values depend on it.
     toys = rng.multinomial(n_tot, p, size=int(n_toys)).astype(float)
     unc = data_unc_fn(toys, n_tot)
     c2 = np.sum(((p - toys / n_tot) / unc) ** 2, axis=-1)
@@ -419,9 +391,9 @@ def _toy_unc(counts: np.ndarray, n_tot: int) -> np.ndarray:
 def delta_chi2_interval(grid: np.ndarray, chi2_vals: np.ndarray,
                         delta: float) -> tuple[float, float]:
     """Interval where chi2 - chi2_min <= delta; 1.0 for one parameter, 2.30 for two."""
-    # Edges are linearly interpolated between grid points rather than snapped to them,
-    # so the interval does not quantise to the scan step. A bound running off the end
-    # of the grid comes back as the grid edge, and assert_interior refuses to quote it.
+    # Edges are interpolated rather than snapped, so the interval does not quantise to
+    # the scan step. A bound off the end of the grid comes back as the grid edge, and
+    # assert_interior refuses to quote it.
     d = np.asarray(chi2_vals) - np.min(chi2_vals)
     inside = np.flatnonzero(d <= delta)
     if inside.size == 0:
@@ -480,9 +452,8 @@ class FitResult:
     @property
     def ndof_standard(self) -> int:
         """n_bins - 1 - n_fitted; the thesis convention (`ndof`) omits the -1."""
-        # Data and model are both normalised probability histograms, so normalisation
-        # costs one degree of freedom before any parameter is fitted. Reporting only
-        # one of the two conventions silently picks a definition.
+        # Both are normalised histograms, so normalisation costs a dof before any
+        # parameter is fitted. Reporting one convention alone picks it silently.
         return max(self.n_bins_fit - 1 - self.n_params, 1)
 
     @property
@@ -513,9 +484,8 @@ class FitResult:
 
 def assert_interior(result: FitResult, name: str = "efficiency") -> None:
     """Refuse to quote a best fit pinned to the edge of its scan grid."""
-    # An edge-pinned minimum means the true minimum is outside the grid, so the central
-    # value and the interval are both meaningless -- and they still print as perfectly
-    # ordinary numbers, which is exactly why this has to be checked.
+    # An edge-pinned minimum means the true one is off the grid, so the value and its
+    # interval are meaningless -- and still print as perfectly ordinary numbers.
     g = result.eff_grid
     if result.best_eff <= g[0] or result.best_eff >= g[-1]:
         raise SystemExit(
@@ -548,12 +518,9 @@ def fit_datadriven(source: MultiplicityHist, bkg: MultiplicityHist,
 
     thesis eq. 8.5; one fitted parameter, so the 68.3 % interval is delta-chi2 <= 1.
     """
-    # bkg_scale rescales the template's MEAN to the source's time window (see
-    # background_scale_factor); at 1.0 it is used as measured.
-    # bkg_unc_mode='thesis_diagonal' adds the template's per-bin sigma to the chi2
-    # denominator as in eq. 8.5; 'bootstrap' instead Dirichlet-resamples the template
-    # and propagates it THROUGH the Bernoulli convolution, where the uncertainty
-    # actually acts. The per-bin addition degrades when the background run is small.
+    # bkg_scale rescales the template's mean to the source's time window; 1.0 uses it
+    # as measured. bkg_unc_mode='bootstrap' propagates the template uncertainty through
+    # the convolution instead of adding it per-bin -- see bootstrap_background_templates.
     _require_choice("engine", engine)
     _require_choice("likelihood", likelihood)
     _require_choice("background_uncertainty", bkg_unc_mode)
@@ -571,10 +538,8 @@ def fit_datadriven(source: MultiplicityHist, bkg: MultiplicityHist,
         bkg_p = bkg_p * w
         s = bkg_p.sum()
         bkg_p = bkg_p / s
-        # The uncertainties must be carried through the SAME reweighting. Previously
-        # bkg_unc was captured before this block and kept the unscaled shape's
-        # errors, so a rescaled template went into the chi2 denominator with
-        # uncertainties belonging to a different distribution.
+        # The uncertainties must go through the SAME reweighting; bkg_unc used to be
+        # captured before this block and kept the unscaled shape's errors.
         bkg_unc = bkg_unc * w / s
 
     warnings: list[str] = []
@@ -590,9 +555,8 @@ def fit_datadriven(source: MultiplicityHist, bkg: MultiplicityHist,
             f"candidate-bearing events; the background template is nearly a delta at "
             f"zero, which drives this fit toward the naive counting ratio.")
 
-    # In bootstrap mode the template uncertainty is propagated through the
-    # convolution instead of being added per-bin, so it must NOT also appear in the
-    # denominator or it would be counted twice.
+    # In bootstrap mode the template uncertainty reaches the fit through the
+    # convolution, so it must NOT also sit in the denominator or it is counted twice.
     if bkg_unc_mode == "bootstrap":
         templates = bootstrap_background_templates(bkg, n_bootstrap, rng)
         if bkg_scale != 1.0:
@@ -608,8 +572,8 @@ def fit_datadriven(source: MultiplicityHist, bkg: MultiplicityHist,
     profiles = []
     for i, eff in enumerate(eff_grid):
         if templates is not None:
-            # Mean model over template replicas, plus the spread they induce in each
-            # model bin -- that spread IS the propagated background uncertainty.
+            # The spread the replicas induce in each model bin IS the propagated
+            # background uncertainty.
             reps = analytic_profile_datadriven(eff, templates, n_bins)
             prof = reps.mean(axis=0)
             prop_unc = reps.std(axis=0, ddof=1)
@@ -642,14 +606,10 @@ def fit_poisson(source: MultiplicityHist, eff_grid: np.ndarray, lam_grid: np.nda
                 rng: Optional[np.random.Generator] = None,
                 likelihood: str = "thesis_chi2") -> FitResult:
     """2D scan over (eps_n, lambda_n) with an uncorrelated Poisson background (eq. 8.6)."""
-    # Two intervals come back. After profiling over lambda, the conventional 68.3 %
-    # interval on eps_n alone is delta-chi2 <= 1 -- that is eff_lo/eff_hi. The thesis
-    # uses 2.30, the 68.3 % contour for TWO parameters, which is a joint region whose
-    # projection onto the eps_n axis overcovers; it is carried separately as
-    # eff_joint_lo/eff_joint_hi. See the FitResult docstring.
+    # Two intervals come back; see the FitResult docstring for why.
     # The chi2 surface stays a genuine 2D array sliced by integer index. Teal's driver
-    # flattened it and recovered slices by float equality (np.where(x_var == best_eff),
-    # phase2.py:235-240), which breaks outright if the minimum is degenerate.
+    # flattened it and recovered slices by float equality (phase2.py:235-240), which
+    # breaks outright if the minimum is degenerate.
     _require_choice("engine", engine)
     _require_choice("likelihood", likelihood)
     rng = rng or np.random.default_rng()
@@ -680,12 +640,10 @@ def fit_poisson(source: MultiplicityHist, eff_grid: np.ndarray, lam_grid: np.nda
     # Profile: for each value of one parameter, minimise over the other.
     chi2_eff = surface.min(axis=1)
     chi2_lam = surface.min(axis=0)
-    # delta-chi2 = 1 on the PROFILED curve: the conventional 68.3 % interval for one
-    # parameter of interest. This is what gets quoted.
+    # delta-chi2 = 1 on the profiled curve: the one-parameter interval that is quoted.
     eff_lo, eff_hi = delta_chi2_interval(eff_grid, chi2_eff, 1.0)
     lam_lo, lam_hi = delta_chi2_interval(lam_grid, chi2_lam, 1.0)
-    # delta-chi2 = 2.30: the thesis convention, carried alongside so the two can be
-    # compared rather than conflated.
+    # delta-chi2 = 2.30: the thesis convention, carried alongside rather than conflated.
     eff_jlo, eff_jhi = delta_chi2_interval(eff_grid, chi2_eff, 2.30)
 
     return FitResult(
@@ -789,16 +747,11 @@ def systematics(eff_nominal: float, eff_alternative: float,
                 housing_n_captures: Optional[int] = None,
                 housing_n_simulated: Optional[int] = None) -> SystBudget:
     """Assemble the signed, asymmetric systematic budget of thesis section 8.7."""
-    # delta_model is eps_alternative - eps_nominal (8.7.1), SIGNED -- which model is
-    # nominal is the caller's explicit choice, so the sign carries meaning.
-    # delta_bt is f_B/f_S, the background-trigger contamination fraction (eq. 8.9),
-    # defined on post-cut trigger RATES and so needing livetime. Without livetime the
-    # count ratio is still reported but flagged NOT PUBLISHABLE and left out of the
-    # total; it equals the rate ratio only when both runs had identical livetime.
-    # delta_h is the housing-capture fraction (8.7.2). CONVENTION: delta_h is a
-    # CORRECTION added to the efficiency and delta_h_unc is the systematic, so a bare
-    # fraction with no uncertainty contributes nothing. Pass housing_n_captures and
-    # housing_n_simulated to have the fraction and its Poisson error derived here.
+    # delta_bt (eq. 8.9) is defined on post-cut trigger RATES, so it needs livetime.
+    # Without it the count ratio is still reported but flagged NOT PUBLISHABLE and left
+    # out of the total -- the two are equal only at identical livetime.
+    # delta_h is a CORRECTION added to the efficiency and delta_h_unc is the
+    # systematic, so a bare fraction with no uncertainty contributes nothing.
     notes: list[str] = []
     delta_model_signed = eff_alternative - eff_nominal
 
@@ -827,8 +780,7 @@ def systematics(eff_nominal: float, eff_alternative: float,
         f_s = n_trig_src / livetime_src_s
         if f_s > 0:
             delta_bt = f_b / f_s
-            # Relative errors in quadrature: Poisson on both counts, plus livetime
-            # uncertainties when supplied.
+            # Relative errors in quadrature: Poisson on both counts, plus livetime.
             rel = [1.0 / np.sqrt(n_trig_bkg) if n_trig_bkg > 0 else 0.0,
                    1.0 / np.sqrt(n_trig_src) if n_trig_src > 0 else 0.0]
             if livetime_bkg_unc_s:
@@ -909,10 +861,8 @@ def run(ctx, argv=None):
     xchk_run = fp.get("crosscheck_run")
     n_bins = int(fp.get("n_bins", 8))
     engine = args.engine or fp.get("engine", "analytic")
-    # Validated here as well as inside the fit functions: argparse `choices` only
-    # guards the CLI, and a typo in the config used to fall through an `else` and
-    # silently run the slow, noisier toy-MC path. Checking before the parquet load
-    # also means a config typo fails in milliseconds rather than after the read.
+    # argparse `choices` only guards the CLI; a typo in the config used to fall
+    # through an `else` and silently run the toy-MC path.
     _require_choice("engine", engine, SystemExit)
     n_throws = int(fp.get("n_throws", 1_000_000))
     rng = np.random.default_rng(int(fp.get("seed", 0)))
@@ -925,10 +875,9 @@ def run(ctx, argv=None):
         "background_uncertainty",
         str(fp.get("background_uncertainty", "thesis_diagonal")), SystemExit)
 
-    # WHICH MODEL SUPPLIES THE HEADLINE IS A REQUIRED, EXPLICIT CHOICE. There is no
-    # default on purpose. Both background models are fit and reported either way;
-    # promoting one of them is a physics judgement about whether the background
-    # sample is representative, and it used to be made silently in a format string.
+    # Which model supplies the headline has no default, on purpose. Both are fit and
+    # reported either way; promoting one is a physics judgement about whether the
+    # background sample is representative, and it used to be made in a format string.
     nominal_model = fp.get("nominal_model")
     if nominal_model is None:
         raise SystemExit(
@@ -949,10 +898,9 @@ def run(ctx, argv=None):
     eff_grid = make_grid(fp["eff_grid"])
     lam_grid = make_grid(fp["lambda_grid"])
     acq_window = float(fp.get("acquisition_window_ns", 67000))
-    # The fitter normalises the background rate over [signal_start, acq_window]
-    # while selection decides what actually enters the histogram. If those two
-    # disagree the efficiency is being quoted over a span it was not measured on,
-    # so cross-check them rather than trusting a comment.
+    # The fitter normalises the background over [signal_start, acq_window] while the
+    # cuts decide what enters the histogram. If those disagree, the efficiency is
+    # quoted over a span it was not measured on.
     cuts_cfg = dict(ctx.cuts or {})
     cut_tmax = cuts_cfg.get("time_max_ns")
     cut_tmin = cuts_cfg.get("time_min_ns")
@@ -988,8 +936,7 @@ def run(ctx, argv=None):
                 delta_bt_publishable=False, delta_h=None, delta_h_unc=None,
                 syst_plus=np.nan, syst_minus=np.nan):
         """One CSV row. The key order here IS the column order -- do not reorder."""
-        # The cross-check rows differ from the main ones only in the systematics
-        # block, which it has no livetime for, so those are the defaults.
+        # The cross-check rows differ only in the systematics block, hence the defaults.
         return dict(
             denominator=denominator, numerator_mode=numerator_mode, primary=primary,
             model=model,
@@ -1053,10 +1000,6 @@ def run(ctx, argv=None):
             if primary:
                 assert_interior(rp, "poisson")
                 assert_interior(rd, "data-driven")
-                # Goodness of fit from pseudo-experiments rather than the analytic
-                # chi2 CDF -- the bins are normalised (hence correlated), the
-                # empty-bin floor distorts the statistic, and fitted parameters do
-                # not cost exactly one dof each.
                 for r in (rp, rd):
                     r.p_value = pseudo_experiment_p_value(
                         r.best_profile, src.denominator, r.chi2_min,
@@ -1068,8 +1011,7 @@ def run(ctx, argv=None):
             for w in rd.warnings:
                 print(f"   [caveat] {w}")
 
-            # The nominal model is the caller's explicit choice; the OTHER model is
-            # the alternative whose distance from it is the model systematic.
+            # The other model is the alternative; its distance is the model systematic.
             r_nom = rp if nominal_model == "poisson" else rd
             r_alt = rd if nominal_model == "poisson" else rp
             sb = systematics(
@@ -1146,10 +1088,9 @@ def run(ctx, argv=None):
         r_nom = rp if nominal_model == "poisson" else rd
         r_alt = rd if nominal_model == "poisson" else rp
 
-        # GOODNESS-OF-FIT GATE. A model whose p-value says it does not describe the
-        # data does not get to supply the headline just because someone named it in
-        # a config. The only way past is an explicit written justification, which is
-        # then recorded in the output so the reader sees it too.
+        # A model whose p-value says it does not describe the data does not supply the
+        # headline just because a config named it. The only way past is a written
+        # justification, recorded in the output so the reader sees it too.
         gof_ok = r_nom.p_value is None or r_nom.p_value >= gof_min_p
         gof_warnings: list[str] = []
         if not gof_ok:
@@ -1173,8 +1114,7 @@ def run(ctx, argv=None):
             for w in gof_warnings:
                 print(f"[efficiency_fit] *** {w} ***")
 
-        # Housing captures are a CORRECTION (see systematics()); the raw fit value
-        # and the corrected one are both reported so neither is hidden.
+        # Housing captures are a correction; raw and corrected are both reported.
         eff_raw = r_nom.best_eff
         eff_corrected = eff_raw + (sb.delta_h or 0.0)
         quoted = (f"{eff_corrected:.3f} +{r_nom.eff_err_hi:.3f}(stat) "
