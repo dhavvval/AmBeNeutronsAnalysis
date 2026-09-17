@@ -163,7 +163,6 @@ def build_multiplicity(event_index: pd.DataFrame, run: int, n_bins: int = 8,
     mult = contributing["n_accepted_clusters"].to_numpy(int)
     mult = mult[mult > 0]
 
-    counts = np.zeros(n_bins, dtype=float)
     n_overflow = int((mult >= n_bins).sum())
     if n_overflow and overflow_policy == "fail":
         raise ValueError(
@@ -175,9 +174,10 @@ def build_multiplicity(event_index: pd.DataFrame, run: int, n_bins: int = 8,
     # Clip rather than discard. The model profiles already clip
     # (analytic_profile_poisson / analytic_profile_datadriven), so discarding here
     # would leave data and model on opposite conventions and shrink counts.sum()
-    # below the denominator.
-    for k in mult:
-        counts[min(int(k), n_bins - 1)] += 1
+    # below the denominator. bincount raises on a negative multiplicity, which the
+    # old min(int(k), n_bins-1) loop silently folded into the TOP bin via counts[-1].
+    counts = np.bincount(np.minimum(mult, n_bins - 1),
+                         minlength=n_bins).astype(float)
 
     denom_val = (total_events - cosmic_events if denominator == "ambe_triggers"
                  else total_events)
@@ -317,17 +317,23 @@ def mc_profile_datadriven(eff: float, bkg_p: np.ndarray, n_bins: int, n_throws: 
 
 
 def analytic_profile_datadriven(eff: float, bkg_p: np.ndarray, n_bins: int) -> np.ndarray:
-    """Exact convolution of Bernoulli(eff) with the measured background histogram."""
+    """Exact convolution of Bernoulli(eff) with the measured background histogram.
+
+    `bkg_p` may carry leading axes, so the bootstrap branch of fit_datadriven convolves
+    all its Dirichlet replicas in one call instead of a Python loop per grid point.
+    """
+    # Written as (1-eff)*b_k + eff*b_{k-1} rather than np.convolve with [1-eff, eff]:
+    # the two are the same thing, but this way the Bernoulli stays visible.
     p = np.asarray(bkg_p, dtype=float)
-    p = p / p.sum()
-    out = np.zeros(n_bins)
-    m = min(len(p), n_bins)
-    out[:m] += (1.0 - eff) * p[:m]
-    shifted = np.zeros(n_bins)
-    shifted[1:min(len(p) + 1, n_bins)] = p[:min(len(p), n_bins - 1)]
+    p = p / p.sum(axis=-1, keepdims=True)
+    out = np.zeros(p.shape[:-1] + (n_bins,))
+    m = min(p.shape[-1], n_bins)
+    out[..., :m] += (1.0 - eff) * p[..., :m]
+    shifted = np.zeros_like(out)
+    shifted[..., 1:min(p.shape[-1] + 1, n_bins)] = p[..., :min(p.shape[-1], n_bins - 1)]
     out += eff * shifted
-    out[-1] += max(0.0, 1.0 - out.sum())
-    return out / out.sum()
+    out[..., -1] += np.clip(1.0 - out.sum(axis=-1), 0.0, None)
+    return out / out.sum(axis=-1, keepdims=True)
 
 
 def thesis_chi2(model: np.ndarray, data: np.ndarray, data_unc: np.ndarray,
@@ -614,8 +620,7 @@ def fit_datadriven(source: MultiplicityHist, bkg: MultiplicityHist,
         if templates is not None:
             # Mean model over template replicas, plus the spread they induce in each
             # model bin -- that spread IS the propagated background uncertainty.
-            reps = np.array([analytic_profile_datadriven(eff, t, n_bins)
-                             for t in templates])
+            reps = analytic_profile_datadriven(eff, templates, n_bins)
             prof = reps.mean(axis=0)
             prop_unc = reps.std(axis=0, ddof=1)
             den = np.sqrt(data_unc ** 2 + prop_unc ** 2)
