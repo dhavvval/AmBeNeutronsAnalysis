@@ -290,17 +290,10 @@ def mc_profile_poisson(eff: float, lam: float, n_bins: int, n_throws: int,
 
 
 def mc_profile_datadriven(eff: float, bkg_p: np.ndarray, n_bins: int, n_throws: int,
-                          rng: np.random.Generator,
-                          bkg_unc: Optional[np.ndarray] = None) -> np.ndarray:
+                          rng: np.random.Generator) -> np.ndarray:
     """Toy MC with the background drawn from a measured histogram (eq. 8.2, fig 8.19)."""
-    # bkg_unc fluctuates the template itself per throw-block. Teal does not do this --
-    # BuildMCProfileBkgDist accepts the uncertainty and ignores it, letting it enter
-    # only the chi2 denominator. Opt-in here, for when the background run's statistics
-    # are thin enough that the template uncertainty matters as much as the source's.
     n = int(n_throws)
     p = np.asarray(bkg_p, dtype=float)
-    if bkg_unc is not None:
-        p = np.clip(p + rng.normal(0.0, bkg_unc), 0.0, None)
     s = p.sum()
     if s <= 0:
         raise SystemExit("[efficiency_fit] background template sums to zero")
@@ -541,7 +534,6 @@ def make_grid(spec: dict) -> np.ndarray:
 def fit_datadriven(source: MultiplicityHist, bkg: MultiplicityHist,
                    eff_grid: np.ndarray, engine: str = "analytic",
                    n_throws: int = 1_000_000, rng: Optional[np.random.Generator] = None,
-                   template_fluctuate: bool = False,
                    bkg_scale: float = 1.0,
                    likelihood: str = "thesis_chi2",
                    bkg_unc_mode: str = "thesis_diagonal",
@@ -624,8 +616,7 @@ def fit_datadriven(source: MultiplicityHist, bkg: MultiplicityHist,
             prof = analytic_profile_datadriven(eff, bkg_p, n_bins)
             den = None
         else:
-            prof = mc_profile_datadriven(eff, bkg_p, n_bins, n_throws, rng,
-                                         bkg_unc if template_fluctuate else None)
+            prof = mc_profile_datadriven(eff, bkg_p, n_bins, n_throws, rng)
             den = None
         profiles.append(prof)
         if likelihood == "multinomial":
@@ -1028,7 +1019,6 @@ def run(ctx, argv=None):
                              n_throws=n_throws, rng=rng, likelihood=likelihood)
             rd = fit_datadriven(src, bkg, eff_grid, engine=engine,
                                 n_throws=n_throws, rng=rng,
-                                template_fluctuate=bool(fp.get("template_fluctuate")),
                                 bkg_scale=scale, likelihood=likelihood,
                                 bkg_unc_mode=bkg_unc_mode,
                                 n_bootstrap=int(fp.get("n_bootstrap", 400)))

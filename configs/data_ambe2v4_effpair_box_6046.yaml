@@ -82,7 +82,6 @@ fit_params:
   n_throws: 1000000
   seed: 20260910
   engine: analytic
-  template_fluctuate: false
 
 systematics:
   livetime_s:

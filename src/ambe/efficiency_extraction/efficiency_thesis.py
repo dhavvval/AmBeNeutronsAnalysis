@@ -178,7 +178,6 @@ def run(ctx, argv=None):
     rd = fit_datadriven(src, bkg, eff_grid, engine=engine,
                         n_throws=int(fp.get("n_throws", 1_000_000)), rng=rng,
                         bkg_scale=scale, likelihood=likelihood,
-                        template_fluctuate=bool(fp.get("template_fluctuate")),
                         bkg_unc_mode=fp.get("background_uncertainty", "thesis_diagonal"),
                         n_bootstrap=int(fp.get("n_bootstrap", 400)))
     assert_interior(rp, "poisson")

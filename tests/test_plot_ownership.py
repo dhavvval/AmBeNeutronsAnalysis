@@ -115,7 +115,7 @@ def test_efficiency_plot_passes_numerical_config_to_shared_fitter(monkeypatch):
               eff_grid={"min": .2, "max": .8, "step": .1},
               lambda_grid={"min": .01, "max": .2, "step": .01},
               likelihood="multinomial", background_uncertainty="bootstrap",
-              overflow_policy="clip", n_bootstrap=12, template_fluctuate=True)
+              overflow_policy="clip", n_bootstrap=12)
     ctx = SimpleNamespace(fit_params=fp, plots_dir="unused")
     hist_calls, fit_calls = [], {}
     monkeypatch.setattr(plots, "_resolve_event_index", lambda ctx: object())
@@ -140,7 +140,6 @@ def test_efficiency_plot_passes_numerical_config_to_shared_fitter(monkeypatch):
     assert fit_calls["data"]["likelihood"] == "multinomial"
     assert fit_calls["data"]["bkg_unc_mode"] == "bootstrap"
     assert fit_calls["data"]["n_bootstrap"] == 12
-    assert fit_calls["data"]["template_fluctuate"] is True
 
 
 def test_presentation_adapters_import_the_shared_capture_model():

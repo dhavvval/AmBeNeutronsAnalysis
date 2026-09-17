@@ -96,7 +96,6 @@ fit_params:
 
   engine: analytic                  # analytic | mc
 
-  template_fluctuate: false
 
 waveform_cuts:
   sideband_ic: [1600, 2500]
