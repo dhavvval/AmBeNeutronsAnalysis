@@ -330,9 +330,14 @@ def analytic_profile_datadriven(eff: float, bkg_p: np.ndarray, n_bins: int) -> n
     return out / out.sum()
 
 
-def chi2(model: np.ndarray, data: np.ndarray, data_unc: np.ndarray,
-         bkg_unc: Optional[np.ndarray] = None) -> float:
-    """thesis eq. 8.5 (with bkg_unc) / eq. 8.6 (without)."""
+def thesis_chi2(model: np.ndarray, data: np.ndarray, data_unc: np.ndarray,
+                bkg_unc: Optional[np.ndarray] = None) -> np.ndarray:
+    """thesis eq. 8.5 (with bkg_unc) / eq. 8.6 (without); bins on the last axis.
+
+    Anything broadcastable against `data` works, so a single profile returns a scalar
+    and a whole (n_eff, n_lam, n_bins) scan cube returns the (n_eff, n_lam) surface.
+    That is the only reason this is not three near-copies any more.
+    """
     # The data-driven model carries the background histogram's statistical uncertainty
     # in the denominator because that template is itself measured; the Poisson model
     # does not, because its background is a fitted parameter rather than a measurement.
@@ -340,7 +345,7 @@ def chi2(model: np.ndarray, data: np.ndarray, data_unc: np.ndarray,
     if np.any(den <= 0):
         raise SystemExit("[efficiency_fit] zero uncertainty in a chi2 denominator -- "
                          "the empty-bin floor was not applied")
-    return float(np.sum(((model - data) / den) ** 2))
+    return np.sum(((model - data) / den) ** 2, axis=-1)
 
 
 def multinomial_neg2ll(model: np.ndarray, counts: np.ndarray) -> float:
@@ -621,9 +626,9 @@ def fit_datadriven(source: MultiplicityHist, bkg: MultiplicityHist,
         if likelihood == "multinomial":
             chi2_vals[i] = multinomial_neg2ll(prof, source.counts)
         elif den is not None:
-            chi2_vals[i] = float(np.sum(((prof - data) / den) ** 2))
+            chi2_vals[i] = thesis_chi2(prof, data, den)
         else:
-            chi2_vals[i] = chi2(prof, data, data_unc, den_bkg_unc)
+            chi2_vals[i] = thesis_chi2(prof, data, data_unc, den_bkg_unc)
 
     best = int(np.argmin(chi2_vals))
     lo, hi = delta_chi2_interval(eff_grid, chi2_vals, 1.0)
@@ -666,13 +671,7 @@ def fit_poisson(source: MultiplicityHist, eff_grid: np.ndarray, lam_grid: np.nda
             m = np.clip(cube, 1e-300, None)
             surface = 2.0 * (sat - np.sum(c * np.log(m), axis=-1))
         else:
-            # Guard the denominator the same way chi2() does; this branch used to
-            # inline the sum and skip the check entirely.
-            if np.any(data_unc <= 0):
-                raise SystemExit(
-                    "[efficiency_fit] zero uncertainty in a chi2 denominator -- "
-                    "the empty-bin floor was not applied")
-            surface = np.sum(((cube - data) / data_unc) ** 2, axis=-1)
+            surface = thesis_chi2(cube, data, data_unc)
         bi, bj = np.unravel_index(int(np.argmin(surface)), surface.shape)
         best_profile = cube[bi, bj]
     else:
@@ -683,7 +682,7 @@ def fit_poisson(source: MultiplicityHist, eff_grid: np.ndarray, lam_grid: np.nda
                 prof = mc_profile_poisson(eff, lam, n_bins, n_throws, rng)
                 surface[i, j] = (multinomial_neg2ll(prof, source.counts)
                                  if likelihood == "multinomial"
-                                 else chi2(prof, data, data_unc, None))
+                                 else thesis_chi2(prof, data, data_unc, None))
                 profiles[(i, j)] = prof
         bi, bj = np.unravel_index(int(np.argmin(surface)), surface.shape)
         best_profile = profiles[(bi, bj)]

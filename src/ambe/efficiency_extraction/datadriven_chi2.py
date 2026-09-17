@@ -17,7 +17,7 @@ import numpy as np
 from ambe.paths import REPOSITORY_ROOT
 from .efficiency_fit import (
     load_event_index, build_multiplicity, fit_datadriven, make_grid,
-    analytic_profile_datadriven, chi2, delta_chi2_interval,
+    analytic_profile_datadriven, thesis_chi2, delta_chi2_interval,
 )
 
 
@@ -34,7 +34,7 @@ def refit_with_scaled_bkg_unc(source, bkg, eff_grid, bkg_unc_scale):
     for i, eff in enumerate(eff_grid):
         prof = analytic_profile_datadriven(eff, bkg_p, n_bins)
         profiles.append(prof)
-        chi2_vals[i] = chi2(prof, data, data_unc, bkg_unc)
+        chi2_vals[i] = thesis_chi2(prof, data, data_unc, bkg_unc)
     best = int(np.argmin(chi2_vals))
     lo, hi = delta_chi2_interval(eff_grid, chi2_vals, 1.0)
     return eff_grid[best], lo, hi, chi2_vals[best], n_bins - 1
