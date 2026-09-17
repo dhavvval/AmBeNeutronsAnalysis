@@ -802,7 +802,7 @@ def systematics(eff_nominal: float, eff_alternative: float,
     notes: list[str] = []
     delta_model_signed = eff_alternative - eff_nominal
 
-    # --- housing -----------------------------------------------------------
+    # Housing captures (8.7.2).
     if housing_n_captures is not None and housing_n_simulated:
         delta_h = housing_n_captures / housing_n_simulated
         delta_h_unc = np.sqrt(max(housing_n_captures, 0)) / housing_n_simulated
@@ -817,7 +817,7 @@ def systematics(eff_nominal: float, eff_alternative: float,
                      "MC housing-capture fraction has been supplied. The quoted total "
                      "systematic is therefore incomplete and is a LOWER BOUND.")
 
-    # --- background false-start triggers -----------------------------------
+    # Background false-start triggers (8.7.3).
     f_b = f_s = None
     delta_bt = delta_bt_unc = None
     publishable = False
@@ -1134,7 +1134,7 @@ def run(ctx, argv=None):
         except SystemExit as e:
             print(f"   cross-check skipped: {e}")
 
-    # ---------------- outputs ----------------
+    # Outputs.
     df = pd.DataFrame(rows)
     out_csv = ctx.csv_path("efficiency_fit")
     df.to_csv(out_csv, index=False)
