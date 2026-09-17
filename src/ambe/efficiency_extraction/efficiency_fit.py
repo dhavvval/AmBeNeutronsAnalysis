@@ -404,14 +404,14 @@ def pseudo_experiment_p_value(model_p: np.ndarray, n_events: int, chi2_obs: floa
     p = np.clip(np.asarray(model_p, dtype=float), 0.0, None)
     p = p / p.sum()
     n_tot = int(n_events)
-    worse = 0
-    for _ in range(int(n_toys)):
-        toy = rng.multinomial(n_tot, p).astype(float)
-        unc = data_unc_fn(toy, n_tot)
-        c2 = float(np.sum(((p - toy / n_tot) / unc) ** 2))
-        if c2 >= chi2_obs:
-            worse += 1
-    return worse / float(n_toys)
+    # One batched draw rather than n_toys sequential ones. numpy fills the batch in
+    # the same order, so both the toys and the generator state afterwards are
+    # identical to the loop -- which matters, because `rng` is shared across the two
+    # fits in run() and the published p-values depend on that stream.
+    toys = rng.multinomial(n_tot, p, size=int(n_toys)).astype(float)
+    unc = data_unc_fn(toys, n_tot)
+    c2 = np.sum(((p - toys / n_tot) / unc) ** 2, axis=-1)
+    return float(np.count_nonzero(c2 >= chi2_obs)) / float(n_toys)
 
 
 def _toy_unc(counts: np.ndarray, n_tot: int) -> np.ndarray:
