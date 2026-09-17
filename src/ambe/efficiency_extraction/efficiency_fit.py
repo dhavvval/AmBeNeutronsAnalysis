@@ -26,7 +26,8 @@ from typing import Iterable, Optional
 
 import numpy as np
 import pandas as pd
-from scipy.special import gammaln, xlogy
+from scipy.special import xlogy
+from scipy.stats import poisson
 
 # Poisson upper 68.3 % confidence limit for zero observed counts. Teal's convention
 # for empty bins (phase2.py:131-132): an empty bin has sqrt(N) = 0, which would make
@@ -250,15 +251,10 @@ def background_scale_factor(acq_window_ns: float, sig_start_ns: float,
 
 
 def poisson_pmf(k: np.ndarray, lam) -> np.ndarray:
-    """Poisson pmf in log space, broadcasting k against lam; k on the last axis."""
-    # gammaln for log(k!) rather than a per-element loop: the scan calls this once per
-    # lambda and a Python loop here made the 2D scan ~30x slower than the arithmetic
-    # warrants. lam == 0 is a pole of log, so it is substituted and masked back out.
-    k = np.asarray(k, dtype=float)
-    lam = np.asarray(lam, dtype=float)
-    safe = np.where(lam > 0, lam, 1.0)
-    out = np.exp(-lam + k * np.log(safe) - gammaln(k + 1.0))
-    return np.where(lam > 0, out, (k == 0).astype(float))
+    """Poisson pmf, broadcasting k against lam; k on the last axis."""
+    # scipy handles mu = 0 natively, returning [1, 0, 0, ...], so the lambda grid can
+    # start at zero without the np.where guard the hand-rolled gammaln version needed.
+    return poisson.pmf(k, mu=lam)
 
 
 def analytic_profile_poisson(eff, lam, n_bins: int) -> np.ndarray:
