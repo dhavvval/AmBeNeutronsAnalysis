@@ -249,35 +249,38 @@ def background_scale_factor(acq_window_ns: float, sig_start_ns: float,
     return num / den
 
 
-def _poisson_pmf(k: np.ndarray, lam: float) -> np.ndarray:
-    """Poisson pmf, evaluated in log space so large k cannot overflow."""
-    k = np.asarray(k)
-    if lam == 0:
-        return (k == 0).astype(float)
-    return np.exp(-lam + k * np.log(lam) - gammaln(k + 1.0))
+def poisson_pmf(k: np.ndarray, lam) -> np.ndarray:
+    """Poisson pmf in log space, broadcasting k against lam; k on the last axis."""
+    # gammaln for log(k!) rather than a per-element loop: the scan calls this once per
+    # lambda and a Python loop here made the 2D scan ~30x slower than the arithmetic
+    # warrants. lam == 0 is a pole of log, so it is substituted and masked back out.
+    k = np.asarray(k, dtype=float)
+    lam = np.asarray(lam, dtype=float)
+    safe = np.where(lam > 0, lam, 1.0)
+    out = np.exp(-lam + k * np.log(safe) - gammaln(k + 1.0))
+    return np.where(lam > 0, out, (k == 0).astype(float))
 
 
-def poisson_matrix(k: np.ndarray, lams: np.ndarray) -> np.ndarray:
-    """Poisson pmf for every (lam, k) pair at once -> shape (len(lams), len(k))."""
-    # The pmf does not depend on the efficiency, so the 2D scan evaluates it once per
-    # lambda and reuses it across the whole efficiency axis.
-    k = np.asarray(k, dtype=float)[None, :]
-    lams = np.asarray(lams, dtype=float)[:, None]
-    out = np.exp(-lams + k * np.log(np.where(lams > 0, lams, 1.0)) - gammaln(k + 1.0))
-    return np.where(lams > 0, out, (k == 0).astype(float))
+def analytic_profile_poisson(eff, lam, n_bins: int) -> np.ndarray:
+    """Exact pmf of M = Bernoulli(eff) + Poisson(lam), binned like the data.
 
-
-def analytic_profile_poisson(eff: float, lam: float, n_bins: int) -> np.ndarray:
-    """Exact pmf of M = Bernoulli(eff) + Poisson(lam), binned like the data."""
+    eff and lam broadcast against each other and the bin axis is last, so passing
+    eff_grid[:, None] with lam_grid[None, :] builds the whole (n_eff, n_lam, n_bins)
+    scan cube in one shot -- a nested Python loop over ~200k grid points was the
+    dominant cost of fit_poisson.
+    """
     # P(M=k) = eff * Pois(k-1; lam) + (1-eff) * Pois(k; lam). Not an approximation of
     # the toy MC -- the same model in closed form. It removes the MC sampling noise
     # that otherwise makes delta-chi2 contours jitter between grid points.
-    k = np.arange(n_bins)
-    p = (1.0 - eff) * _poisson_pmf(k, lam)
-    p[1:] += eff * _poisson_pmf(k[:-1], lam)
-    # Everything above the top bin clips into it.
-    p[-1] += max(0.0, 1.0 - p.sum())
-    return p / p.sum()
+    pois = poisson_pmf(np.arange(n_bins), np.asarray(lam)[..., None])
+    shifted = np.zeros_like(pois)
+    shifted[..., 1:] = pois[..., :-1]
+    e = np.asarray(eff, dtype=float)[..., None]
+    p = (1.0 - e) * pois + e * shifted
+    # Everything above the top bin clips into it, matching the MC path's
+    # np.histogram(range=(0, n_bins)) so the two engines compare bin for bin.
+    p[..., -1] += np.clip(1.0 - p.sum(axis=-1), 0.0, None)
+    return p / p.sum(axis=-1, keepdims=True)
 
 
 def mc_profile_poisson(eff: float, lam: float, n_bins: int, n_throws: int,
@@ -653,20 +656,8 @@ def fit_poisson(source: MultiplicityHist, eff_grid: np.ndarray, lam_grid: np.nda
     data, data_unc = source.normed, source.normed_unc
 
     if engine == "analytic":
-        # Build the whole (eff, lam, bin) profile cube in one shot. The pmf for a
-        # given lambda does not depend on the efficiency, so it is evaluated once
-        # per lambda and combined across the efficiency axis by broadcasting --
-        # a nested Python loop over ~30k grid points was the dominant cost.
-        k = np.arange(n_bins)
-        pois = poisson_matrix(k, lam_grid)                    # (n_lam, n_bins)
-        shifted = np.zeros_like(pois)
-        shifted[:, 1:] = pois[:, :-1]                         # Pois(k-1; lam)
-        e = np.asarray(eff_grid)[:, None, None]
-        cube = (1.0 - e) * pois[None, :, :] + e * shifted[None, :, :]
-        # Match the clipping of np.histogram(range=(0, n_bins)): everything above
-        # the top bin piles into it rather than vanishing.
-        cube[..., -1] += np.clip(1.0 - cube.sum(axis=-1), 0.0, None)
-        cube /= cube.sum(axis=-1, keepdims=True)
+        # The whole (n_eff, n_lam, n_bins) profile cube in one broadcast call.
+        cube = analytic_profile_poisson(eff_grid[:, None], lam_grid[None, :], n_bins)
         if likelihood == "multinomial":
             c = np.asarray(source.counts, dtype=float)
             n_tot = c.sum()
