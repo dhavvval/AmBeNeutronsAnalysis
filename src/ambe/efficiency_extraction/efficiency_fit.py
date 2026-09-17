@@ -26,7 +26,7 @@ from typing import Iterable, Optional
 
 import numpy as np
 import pandas as pd
-from scipy.special import gammaln
+from scipy.special import gammaln, xlogy
 
 # Poisson upper 68.3 % confidence limit for zero observed counts. Teal's convention
 # for empty bins (phase2.py:131-132): an empty bin has sqrt(N) = 0, which would make
@@ -348,24 +348,28 @@ def thesis_chi2(model: np.ndarray, data: np.ndarray, data_unc: np.ndarray,
     return np.sum(((model - data) / den) ** 2, axis=-1)
 
 
-def multinomial_neg2ll(model: np.ndarray, counts: np.ndarray) -> float:
-    """-2 ln L for observed COUNTS under a multinomial with probabilities `model`."""
-    # chi2 above treats the normalised bins as independent Gaussians with variance
+def multinomial_deviance(model: np.ndarray, counts: np.ndarray) -> np.ndarray:
+    """-2 ln L against the saturated model, for observed COUNTS; bins on the last axis."""
+    # thesis_chi2 treats the normalised bins as independent Gaussians with variance
     # p_i/N. They are neither: multiplicity bins are multinomial, so they are
     # anti-correlated (Cov = -p_i p_j / N, the probabilities must sum to one) and the
     # diagonal variance is p_i(1-p_i)/N. The gap is largest where it matters most --
     # bin 0 holds most of the mass, so the diagonal form overestimates the uncertainty
     # of the single most constraining bin. Offered as `likelihood: multinomial` with
     # the thesis chi2 still the default, so the shift is a measured number.
-    m = np.clip(np.asarray(model, dtype=float), 1e-300, None)
-    m = m / m.sum()
     c = np.asarray(counts, dtype=float)
-    # Saturated-model subtraction, so the statistic is a deviance directly
-    # comparable to a chi2 rather than an arbitrary offset.
-    n = c.sum()
-    with np.errstate(divide="ignore", invalid="ignore"):
-        sat = np.where(c > 0, c * np.log(c / n), 0.0)
-    return float(2.0 * np.sum(sat - c * np.log(m)))
+    # xlogy gives 0*log(0) = 0 exactly, which is what the old np.where + errstate
+    # dance was emulating for empty bins. The 1e-300 clip is load-bearing and stays:
+    # without it a model bin of exactly zero against a non-empty count returns -inf,
+    # and np.argmin on a surface containing nan returns the nan's index. The whole
+    # lambda = 0 column of the scan cube is exactly zero above bin 1.
+    # Subtract the saturated model per bin, not per histogram: it keeps the summation
+    # order of the scalar form this replaces, so the statistic is bit-identical to the
+    # pre-refactor numbers rather than merely equal to 1e-15.
+    sat = xlogy(c, c / c.sum())
+    m = np.clip(np.asarray(model, dtype=float), 1e-300, None)
+    m = m / m.sum(axis=-1, keepdims=True)
+    return 2.0 * np.sum(sat - xlogy(c, m), axis=-1)
 
 
 def bootstrap_background_templates(bkg: "MultiplicityHist", n_draws: int,
@@ -624,7 +628,7 @@ def fit_datadriven(source: MultiplicityHist, bkg: MultiplicityHist,
             den = None
         profiles.append(prof)
         if likelihood == "multinomial":
-            chi2_vals[i] = multinomial_neg2ll(prof, source.counts)
+            chi2_vals[i] = multinomial_deviance(prof, source.counts)
         elif den is not None:
             chi2_vals[i] = thesis_chi2(prof, data, den)
         else:
@@ -664,12 +668,7 @@ def fit_poisson(source: MultiplicityHist, eff_grid: np.ndarray, lam_grid: np.nda
         # The whole (n_eff, n_lam, n_bins) profile cube in one broadcast call.
         cube = analytic_profile_poisson(eff_grid[:, None], lam_grid[None, :], n_bins)
         if likelihood == "multinomial":
-            c = np.asarray(source.counts, dtype=float)
-            n_tot = c.sum()
-            with np.errstate(divide="ignore", invalid="ignore"):
-                sat = float(np.sum(np.where(c > 0, c * np.log(c / n_tot), 0.0)))
-            m = np.clip(cube, 1e-300, None)
-            surface = 2.0 * (sat - np.sum(c * np.log(m), axis=-1))
+            surface = multinomial_deviance(cube, source.counts)
         else:
             surface = thesis_chi2(cube, data, data_unc)
         bi, bj = np.unravel_index(int(np.argmin(surface)), surface.shape)
@@ -680,7 +679,7 @@ def fit_poisson(source: MultiplicityHist, eff_grid: np.ndarray, lam_grid: np.nda
         for i, eff in enumerate(eff_grid):
             for j, lam in enumerate(lam_grid):
                 prof = mc_profile_poisson(eff, lam, n_bins, n_throws, rng)
-                surface[i, j] = (multinomial_neg2ll(prof, source.counts)
+                surface[i, j] = (multinomial_deviance(prof, source.counts)
                                  if likelihood == "multinomial"
                                  else thesis_chi2(prof, data, data_unc, None))
                 profiles[(i, j)] = prof
