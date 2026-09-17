@@ -421,7 +421,7 @@ def test_frozen_fixture_profile_interval_is_narrower_than_joint():
                      make_grid({"min": 0.00, "max": 0.60, "step": 0.002}),
                      engine="analytic")
     assert rp.eff_joint_lo < rp.eff_lo <= rp.best_eff <= rp.eff_hi < rp.eff_joint_hi
-    assert rp.ndof_thesis == 6          # n_bins - n_fitted
+    assert rp.ndof == 6          # n_bins - n_fitted
     assert rp.ndof_standard == 5        # n_bins - 1 - n_fitted
 
 

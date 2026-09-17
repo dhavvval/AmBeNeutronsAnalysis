@@ -1,50 +1,28 @@
-"""
-Neutron detection efficiency by multiplicity fit -- Pershing thesis chapter 8.6.
+"""Neutron detection efficiency by multiplicity fit -- Pershing thesis chapter 8.6.
 
-WHY THIS MODULE EXISTS. The efficiency this repo quotes elsewhere is a naive
-counting ratio, `unique_neutron_triggers / ambe_triggers` (data/icscan.py:17-18,
-produced in data/processor.py:1294-1308). That ratio is biased whenever the delayed
-window contains background candidates: an acquisition with multiplicity > 1 has at
-most one correlated AmBe neutron, so every additional candidate is background, and
-counting "has >= 1 candidate" folds that background straight into the efficiency.
+The efficiency quoted elsewhere in this repo is a naive counting ratio,
+unique_neutron_triggers / ambe_triggers (data/icscan.py:17-18). That ratio is biased
+whenever the delayed window holds background: an acquisition contains at most one
+correlated AmBe neutron, so every additional candidate is background, and counting
+"has >= 1 candidate" folds it straight into the efficiency. This module fits the
+per-acquisition multiplicity distribution instead, M = delta_S + N_B (eq. 8.2), with
+delta_S ~ Bernoulli(eps_n) (eq. 8.3) and N_B drawn either from the measured background
+run (data-driven, one parameter, eq. 8.5) or from Poisson(lambda_n) (uncorrelated, two
+parameters, eq. 8.6). eps_n is the chi2 profile minimum, with the 68.3 % interval at
+delta-chi2 <= 1; the gap between the two models is the background-model systematic.
 
-The thesis instead FITS the per-acquisition multiplicity distribution. Each toy throw
-is
-
-    M = delta_S + N_B                                            (thesis eq. 8.2)
-
-with delta_S ~ Bernoulli(eps_n) the one correlated AmBe neutron (eq. 8.3) and N_B the
-background contribution, drawn two different ways:
-
-    data-driven   N_B sampled from the measured background-run multiplicity
-                  histogram. One free parameter, eps_n. chi2 carries the background
-                  histogram's own statistical uncertainty (eq. 8.5).
-    uncorrelated  N_B ~ Poisson(lambda_n), lambda_n free. Two free parameters.
-                  chi2 uses the source uncertainty only (eq. 8.6).
-
-eps_n is read off the chi2 profile minimum, with the 68.3 % interval taken as
-delta-chi2 <= 1 for the 1-parameter fit and <= 2.30 for the 2-parameter fit
-(eq. 8.7). The difference between the two models' best fits is the background-model
-systematic delta_m (section 8.7.1).
-
-THE ZERO BIN IS THE POINT. Acquisitions with NO candidate are the most constraining
-bin in the fit -- they are what distinguishes a low efficiency from a high one -- and
-they are the one bin that is NOT in the candidate CSVs, which only contain events that
-produced at least one candidate. It has to come from the Stage-1 trigger count. Getting
-that denominator wrong is the single easiest way to produce a confident wrong number,
-which is why `build_multiplicity` takes an explicit denominator choice and records its
-provenance rather than inferring one.
-
-Usage:
-    from ambe.efficiency_extraction.efficiency_fit import (
-        load_event_index, build_multiplicity, fit_datadriven, fit_poisson)
+Acquisitions with NO candidate are the most constraining bin and the only bin missing
+from the candidate CSVs, which hold just the events that produced a candidate -- it has
+to come from the Stage-1 trigger count. Getting that denominator wrong is the easiest
+way to produce a confident wrong number, so build_multiplicity takes the denominator
+choice explicitly and records its provenance rather than inferring one.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import Iterable, Optional
 
 import numpy as np
 import pandas as pd
@@ -65,9 +43,6 @@ BKG_UNC_MODES = ("thesis_diagonal", "bootstrap")
 ENGINES = ("analytic", "mc")
 
 
-# --------------------------------------------------------------------------- #
-# Multiplicity histograms
-# --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class MultiplicityHist:
     """A per-acquisition candidate-multiplicity histogram, zero bin included.
@@ -85,15 +60,11 @@ class MultiplicityHist:
     n_overflow: int = 0
 
     def __post_init__(self):
-        """The histogram must account for every acquisition in the denominator.
-
-        Before this check, overflow acquisitions were counted in `n_overflow` and
-        then dropped from `counts`, so `counts.sum()` fell short of `denominator`
-        and `normed` renormalised over a shrunken total -- inflating every bin
-        fraction, bin 0 most of all. The models clip overflow into the top bin
-        (analytic_profile_poisson, analytic_profile_datadriven), so data and model
-        were using opposite conventions whenever overflow existed.
-        """
+        """Every acquisition in the denominator must land in exactly one bin."""
+        # Overflow acquisitions used to be counted in n_overflow and then dropped from
+        # counts, so normed renormalised over a shrunken total and inflated every bin
+        # fraction, bin 0 most of all. The model profiles clip overflow into the top
+        # bin, so data and model were on opposite conventions whenever overflow existed.
         total = int(round(float(self.counts.sum())))
         if total != self.denominator:
             raise ValueError(
@@ -118,14 +89,8 @@ class MultiplicityHist:
 
     @property
     def naive_efficiency(self) -> float:
-        """`unique_neutron_triggers / denominator` -- what this module replaces.
-        Kept so every fit can be reported against the number it is correcting."""
+        """unique_neutron_triggers / denominator -- the number this module corrects."""
         return self.n_with_candidate / self.denominator if self.denominator else np.nan
-
-    @property
-    def mean_multiplicity(self) -> float:
-        n = self.counts.sum()
-        return float(np.average(np.arange(len(self.counts)), weights=self.counts)) if n else np.nan
 
     @property
     def normed(self) -> np.ndarray:
@@ -133,14 +98,8 @@ class MultiplicityHist:
 
     @property
     def normed_unc(self) -> np.ndarray:
-        """sqrt(N)/N_tot per bin, with the empty-bin floor applied.
-
-        Applied to BOTH source and background histograms -- see EMPTY_BIN_UNC_COUNTS.
-        """
-        n_tot = self.counts.sum()
-        unc = np.sqrt(self.counts) / n_tot
-        unc[self.counts == 0] = EMPTY_BIN_UNC_COUNTS / n_tot
-        return unc
+        """sqrt(N)/N_tot per bin with the empty-bin floor; source AND background."""
+        return _toy_unc(self.counts, self.counts.sum())
 
     def summary(self) -> str:
         return (f"run {self.run}: total={self.total_events:,} cosmic={self.cosmic_events:,} "
@@ -151,11 +110,9 @@ class MultiplicityHist:
 
 
 def load_event_index(paths: Iterable[Path] | Path) -> pd.DataFrame:
-    """Read one or more EventIndex parquets, one row per Stage-1-admitted event.
-
-    Adds `n_accepted_clusters` if absent, matching icscan.py:193-195 so the two
-    modules agree on what an accepted cluster count is.
-    """
+    """Read one or more EventIndex parquets, one row per Stage-1-admitted event."""
+    # n_accepted_clusters is synthesised if absent, matching icscan.py:193-195 so the
+    # two modules agree on what an accepted cluster count is.
     paths = [paths] if isinstance(paths, (str, Path)) else list(paths)
     frames = []
     for p in paths:
@@ -174,28 +131,17 @@ def build_multiplicity(event_index: pd.DataFrame, run: int, n_bins: int = 8,
                        numerator_mode: str = "noncosmic",
                        provenance: str = "EventIndex",
                        overflow_policy: str = "fail") -> MultiplicityHist:
-    """Build the multiplicity histogram for one run, zero bin included.
-
-    numerator_mode:
-        noncosmic   an event contributes to the numerator only if it is NOT
-                    cosmic-vetoed. Self-consistent with a denominator that excludes
-                    cosmic events.
-        production  reproduces the production accumulator, which counts a
-                    cosmic-vetoed event in the numerator while subtracting it from
-                    the denominator (icscan.py:368-406). Inconsistent, but it is what
-                    the published numbers count, so it is reproducible on demand.
-
-    On run 6062 the two differ by 2.8 percentage points, which is larger than the
-    whole systematic budget of thesis table 8.6 -- hence both are offered and the
-    caller is expected to report both.
-
-    overflow_policy:
-        fail   (default) an acquisition with multiplicity >= n_bins is an error.
-               Merging physically different multiplicities into one bin is a choice
-               nobody should make implicitly, and these runs have no overflow.
-        clip   fold overflow into the top bin, matching what the model profiles
-               already do. The top bin then means ">= n_bins - 1" everywhere.
-    """
+    """Build the multiplicity histogram for one run, zero bin included."""
+    # numerator_mode='noncosmic' lets an event contribute only if it is not
+    # cosmic-vetoed, consistent with a denominator that excludes cosmics.
+    # 'production' reproduces the production accumulator, which counts a vetoed event
+    # in the numerator while subtracting it from the denominator (icscan.py:368-406) --
+    # inconsistent, but it is what the published numbers count. On run 6062 the two
+    # differ by 2.8 points, more than the whole systematic budget of table 8.6, so both
+    # are offered and the caller is expected to report both.
+    # overflow_policy='fail' treats multiplicity >= n_bins as an error (merging
+    # physically different multiplicities is not a choice to make implicitly, and these
+    # runs have none); 'clip' folds it into the top bin, which then means ">= n_bins-1".
     if denominator not in DENOMINATOR_CHOICES:
         raise SystemExit(f"[efficiency_fit] denominator must be one of {DENOMINATOR_CHOICES}")
     if numerator_mode not in NUMERATOR_MODES:
@@ -259,11 +205,9 @@ def multiplicity_from_counts(run: int, nonzero: dict[int, int], denominator_tota
                              overflow_policy: str = "fail") -> MultiplicityHist:
     """Build a histogram from an explicit {multiplicity: n_events} map.
 
-    For validation against published numbers (thesis figs 8.18/8.19) and for the
-    closure tests, where there is no EventIndex to read.
-
-    `overflow_policy` behaves as in build_multiplicity. This path previously dropped
-    out-of-range keys silently AND recorded no n_overflow, so the loss was invisible.
+    For validation against published numbers (thesis figs 8.18/8.19) and the closure
+    tests, where there is no EventIndex to read. overflow_policy behaves as in
+    build_multiplicity; this path used to drop out-of-range keys silently.
     """
     if overflow_policy not in OVERFLOW_POLICIES:
         raise SystemExit(
@@ -292,18 +236,11 @@ def multiplicity_from_counts(run: int, nonzero: dict[int, int], denominator_tota
         numerator_mode="noncosmic", provenance=provenance, n_overflow=n_overflow)
 
 
-# --------------------------------------------------------------------------- #
-# Model profiles
-# --------------------------------------------------------------------------- #
 def background_scale_factor(acq_window_ns: float, sig_start_ns: float,
                             bkg_start_ns: float) -> float:
-    """Rescale a background rate measured in one time window to another.
-
-    thesis phase2.py:169. The background is flat in time, so a rate measured over
-    [bkg_start, W] scales to [sig_start, W] by the livetime ratio. Equals 1 whenever
-    the two windows start at the same place -- which is the case for the 6264/6265
-    pair -- but is kept explicit so it cannot silently become wrong if they diverge.
-    """
+    """Rescale a flat background rate from one time window to another (phase2.py:169)."""
+    # Equals 1 whenever the two windows start together, as they do for the 6264/6265
+    # pair, but is kept explicit so it cannot silently go wrong if they diverge.
     num = acq_window_ns - sig_start_ns
     den = acq_window_ns - bkg_start_ns
     if den <= 0:
@@ -313,12 +250,7 @@ def background_scale_factor(acq_window_ns: float, sig_start_ns: float,
 
 
 def _poisson_pmf(k: np.ndarray, lam: float) -> np.ndarray:
-    """Poisson pmf, in log space so large k cannot overflow.
-
-    Uses gammaln for log(k!) rather than summing logs per element: the scan calls
-    this once per grid point, and a per-element Python loop here made a 2D scan
-    ~30x slower than the arithmetic warrants.
-    """
+    """Poisson pmf, evaluated in log space so large k cannot overflow."""
     k = np.asarray(k)
     if lam == 0:
         return (k == 0).astype(float)
@@ -326,11 +258,9 @@ def _poisson_pmf(k: np.ndarray, lam: float) -> np.ndarray:
 
 
 def poisson_matrix(k: np.ndarray, lams: np.ndarray) -> np.ndarray:
-    """Poisson pmf for every (lam, k) pair at once -> shape (len(lams), len(k)).
-
-    The 2D scan evaluates the same Poisson pmf for every efficiency at a given
-    lambda, so it is computed once per lambda and reused across the efficiency axis.
-    """
+    """Poisson pmf for every (lam, k) pair at once -> shape (len(lams), len(k))."""
+    # The pmf does not depend on the efficiency, so the 2D scan evaluates it once per
+    # lambda and reuses it across the whole efficiency axis.
     k = np.asarray(k, dtype=float)[None, :]
     lams = np.asarray(lams, dtype=float)[:, None]
     out = np.exp(-lams + k * np.log(np.where(lams > 0, lams, 1.0)) - gammaln(k + 1.0))
@@ -338,17 +268,10 @@ def poisson_matrix(k: np.ndarray, lams: np.ndarray) -> np.ndarray:
 
 
 def analytic_profile_poisson(eff: float, lam: float, n_bins: int) -> np.ndarray:
-    """Exact pmf of M = Bernoulli(eff) + Poisson(lam), binned like the data.
-
-    P(M=k) = eff * Pois(k-1; lam) + (1-eff) * Pois(k; lam)
-
-    This is not an approximation of the toy MC -- it is the same model evaluated in
-    closed form. Using it removes MC sampling noise from the chi2 surface, which is
-    what otherwise makes delta-chi2 contour extraction jitter between grid points.
-
-    The last bin absorbs the overflow, matching np.histogram(range=(0, n_bins))'s
-    CLIPPING behaviour in the MC path, so the two engines are comparable bin for bin.
-    """
+    """Exact pmf of M = Bernoulli(eff) + Poisson(lam), binned like the data."""
+    # P(M=k) = eff * Pois(k-1; lam) + (1-eff) * Pois(k; lam). Not an approximation of
+    # the toy MC -- the same model in closed form. It removes the MC sampling noise
+    # that otherwise makes delta-chi2 contours jitter between grid points.
     k = np.arange(n_bins)
     p = (1.0 - eff) * _poisson_pmf(k, lam)
     p[1:] += eff * _poisson_pmf(k[:-1], lam)
@@ -370,14 +293,11 @@ def mc_profile_poisson(eff: float, lam: float, n_bins: int, n_throws: int,
 def mc_profile_datadriven(eff: float, bkg_p: np.ndarray, n_bins: int, n_throws: int,
                           rng: np.random.Generator,
                           bkg_unc: Optional[np.ndarray] = None) -> np.ndarray:
-    """Toy MC with the background drawn from a measured histogram (eq. 8.2 + fig 8.19).
-
-    `bkg_unc` fluctuates the TEMPLATE itself per throw-block. Teal does not do this --
-    `BuildMCProfileBkgDist` accepts the uncertainty and ignores it, letting it enter
-    only the chi2 denominator. Passing it here is opt-in, for the case where the
-    background run's own statistics are thin enough that the template uncertainty
-    matters as much as the source's.
-    """
+    """Toy MC with the background drawn from a measured histogram (eq. 8.2, fig 8.19)."""
+    # bkg_unc fluctuates the template itself per throw-block. Teal does not do this --
+    # BuildMCProfileBkgDist accepts the uncertainty and ignores it, letting it enter
+    # only the chi2 denominator. Opt-in here, for when the background run's statistics
+    # are thin enough that the template uncertainty matters as much as the source's.
     n = int(n_throws)
     p = np.asarray(bkg_p, dtype=float)
     if bkg_unc is not None:
@@ -407,18 +327,12 @@ def analytic_profile_datadriven(eff: float, bkg_p: np.ndarray, n_bins: int) -> n
     return out / out.sum()
 
 
-# --------------------------------------------------------------------------- #
-# Chi-square and interval extraction
-# --------------------------------------------------------------------------- #
 def chi2(model: np.ndarray, data: np.ndarray, data_unc: np.ndarray,
          bkg_unc: Optional[np.ndarray] = None) -> float:
-    """thesis eq. 8.5 (with bkg_unc) / eq. 8.6 (without).
-
-    The data-driven model carries the background histogram's statistical uncertainty
-    in the denominator because the background template is itself measured; the
-    Poisson model does not, because its background is a fitted parameter rather than
-    a measurement.
-    """
+    """thesis eq. 8.5 (with bkg_unc) / eq. 8.6 (without)."""
+    # The data-driven model carries the background histogram's statistical uncertainty
+    # in the denominator because that template is itself measured; the Poisson model
+    # does not, because its background is a fitted parameter rather than a measurement.
     den = data_unc if bkg_unc is None else np.sqrt(data_unc ** 2 + bkg_unc ** 2)
     if np.any(den <= 0):
         raise SystemExit("[efficiency_fit] zero uncertainty in a chi2 denominator -- "
@@ -427,20 +341,14 @@ def chi2(model: np.ndarray, data: np.ndarray, data_unc: np.ndarray,
 
 
 def multinomial_neg2ll(model: np.ndarray, counts: np.ndarray) -> float:
-    """-2 ln L for observed COUNTS under a multinomial with probabilities `model`.
-
-    WHY THIS EXISTS. `chi2` above treats the normalised bins as independent
-    Gaussians with variance p_i/N. They are neither. Normalised multiplicity bins
-    are multinomial: they are anti-correlated (Cov(p_i,p_j) = -p_i p_j / N, because
-    the probabilities must sum to one) and the correct diagonal variance is
-    p_i(1-p_i)/N, not p_i/N. The difference is largest exactly where it matters --
-    bin 0 holds most of the mass, so p_0(1-p_0) << p_0 and the diagonal form
-    OVERESTIMATES the uncertainty of the single most constraining bin.
-
-    This is offered as `likelihood: multinomial`; the thesis chi2 remains the
-    default so published comparisons hold. Reported side by side so the shift is a
-    measured number rather than an assumption.
-    """
+    """-2 ln L for observed COUNTS under a multinomial with probabilities `model`."""
+    # chi2 above treats the normalised bins as independent Gaussians with variance
+    # p_i/N. They are neither: multiplicity bins are multinomial, so they are
+    # anti-correlated (Cov = -p_i p_j / N, the probabilities must sum to one) and the
+    # diagonal variance is p_i(1-p_i)/N. The gap is largest where it matters most --
+    # bin 0 holds most of the mass, so the diagonal form overestimates the uncertainty
+    # of the single most constraining bin. Offered as `likelihood: multinomial` with
+    # the thesis chi2 still the default, so the shift is a measured number.
     m = np.clip(np.asarray(model, dtype=float), 1e-300, None)
     m = m / m.sum()
     c = np.asarray(counts, dtype=float)
@@ -454,19 +362,14 @@ def multinomial_neg2ll(model: np.ndarray, counts: np.ndarray) -> float:
 
 def bootstrap_background_templates(bkg: "MultiplicityHist", n_draws: int,
                                    rng: np.random.Generator) -> np.ndarray:
-    """Dirichlet-resample the background template `n_draws` times.
-
-    The thesis formula adds the background histogram's per-bin uncertainty straight
-    into the chi2 denominator. But the fitted model is a Bernoulli CONVOLUTION of
-    that template: an uncertainty in background bin k propagates into model bins k
-    and k+1, weighted by the efficiency, not into bin k alone. Adding it per-bin is
-    an approximation that matters most when the background run is small -- which is
-    exactly the regime here (run 6264 has 22 triggers).
-
-    A Dirichlet posterior with a Jeffreys prior (alpha = counts + 1/2) is used rather
-    than a plain multinomial bootstrap so that bins observed as zero still carry
-    probability mass, instead of being frozen at exactly zero in every replica.
-    """
+    """Dirichlet-resample the background template `n_draws` times."""
+    # The thesis adds the background histogram's per-bin uncertainty straight into the
+    # chi2 denominator, but the fitted model is a Bernoulli CONVOLUTION of the template:
+    # an uncertainty in background bin k propagates into model bins k and k+1, weighted
+    # by the efficiency, not into bin k alone. The per-bin approximation matters most
+    # when the background run is small -- exactly this regime, 6264 has 22 triggers.
+    # Jeffreys prior (alpha = counts + 1/2) rather than a plain multinomial bootstrap,
+    # so bins observed as zero still carry mass instead of being frozen at zero.
     alpha = np.asarray(bkg.counts, dtype=float) + 0.5
     return rng.dirichlet(alpha, size=int(n_draws))
 
@@ -474,16 +377,12 @@ def bootstrap_background_templates(bkg: "MultiplicityHist", n_draws: int,
 def pseudo_experiment_p_value(model_p: np.ndarray, n_events: int, chi2_obs: float,
                               data_unc_fn, n_toys: int,
                               rng: np.random.Generator) -> float:
-    """Fraction of toy datasets with a chi2 at least as large as the observed one.
-
-    Preferred over the analytic chi2 CDF because the assumptions behind that CDF do
-    not hold here: the bins are normalised (hence correlated), the empty-bin
-    uncertainty floor distorts the statistic, and the model has fitted parameters
-    whose effective cost is not exactly one dof each.
-
-    `data_unc_fn(counts, n_tot)` supplies the per-bin denominator for a toy, so the
-    toy and the real fit use the same uncertainty convention including the floor.
-    """
+    """Fraction of toy datasets with a chi2 at least as large as the observed one."""
+    # Preferred over the analytic chi2 CDF because that CDF's assumptions do not hold
+    # here: the bins are normalised and hence correlated, the empty-bin floor distorts
+    # the statistic, and the fitted parameters do not cost exactly one dof each.
+    # data_unc_fn(counts, n_tot) supplies a toy's per-bin denominator, so toy and real
+    # fit share one uncertainty convention, floor included.
     p = np.clip(np.asarray(model_p, dtype=float), 0.0, None)
     p = p / p.sum()
     n_tot = int(n_events)
@@ -498,8 +397,7 @@ def pseudo_experiment_p_value(model_p: np.ndarray, n_events: int, chi2_obs: floa
 
 
 def _toy_unc(counts: np.ndarray, n_tot: int) -> np.ndarray:
-    """The same sqrt(N)/N_tot denominator with empty-bin floor that
-    MultiplicityHist.normed_unc applies, for use on toy datasets."""
+    """sqrt(N)/N_tot per bin with the empty-bin floor -- the one definition of it."""
     unc = np.sqrt(counts) / n_tot
     unc[counts == 0] = EMPTY_BIN_UNC_COUNTS / n_tot
     return unc
@@ -507,15 +405,10 @@ def _toy_unc(counts: np.ndarray, n_tot: int) -> np.ndarray:
 
 def delta_chi2_interval(grid: np.ndarray, chi2_vals: np.ndarray,
                         delta: float) -> tuple[float, float]:
-    """Interval where chi2 - chi2_min <= delta (thesis eq. 8.7).
-
-    delta = 1.0 for one fitted parameter, 2.30 for two, at 68.3 %.
-
-    Edges are linearly interpolated between grid points rather than snapped to them,
-    so the interval does not quantise to the scan step. A bound that runs off the end
-    of the grid is returned as the grid edge; the caller is expected to notice and
-    refuse to quote it (see `assert_interior`).
-    """
+    """Interval where chi2 - chi2_min <= delta; 1.0 for one parameter, 2.30 for two."""
+    # Edges are linearly interpolated between grid points rather than snapped to them,
+    # so the interval does not quantise to the scan step. A bound running off the end
+    # of the grid comes back as the grid edge, and assert_interior refuses to quote it.
     d = np.asarray(chi2_vals) - np.min(chi2_vals)
     inside = np.flatnonzero(d <= delta)
     if inside.size == 0:
@@ -537,21 +430,14 @@ def delta_chi2_interval(grid: np.ndarray, chi2_vals: np.ndarray,
 
 @dataclass
 class FitResult:
-    """One model's fit.
+    """One model's fit, carrying two intervals deliberately.
 
-    TWO INTERVALS ARE CARRIED, DELIBERATELY.
-
-    `eff_lo`/`eff_hi` are the PROFILE interval at delta-chi2 <= 1: the conventional
-    68.3 % interval for one parameter of interest after minimising over any nuisance
-    parameter. This is what `eff_err_lo`/`eff_err_hi` report and what should be
-    quoted as the statistical uncertainty.
-
-    `eff_joint_lo`/`eff_joint_hi` are the projection of the 68.3 % JOINT two-parameter
-    region (delta-chi2 <= 2.30), which is the thesis convention. Projecting a joint
-    region onto one axis OVERCOVERS for that parameter -- it is a wider interval
-    describing a different statement. The previous code profiled and then applied
-    2.30, mixing the two, and reported the result as a one-sigma statistical error.
-    Both are now computed so the difference is visible rather than assumed.
+    eff_lo/eff_hi are the PROFILE interval at delta-chi2 <= 1 -- the conventional
+    68.3 % interval for one parameter after minimising over any nuisance parameter,
+    and what should be quoted as the statistical uncertainty. eff_joint_lo/eff_joint_hi
+    project the 68.3 % JOINT two-parameter region (delta-chi2 <= 2.30, the thesis
+    convention), which OVERCOVERS for a single parameter. The old code profiled and
+    then applied 2.30, mixing the two, and called it a one-sigma error.
     """
     model: str
     best_eff: float
@@ -579,16 +465,11 @@ class FitResult:
     p_value_basis: str = "not computed"
 
     @property
-    def ndof_thesis(self) -> int:
-        """The thesis convention: n_bins - n_fitted, ignoring the normalisation."""
-        return self.ndof
-
-    @property
     def ndof_standard(self) -> int:
-        """n_bins - 1 - n_fitted. Both data and model are normalised probability
-        histograms, so the normalisation removes one degree of freedom before any
-        parameter is fitted. The thesis convention does not subtract it; reporting
-        only one of the two silently picks a definition."""
+        """n_bins - 1 - n_fitted; the thesis convention (`ndof`) omits the -1."""
+        # Data and model are both normalised probability histograms, so normalisation
+        # costs one degree of freedom before any parameter is fitted. Reporting only
+        # one of the two conventions silently picks a definition.
         return max(self.n_bins_fit - 1 - self.n_params, 1)
 
     @property
@@ -618,12 +499,10 @@ class FitResult:
 
 
 def assert_interior(result: FitResult, name: str = "efficiency") -> None:
-    """Refuse to quote a best fit pinned to the edge of its scan grid.
-
-    An edge-pinned minimum means the true minimum is outside the grid, so both the
-    central value and the interval are meaningless -- but they still print as
-    perfectly ordinary numbers, which is exactly why this has to be checked.
-    """
+    """Refuse to quote a best fit pinned to the edge of its scan grid."""
+    # An edge-pinned minimum means the true minimum is outside the grid, so the central
+    # value and the interval are both meaningless -- and they still print as perfectly
+    # ordinary numbers, which is exactly why this has to be checked.
     g = result.eff_grid
     if result.best_eff <= g[0] or result.best_eff >= g[-1]:
         raise SystemExit(
@@ -638,9 +517,6 @@ def assert_interior(result: FitResult, name: str = "efficiency") -> None:
                 f"the edge of [{lg[0]:.4f}, {lg[-1]:.4f}]. Widen lambda_grid.")
 
 
-# --------------------------------------------------------------------------- #
-# The two fits
-# --------------------------------------------------------------------------- #
 def make_grid(spec: dict) -> np.ndarray:
     """Build a scan grid from a {min, max, step} config block, inclusive of max."""
     lo, hi, step = float(spec["min"]), float(spec["max"]), float(spec["step"])
@@ -658,19 +534,14 @@ def fit_datadriven(source: MultiplicityHist, bkg: MultiplicityHist,
                    n_bootstrap: int = 400) -> FitResult:
     """1D scan over eps_n with the background drawn from the measured histogram.
 
-    thesis eq. 8.5. One fitted parameter, so the 68.3 % interval is delta-chi2 <= 1.
-
-    `bkg_scale` rescales the background template's MEAN to the source's time window
-    (see `background_scale_factor`). At 1.0 the template is used as measured.
-
-    `likelihood`     thesis_chi2 (default) or multinomial -- see multinomial_neg2ll.
-    `bkg_unc_mode`   thesis_diagonal (default) adds the template's per-bin sigma to
-                     the chi2 denominator, as in eq. 8.5. `bootstrap` instead
-                     Dirichlet-resamples the template and propagates it THROUGH the
-                     Bernoulli convolution, which is where the uncertainty actually
-                     acts; the per-bin addition is an approximation that degrades
-                     when the background run is small.
+    thesis eq. 8.5; one fitted parameter, so the 68.3 % interval is delta-chi2 <= 1.
     """
+    # bkg_scale rescales the template's MEAN to the source's time window (see
+    # background_scale_factor); at 1.0 it is used as measured.
+    # bkg_unc_mode='thesis_diagonal' adds the template's per-bin sigma to the chi2
+    # denominator as in eq. 8.5; 'bootstrap' instead Dirichlet-resamples the template
+    # and propagates it THROUGH the Bernoulli convolution, where the uncertainty
+    # actually acts. The per-bin addition degrades when the background run is small.
     if engine not in ENGINES:
         raise ValueError(f"engine must be one of {ENGINES}, got {engine!r}")
     if likelihood not in LIKELIHOODS:
@@ -764,23 +635,15 @@ def fit_poisson(source: MultiplicityHist, eff_grid: np.ndarray, lam_grid: np.nda
                 engine: str = "analytic", n_throws: int = 1_000_000,
                 rng: Optional[np.random.Generator] = None,
                 likelihood: str = "thesis_chi2") -> FitResult:
-    """2D scan over (eps_n, lambda_n) with an uncorrelated Poisson background.
-
-    thesis eq. 8.6.
-
-    TWO INTERVALS ARE RETURNED. After profiling over lambda, the conventional 68.3 %
-    interval on eps_n alone is delta-chi2 <= 1; that is `eff_lo`/`eff_hi`. The thesis
-    uses 2.30, which is the 68.3 % contour for TWO parameters -- a joint region, not
-    a one-parameter interval. Projecting it onto the eps_n axis overcovers. The old
-    code profiled and then applied 2.30, which is neither statement, and reported the
-    result as a one-sigma statistical error; that interval is now carried separately
-    as `eff_joint_lo`/`eff_joint_hi`.
-
-    The chi2 surface is kept as a genuine 2D array and sliced by integer index. Teal's
-    driver flattened it and recovered the slices with float equality
-    (`np.where(x_var == best_eff)`, phase2.py:235-240), which is fragile and breaks
-    outright if the minimum is degenerate.
-    """
+    """2D scan over (eps_n, lambda_n) with an uncorrelated Poisson background (eq. 8.6)."""
+    # Two intervals come back. After profiling over lambda, the conventional 68.3 %
+    # interval on eps_n alone is delta-chi2 <= 1 -- that is eff_lo/eff_hi. The thesis
+    # uses 2.30, the 68.3 % contour for TWO parameters, which is a joint region whose
+    # projection onto the eps_n axis overcovers; it is carried separately as
+    # eff_joint_lo/eff_joint_hi. See the FitResult docstring.
+    # The chi2 surface stays a genuine 2D array sliced by integer index. Teal's driver
+    # flattened it and recovered slices by float equality (np.where(x_var == best_eff),
+    # phase2.py:235-240), which breaks outright if the minimum is degenerate.
     if engine not in ENGINES:
         raise ValueError(f"engine must be one of {ENGINES}, got {engine!r}")
     if likelihood not in LIKELIHOODS:
@@ -855,22 +718,14 @@ def fit_poisson(source: MultiplicityHist, eff_grid: np.ndarray, lam_grid: np.nda
         lam_grid=lam_grid, chi2_lam=chi2_lam, chi2_surface=surface)
 
 
-# --------------------------------------------------------------------------- #
-# Systematics (thesis section 8.7)
-# --------------------------------------------------------------------------- #
 @dataclass
 class SystBudget:
-    """An ASYMMETRIC systematic budget.
+    """An ASYMMETRIC systematic budget (thesis section 8.7).
 
-    The components do not all point the same way, and collapsing them into one
-    symmetric number before combining throws that away:
-
-      - the model difference has a DIRECTION set by which fit sits higher;
-      - housing captures dilute the measured efficiency, so correcting for them
-        pushes it UP -- one-sided;
-      - background false-start triggers also dilute, so they too push UP.
-
-    The previous implementation took |eps_DD - eps_Pois| and applied the quadrature
+    The components do not all point the same way: the model difference has a direction
+    set by which fit sits higher, while housing captures and background false-start
+    triggers both dilute the measured efficiency, so correcting for either pushes it UP
+    and is one-sided. The old code took |eps_DD - eps_Pois| and applied the quadrature
     total identically in both directions.
     """
     delta_model_signed: float           # background model (8.7.1), eps_alt - eps_nom
@@ -887,19 +742,12 @@ class SystBudget:
     notes: list[str] = field(default_factory=list)
 
     @property
-    def model_plus(self) -> float:
-        return max(self.delta_model_signed, 0.0)
-
-    @property
-    def model_minus(self) -> float:
-        return max(-self.delta_model_signed, 0.0)
-
-    @property
     def components(self) -> dict:
         """Every term, with its sign convention made explicit."""
         out = {
             "model": {"signed": self.delta_model_signed,
-                      "plus": self.model_plus, "minus": self.model_minus},
+                      "plus": max(self.delta_model_signed, 0.0),
+                      "minus": max(-self.delta_model_signed, 0.0)},
         }
         if self.delta_h_unc is not None:
             out["housing"] = {"correction": self.delta_h, "plus": self.delta_h_unc,
@@ -922,7 +770,7 @@ class SystBudget:
 
     @property
     def total_plus(self) -> float:
-        parts = [self.model_plus]
+        parts = [max(self.delta_model_signed, 0.0)]
         if self.delta_h_unc is not None:
             parts.append(self.delta_h_unc)
         if self.delta_bt is not None and self.delta_bt_publishable:
@@ -931,7 +779,7 @@ class SystBudget:
 
     @property
     def total_minus(self) -> float:
-        parts = [self.model_minus]
+        parts = [max(-self.delta_model_signed, 0.0)]
         if self.delta_h_unc is not None:
             parts.append(self.delta_h_unc)
         return float(np.sqrt(np.sum(np.square(parts))))
@@ -959,22 +807,17 @@ def systematics(eff_nominal: float, eff_alternative: float,
                 delta_h_unc: Optional[float] = None,
                 housing_n_captures: Optional[int] = None,
                 housing_n_simulated: Optional[int] = None) -> SystBudget:
-    """Assemble the systematic budget.
-
-    delta_model  eps_alternative - eps_nominal (8.7.1), SIGNED. Which model is
-                 nominal is the caller's explicit choice, so the sign is meaningful.
-    delta_bt     f_B/f_S, the background-trigger contamination fraction (eq. 8.9).
-                 Defined on post-cut trigger RATES, so it needs livetime. Without
-                 livetime the count ratio is still reported, but flagged
-                 NOT PUBLISHABLE and excluded from the total -- it is only equal to
-                 the rate ratio when both runs had identical livetime.
-    delta_h      housing-capture fraction (8.7.2). CONVENTION: delta_h is a
-                 CORRECTION added to the efficiency, and delta_h_unc is the
-                 systematic. Supplying a fraction with no uncertainty no longer
-                 contributes anything, because the uncertainty is the systematic.
-                 Pass housing_n_captures/housing_n_simulated to have the fraction
-                 and its Poisson error derived here and recorded.
-    """
+    """Assemble the signed, asymmetric systematic budget of thesis section 8.7."""
+    # delta_model is eps_alternative - eps_nominal (8.7.1), SIGNED -- which model is
+    # nominal is the caller's explicit choice, so the sign carries meaning.
+    # delta_bt is f_B/f_S, the background-trigger contamination fraction (eq. 8.9),
+    # defined on post-cut trigger RATES and so needing livetime. Without livetime the
+    # count ratio is still reported but flagged NOT PUBLISHABLE and left out of the
+    # total; it equals the rate ratio only when both runs had identical livetime.
+    # delta_h is the housing-capture fraction (8.7.2). CONVENTION: delta_h is a
+    # CORRECTION added to the efficiency and delta_h_unc is the systematic, so a bare
+    # fraction with no uncertainty contributes nothing. Pass housing_n_captures and
+    # housing_n_simulated to have the fraction and its Poisson error derived here.
     notes: list[str] = []
     delta_model_signed = eff_alternative - eff_nominal
 
@@ -1042,9 +885,6 @@ def systematics(eff_nominal: float, eff_alternative: float,
         notes=notes)
 
 
-# --------------------------------------------------------------------------- #
-# Driver
-# --------------------------------------------------------------------------- #
 def _resolve_event_index(ctx) -> pd.DataFrame:
     """Find the EventIndex parquets this deck produced."""
     import glob
@@ -1062,10 +902,6 @@ def _resolve_event_index(ctx) -> pd.DataFrame:
             f"Without it the per-event cosmic flag does not exist and the fit cannot "
             f"be made self-consistent (see icscan.py:368-406).")
     return load_event_index(paths)
-
-
-def _fmt_pct(x: float) -> str:
-    return f"{100 * x:.2f} %"
 
 
 def run(ctx, argv=None):
@@ -1256,7 +1092,7 @@ def run(ctx, argv=None):
                     interval_type="profile_delta_chi2_1",
                     best_lambda=r.best_lambda, lam_lo=r.lam_lo, lam_hi=r.lam_hi,
                     chi2=r.chi2_min,
-                    ndof=r.ndof, ndof_thesis=r.ndof_thesis,
+                    ndof=r.ndof, ndof_thesis=r.ndof,
                     ndof_standard=r.ndof_standard,
                     chi2_per_ndof=r.chi2_per_ndof,
                     chi2_per_ndof_standard=r.chi2_per_ndof_standard,
@@ -1312,7 +1148,7 @@ def run(ctx, argv=None):
                     interval_type="profile_delta_chi2_1",
                     best_lambda=r.best_lambda, lam_lo=r.lam_lo, lam_hi=r.lam_hi,
                     chi2=r.chi2_min,
-                    ndof=r.ndof, ndof_thesis=r.ndof_thesis,
+                    ndof=r.ndof, ndof_thesis=r.ndof,
                     ndof_standard=r.ndof_standard,
                     chi2_per_ndof=r.chi2_per_ndof,
                     chi2_per_ndof_standard=r.chi2_per_ndof_standard,
@@ -1349,7 +1185,7 @@ def run(ctx, argv=None):
             msg = (f"nominal model '{nominal_model}' has p = {r_nom.p_value:.4f} "
                    f"< gof_min_p_value = {gof_min_p:g}: it does not describe the "
                    f"multiplicity distribution. chi2 = {r_nom.chi2_min:.1f} over "
-                   f"ndof_thesis={r_nom.ndof_thesis} / "
+                   f"ndof_thesis={r_nom.ndof} / "
                    f"ndof_standard={r_nom.ndof_standard}.")
             gof_warnings.append(msg)
             if not gof_override:
@@ -1380,7 +1216,7 @@ def run(ctx, argv=None):
                 interval_type="profile_delta_chi2_1",
                 joint_lo=r.eff_joint_lo, joint_hi=r.eff_joint_hi,
                 lam=r.best_lambda, chi2=r.chi2_min,
-                ndof_thesis=r.ndof_thesis, ndof_standard=r.ndof_standard,
+                ndof_thesis=r.ndof, ndof_standard=r.ndof_standard,
                 chi2_per_ndof_thesis=r.chi2_per_ndof,
                 chi2_per_ndof_standard=r.chi2_per_ndof_standard,
                 p_value=r.p_value, p_value_basis=r.p_value_basis,
@@ -1421,7 +1257,7 @@ def run(ctx, argv=None):
                 "chi2": r_nom.chi2_min,
                 "ndof_definition": ("thesis: n_bins - n_fitted (does not subtract the "
                                     "normalisation); standard: n_bins - 1 - n_fitted"),
-                "ndof_thesis": r_nom.ndof_thesis,
+                "ndof_thesis": r_nom.ndof,
                 "ndof_standard": r_nom.ndof_standard,
                 "p_value": r_nom.p_value,
                 "p_value_basis": r_nom.p_value_basis,
@@ -1485,7 +1321,7 @@ def run(ctx, argv=None):
         print(f"          p = {r_nom.p_value}  ({r_nom.p_value_basis})")
         print(f"          alternative model ({r_alt.model}): {r_alt.best_eff:.4f}")
         print(f"          naive counting ratio for comparison: "
-              f"{_fmt_pct(src.naive_efficiency)}")
+              f"{100 * src.naive_efficiency:.2f} %")
         print("=" * 78)
         for n in sb.notes:
             print(f"[note] {n}")
