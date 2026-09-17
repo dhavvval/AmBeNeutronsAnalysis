@@ -35,13 +35,25 @@ from scipy.stats import poisson
 # 1.15 counts of uncertainty is the standard Feldman-Cousins-style floor.
 EMPTY_BIN_UNC_COUNTS = 1.15
 
-DENOMINATOR_CHOICES = ("ambe_triggers", "total_events")
-NUMERATOR_MODES = ("noncosmic", "production")
-OVERFLOW_POLICIES = ("fail", "clip")
-NOMINAL_MODELS = ("data_driven", "poisson")
-LIKELIHOODS = ("thesis_chi2", "multinomial")
-BKG_UNC_MODES = ("thesis_diagonal", "bootstrap")
-ENGINES = ("analytic", "mc")
+CHOICES = {
+    "denominator": ("ambe_triggers", "total_events"),
+    "numerator_mode": ("noncosmic", "production"),
+    "overflow_policy": ("fail", "clip"),
+    "nominal_model": ("data_driven", "poisson"),
+    "likelihood": ("thesis_chi2", "multinomial"),
+    "background_uncertainty": ("thesis_diagonal", "bootstrap"),
+    "engine": ("analytic", "mc"),
+}
+
+
+def _require_choice(name: str, value, exc=ValueError):
+    """Reject a mode string that is not one of CHOICES[name], and return it."""
+    # Checked at the config boundary AND again at the function boundary, on purpose.
+    # The config check fails in milliseconds rather than after the parquet load; the
+    # function check is what the library contract promises a direct caller.
+    if value not in CHOICES[name]:
+        raise exc(f"{name} must be one of {CHOICES[name]}, got {value!r}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -143,13 +155,9 @@ def build_multiplicity(event_index: pd.DataFrame, run: int, n_bins: int = 8,
     # overflow_policy='fail' treats multiplicity >= n_bins as an error (merging
     # physically different multiplicities is not a choice to make implicitly, and these
     # runs have none); 'clip' folds it into the top bin, which then means ">= n_bins-1".
-    if denominator not in DENOMINATOR_CHOICES:
-        raise SystemExit(f"[efficiency_fit] denominator must be one of {DENOMINATOR_CHOICES}")
-    if numerator_mode not in NUMERATOR_MODES:
-        raise SystemExit(f"[efficiency_fit] numerator_mode must be one of {NUMERATOR_MODES}")
-    if overflow_policy not in OVERFLOW_POLICIES:
-        raise SystemExit(
-            f"[efficiency_fit] overflow_policy must be one of {OVERFLOW_POLICIES}")
+    _require_choice("denominator", denominator, SystemExit)
+    _require_choice("numerator_mode", numerator_mode, SystemExit)
+    _require_choice("overflow_policy", overflow_policy, SystemExit)
 
     grp = event_index[event_index["run"] == run]
     if grp.empty:
@@ -210,9 +218,7 @@ def multiplicity_from_counts(run: int, nonzero: dict[int, int], denominator_tota
     tests, where there is no EventIndex to read. overflow_policy behaves as in
     build_multiplicity; this path used to drop out-of-range keys silently.
     """
-    if overflow_policy not in OVERFLOW_POLICIES:
-        raise SystemExit(
-            f"[efficiency_fit] overflow_policy must be one of {OVERFLOW_POLICIES}")
+    _require_choice("overflow_policy", overflow_policy, SystemExit)
     counts = np.zeros(n_bins, dtype=float)
     n_overflow = 0
     for k, v in nonzero.items():
@@ -548,13 +554,9 @@ def fit_datadriven(source: MultiplicityHist, bkg: MultiplicityHist,
     # denominator as in eq. 8.5; 'bootstrap' instead Dirichlet-resamples the template
     # and propagates it THROUGH the Bernoulli convolution, where the uncertainty
     # actually acts. The per-bin addition degrades when the background run is small.
-    if engine not in ENGINES:
-        raise ValueError(f"engine must be one of {ENGINES}, got {engine!r}")
-    if likelihood not in LIKELIHOODS:
-        raise ValueError(f"likelihood must be one of {LIKELIHOODS}, got {likelihood!r}")
-    if bkg_unc_mode not in BKG_UNC_MODES:
-        raise ValueError(
-            f"background_uncertainty must be one of {BKG_UNC_MODES}, got {bkg_unc_mode!r}")
+    _require_choice("engine", engine)
+    _require_choice("likelihood", likelihood)
+    _require_choice("background_uncertainty", bkg_unc_mode)
 
     rng = rng or np.random.default_rng()
     n_bins = len(source.counts)
@@ -648,10 +650,8 @@ def fit_poisson(source: MultiplicityHist, eff_grid: np.ndarray, lam_grid: np.nda
     # The chi2 surface stays a genuine 2D array sliced by integer index. Teal's driver
     # flattened it and recovered slices by float equality (np.where(x_var == best_eff),
     # phase2.py:235-240), which breaks outright if the minimum is degenerate.
-    if engine not in ENGINES:
-        raise ValueError(f"engine must be one of {ENGINES}, got {engine!r}")
-    if likelihood not in LIKELIHOODS:
-        raise ValueError(f"likelihood must be one of {LIKELIHOODS}, got {likelihood!r}")
+    _require_choice("engine", engine)
+    _require_choice("likelihood", likelihood)
     rng = rng or np.random.default_rng()
     n_bins = len(source.counts)
     data, data_unc = source.normed, source.normed_unc
@@ -909,25 +909,21 @@ def run(ctx, argv=None):
     xchk_run = fp.get("crosscheck_run")
     n_bins = int(fp.get("n_bins", 8))
     engine = args.engine or fp.get("engine", "analytic")
-    # Validate here as well as in the fit functions. `choices` on the CLI only
-    # guards the CLI; a typo in the config used to fall through the `else` branch
-    # and silently run the slow, noisier toy-MC path.
-    if engine not in ENGINES:
-        raise SystemExit(
-            f"[efficiency_fit] engine must be one of {ENGINES}, got {engine!r}. "
-            f"A misspelling previously ran the toy-MC path silently.")
+    # Validated here as well as inside the fit functions: argparse `choices` only
+    # guards the CLI, and a typo in the config used to fall through an `else` and
+    # silently run the slow, noisier toy-MC path. Checking before the parquet load
+    # also means a config typo fails in milliseconds rather than after the read.
+    _require_choice("engine", engine, SystemExit)
     n_throws = int(fp.get("n_throws", 1_000_000))
     rng = np.random.default_rng(int(fp.get("seed", 0)))
 
-    overflow_policy = str(fp.get("overflow_policy", "fail"))
-    likelihood = str(fp.get("likelihood", "thesis_chi2"))
-    bkg_unc_mode = str(fp.get("background_uncertainty", "thesis_diagonal"))
-    for val, allowed, name in ((overflow_policy, OVERFLOW_POLICIES, "overflow_policy"),
-                               (likelihood, LIKELIHOODS, "likelihood"),
-                               (bkg_unc_mode, BKG_UNC_MODES, "background_uncertainty")):
-        if val not in allowed:
-            raise SystemExit(
-                f"[efficiency_fit] {name} must be one of {allowed}, got {val!r}")
+    overflow_policy = _require_choice(
+        "overflow_policy", str(fp.get("overflow_policy", "fail")), SystemExit)
+    likelihood = _require_choice(
+        "likelihood", str(fp.get("likelihood", "thesis_chi2")), SystemExit)
+    bkg_unc_mode = _require_choice(
+        "background_uncertainty",
+        str(fp.get("background_uncertainty", "thesis_diagonal")), SystemExit)
 
     # WHICH MODEL SUPPLIES THE HEADLINE IS A REQUIRED, EXPLICIT CHOICE. There is no
     # default on purpose. Both background models are fit and reported either way;
@@ -937,7 +933,7 @@ def run(ctx, argv=None):
     if nominal_model is None:
         raise SystemExit(
             "[efficiency_fit] fit_params.nominal_model is REQUIRED and has no "
-            f"default. Set it to one of {NOMINAL_MODELS}.\n"
+            f"default. Set it to one of {CHOICES['nominal_model']}.\n"
             "  poisson      narrow interval, but assumes the background is\n"
             "               uncorrelated in time -- check its p-value first.\n"
             "  data_driven  uses the measured background shape, but inherits the\n"
@@ -945,11 +941,7 @@ def run(ctx, argv=None):
             "               sample its chi2/ndof looks good for the wrong reason\n"
             "               (see src/ambe/efficiency_extraction/datadriven_chi2.py).\n"
             "Neither is a safe default, which is why you have to say.")
-    nominal_model = str(nominal_model)
-    if nominal_model not in NOMINAL_MODELS:
-        raise SystemExit(
-            f"[efficiency_fit] nominal_model must be one of {NOMINAL_MODELS}, "
-            f"got {nominal_model!r}")
+    nominal_model = _require_choice("nominal_model", str(nominal_model), SystemExit)
     gof_min_p = float(fp.get("gof_min_p_value", 0.01))
     gof_override = fp.get("nominal_model_override_justification")
     n_gof_toys = int(fp.get("n_gof_toys", 2000))
@@ -989,6 +981,42 @@ def run(ctx, argv=None):
 
     rows: list[dict] = []
     results: dict = {}
+
+    def row_for(r, *, denominator, numerator_mode, primary, model, is_nominal,
+                source_run, src_hist, bkg_hist, delta_model_signed,
+                delta_bt=None, delta_bt_unc=None, delta_bt_basis="n/a",
+                delta_bt_publishable=False, delta_h=None, delta_h_unc=None,
+                syst_plus=np.nan, syst_minus=np.nan):
+        """One CSV row. The key order here IS the column order -- do not reorder."""
+        # The cross-check rows differ from the main ones only in the systematics
+        # block, which it has no livetime for, so those are the defaults.
+        return dict(
+            denominator=denominator, numerator_mode=numerator_mode, primary=primary,
+            model=model,
+            is_nominal=is_nominal,
+            source_run=source_run, background_run=bkg_run,
+            n_trig_source=src_hist.denominator, n_trig_bkg=bkg_hist.denominator,
+            naive_eff_source=src_hist.naive_efficiency,
+            naive_eff_bkg=bkg_hist.naive_efficiency,
+            best_eff=r.best_eff, eff_lo=r.eff_lo, eff_hi=r.eff_hi,
+            eff_err_lo=r.eff_err_lo, eff_err_hi=r.eff_err_hi,
+            eff_joint_lo=r.eff_joint_lo, eff_joint_hi=r.eff_joint_hi,
+            interval_type="profile_delta_chi2_1",
+            best_lambda=r.best_lambda, lam_lo=r.lam_lo, lam_hi=r.lam_hi,
+            chi2=r.chi2_min,
+            ndof=r.ndof, ndof_thesis=r.ndof,
+            ndof_standard=r.ndof_standard,
+            chi2_per_ndof=r.chi2_per_ndof,
+            chi2_per_ndof_standard=r.chi2_per_ndof_standard,
+            p_value=r.p_value,
+            likelihood=likelihood, background_uncertainty=bkg_unc_mode,
+            n_overflow_source=src_hist.n_overflow, n_overflow_bkg=bkg_hist.n_overflow,
+            delta_model_signed=delta_model_signed,
+            delta_bt=delta_bt, delta_bt_unc=delta_bt_unc,
+            delta_bt_basis=delta_bt_basis,
+            delta_bt_publishable=delta_bt_publishable,
+            delta_h=delta_h, delta_h_unc=delta_h_unc,
+            syst_plus=syst_plus, syst_minus=syst_minus)
 
     denoms = (["ambe_triggers", "total_events"] if args.both_denominators
               else [fp.get("denominator", "ambe_triggers")])
@@ -1058,27 +1086,10 @@ def run(ctx, argv=None):
             print("   " + sb.summary())
 
             for r in (rp, rd):
-                rows.append(dict(
-                    denominator=denom, numerator_mode=num_mode, primary=primary,
-                    model=r.model,
-                    is_nominal=(r is r_nom),
-                    source_run=src_run, background_run=bkg_run,
-                    n_trig_source=src.denominator, n_trig_bkg=bkg.denominator,
-                    naive_eff_source=src.naive_efficiency,
-                    naive_eff_bkg=bkg.naive_efficiency,
-                    best_eff=r.best_eff, eff_lo=r.eff_lo, eff_hi=r.eff_hi,
-                    eff_err_lo=r.eff_err_lo, eff_err_hi=r.eff_err_hi,
-                    eff_joint_lo=r.eff_joint_lo, eff_joint_hi=r.eff_joint_hi,
-                    interval_type="profile_delta_chi2_1",
-                    best_lambda=r.best_lambda, lam_lo=r.lam_lo, lam_hi=r.lam_hi,
-                    chi2=r.chi2_min,
-                    ndof=r.ndof, ndof_thesis=r.ndof,
-                    ndof_standard=r.ndof_standard,
-                    chi2_per_ndof=r.chi2_per_ndof,
-                    chi2_per_ndof_standard=r.chi2_per_ndof_standard,
-                    p_value=r.p_value,
-                    likelihood=likelihood, background_uncertainty=bkg_unc_mode,
-                    n_overflow_source=src.n_overflow, n_overflow_bkg=bkg.n_overflow,
+                rows.append(row_for(
+                    r, denominator=denom, numerator_mode=num_mode, primary=primary,
+                    model=r.model, is_nominal=(r is r_nom),
+                    source_run=src_run, src_hist=src, bkg_hist=bkg,
                     delta_model_signed=sb.delta_model_signed,
                     delta_bt=sb.delta_bt, delta_bt_unc=sb.delta_bt_unc,
                     delta_bt_basis=sb.delta_bt_basis,
@@ -1113,33 +1124,13 @@ def run(ctx, argv=None):
             x_nom = xp if nominal_model == "poisson" else xd
             x_alt = xd if nominal_model == "poisson" else xp
             for r in (xp, xd):
-                rows.append(dict(
-                    denominator=fp.get("denominator", "ambe_triggers"),
+                rows.append(row_for(
+                    r, denominator=fp.get("denominator", "ambe_triggers"),
                     numerator_mode=fp.get("numerator_mode", "noncosmic"),
                     primary=False, model=f"{r.model} (crosscheck {xr})",
                     is_nominal=(r is x_nom),
-                    source_run=xr, background_run=bkg_run,
-                    n_trig_source=xsrc.denominator, n_trig_bkg=xbkg.denominator,
-                    naive_eff_source=xsrc.naive_efficiency,
-                    naive_eff_bkg=xbkg.naive_efficiency,
-                    best_eff=r.best_eff, eff_lo=r.eff_lo, eff_hi=r.eff_hi,
-                    eff_err_lo=r.eff_err_lo, eff_err_hi=r.eff_err_hi,
-                    eff_joint_lo=r.eff_joint_lo, eff_joint_hi=r.eff_joint_hi,
-                    interval_type="profile_delta_chi2_1",
-                    best_lambda=r.best_lambda, lam_lo=r.lam_lo, lam_hi=r.lam_hi,
-                    chi2=r.chi2_min,
-                    ndof=r.ndof, ndof_thesis=r.ndof,
-                    ndof_standard=r.ndof_standard,
-                    chi2_per_ndof=r.chi2_per_ndof,
-                    chi2_per_ndof_standard=r.chi2_per_ndof_standard,
-                    p_value=r.p_value,
-                    likelihood=likelihood, background_uncertainty=bkg_unc_mode,
-                    n_overflow_source=xsrc.n_overflow, n_overflow_bkg=xbkg.n_overflow,
-                    delta_model_signed=(x_alt.best_eff - x_nom.best_eff),
-                    delta_bt=None, delta_bt_unc=None,
-                    delta_bt_basis="n/a", delta_bt_publishable=False,
-                    delta_h=None, delta_h_unc=None,
-                    syst_plus=np.nan, syst_minus=np.nan))
+                    source_run=xr, src_hist=xsrc, bkg_hist=xbkg,
+                    delta_model_signed=(x_alt.best_eff - x_nom.best_eff)))
         except SystemExit as e:
             print(f"   cross-check skipped: {e}")
 
