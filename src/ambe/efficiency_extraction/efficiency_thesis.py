@@ -20,7 +20,8 @@ import numpy as np
 
 from ..plotting import save_plot, set_style
 from .efficiency_fit import (assert_interior, background_scale_factor,
-                                    build_multiplicity, fit_datadriven, fit_poisson,
+                                    build_multiplicity, fit_datadriven,
+                                    fit_datadriven_scaled, fit_poisson,
                                     make_grid, _resolve_event_index)
 
 
@@ -92,7 +93,8 @@ def plot_chi2_1d(ctx, rd):
     return save_plot(fig, ctx, "eff_chi2_1d_datadriven")
 
 
-def plot_chi2_2d(ctx, rp):
+def plot_chi2_2d(ctx, rp, xlabel="Background rate $\\lambda_n$ [candidates/trigger]",
+                 name="eff_chi2_2d"):
     """thesis fig 8.22 -- the 2D map, with the delta-chi2=2.30 contour drawn."""
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots()
@@ -109,12 +111,12 @@ def plot_chi2_2d(ctx, rp):
     ax.plot(rp.best_lambda, rp.best_eff, "c*", ms=16,
             label=f"best fit ({rp.best_eff:.3f}, {rp.best_lambda:.3f})")
     fig.colorbar(im, ax=ax, label="$\\chi^2 - \\chi^2_{min}$")
-    ax.set_xlabel("Background rate $\\lambda_n$ [candidates/trigger]")
+    ax.set_xlabel(xlabel)
     ax.set_ylabel("Neutron detection efficiency $\\epsilon_n$")
     ax.set_title(ctx.title("2D goodness-of-fit profile (cyan = 68.3 % contour)"))
     ax.legend(loc="upper right")
     fig.tight_layout()
-    return save_plot(fig, ctx, "eff_chi2_2d")
+    return save_plot(fig, ctx, name)
 
 
 def plot_chi2_projections(ctx, rp):
@@ -164,12 +166,11 @@ def run(ctx, argv=None):
 
     ei = _resolve_event_index(ctx)
     denom = fp.get("denominator", "ambe_triggers")
-    num_mode = fp.get("numerator_mode", "noncosmic")
     overflow_policy = fp.get("overflow_policy", "fail")
     likelihood = fp.get("likelihood", "thesis_chi2")
-    src = build_multiplicity(ei, src_run, n_bins, denom, num_mode,
+    src = build_multiplicity(ei, src_run, n_bins, denom,
                              overflow_policy=overflow_policy)
-    bkg = build_multiplicity(ei, bkg_run, n_bins, denom, num_mode,
+    bkg = build_multiplicity(ei, bkg_run, n_bins, denom,
                              overflow_policy=overflow_policy)
 
     rp = fit_poisson(src, eff_grid, lam_grid, engine=engine,
@@ -191,6 +192,14 @@ def run(ctx, argv=None):
     plot_chi2_1d(ctx, rd)
     plot_chi2_2d(ctx, rp)
     plot_chi2_projections(ctx, rp)
+    if "s_grid" in fp:
+        rs = fit_datadriven_scaled(
+            src, bkg, eff_grid, make_grid(fp["s_grid"]), likelihood=likelihood,
+            bkg_unc_mode=fp.get("background_uncertainty", "thesis_diagonal"),
+            n_bootstrap=int(fp.get("n_bootstrap", 400)), seed=int(fp.get("seed", 0)))
+        print(f"[plots.efficiency] {rs.summary()}")
+        plot_chi2_2d(ctx, rs, xlabel=f"Template rate scale $s$ (run {bkg_run} shape)",
+                     name="eff_chi2_2d_datadriven_scaled")
 
     print(f"[plots.efficiency] figures in {ctx.plots_dir}")
 

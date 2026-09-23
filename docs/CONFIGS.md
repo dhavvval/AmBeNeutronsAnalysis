@@ -36,7 +36,6 @@ stage1:
   dump_event_index: true
   dump_good_events: true
   plot_ic: true
-  legacy_ordering: false
 cuts:
   pe_max: 100
   charge_balance_max: 0.45

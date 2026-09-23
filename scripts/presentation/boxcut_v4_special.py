@@ -1315,8 +1315,7 @@ def main():
         return 0
 
     proc = AmBeNeutronProcessing(config=WAVEFORM_CONFIG, cuts=SPECIAL_CUTS,
-                                    selection=BOX_SELECTION,
-                                    legacy_ordering=bool(SPECIAL_STAGE1.get("legacy_ordering", False)))
+                                    selection=BOX_SELECTION)
     pulsers = check_pulsers()
 
     summaries, cand_frames = [], []

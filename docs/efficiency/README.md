@@ -365,18 +365,17 @@ Size of it: on run 6265 that is **532 of 15,628 AmBe triggers**, worth **3.4 pp*
 than the entire systematic budget of thesis table 8.6. On run 6062 it was 410 of 14,638,
 worth 2.8 pp. Only multi-cluster events can do it (documented at `icscan.py:368-406`).
 
-**The fix** (`processor.py:1040-1080`) is the two-pass loop drawn in §3: decide the cosmic
+**The fix** (`processor.py::select_event_clusters`) is the two-pass loop drawn in §3: decide the cosmic
 verdict over *all* clusters first, then collect candidates only from events that survived.
 A vetoed event now contributes nothing to the numerator, ever. `tests/test_processor_ordering.py`
 asserts that every permutation of a multi-cluster event gives the same verdict and the same
 multiplicity.
 
-**Both conventions are still reported**, because the published 57.23 % campaign number and
-the `AmBeTriggerSummary_*.csv` files were produced by the old loop:
-
-- `numerator_mode: noncosmic` — the fixed, self-consistent one. **Default.** → 0.605
-- `numerator_mode: production` — reproduces the legacy leak exactly (0.6691 naive). → 0.642
-- `stage1.legacy_ordering: true` — reinstates the old single-pass loop itself. Never defaults on.
+**The legacy conventions were removed on 2026-09-22.** `numerator_mode` and
+`stage1.legacy_ordering` no longer exist, and `build_multiplicity` refuses an EventIndex in
+which a cosmic-vetoed event carries candidates. The leak-inclusive numbers quoted above
+(0.642, 0.6691 naive) and the published 57.23 % can no longer be regenerated. v4 was
+reprocessed with the single path as `AmBe2.0v4_all28_box_veto`.
 
 ### One knob you will see and should not touch on data
 

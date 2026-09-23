@@ -26,7 +26,7 @@ from typing import Iterable, Optional
 
 import numpy as np
 import pandas as pd
-from scipy.special import xlogy
+from scipy.special import logsumexp, xlogy
 from scipy.stats import poisson
 
 # Poisson upper 68.3 % confidence limit for zero observed counts. Teal's convention
@@ -37,11 +37,10 @@ EMPTY_BIN_UNC_COUNTS = 1.15
 
 CHOICES = {
     "denominator": ("ambe_triggers", "total_events"),
-    "numerator_mode": ("noncosmic", "production"),
     "overflow_policy": ("fail", "clip"),
     "nominal_model": ("data_driven", "poisson"),
     "likelihood": ("thesis_chi2", "multinomial"),
-    "background_uncertainty": ("thesis_diagonal", "bootstrap"),
+    "background_uncertainty": ("thesis_diagonal", "bootstrap", "profile"),
     "engine": ("analytic", "mc"),
 }
 
@@ -67,7 +66,6 @@ class MultiplicityHist:
     total_events: int
     cosmic_events: int
     denominator_mode: str
-    numerator_mode: str
     provenance: str
     n_overflow: int = 0
 
@@ -114,7 +112,7 @@ class MultiplicityHist:
     def summary(self) -> str:
         return (f"run {self.run}: total={self.total_events:,} cosmic={self.cosmic_events:,} "
                 f"ambe={self.ambe_triggers:,} denom={self.denominator:,} "
-                f"({self.denominator_mode}/{self.numerator_mode}) "
+                f"({self.denominator_mode}) "
                 f"hist={list(self.counts.astype(int))} "
                 f"naive_eff={self.naive_efficiency:.4f}")
 
@@ -137,16 +135,10 @@ def load_event_index(paths: Iterable[Path] | Path) -> pd.DataFrame:
 
 def build_multiplicity(event_index: pd.DataFrame, run: int, n_bins: int = 8,
                        denominator: str = "ambe_triggers",
-                       numerator_mode: str = "noncosmic",
                        provenance: str = "EventIndex",
                        overflow_policy: str = "fail") -> MultiplicityHist:
     """Build the multiplicity histogram for one run, zero bin included."""
-    # numerator_mode='production' counts a cosmic-vetoed event in the numerator while
-    # subtracting it from the denominator (icscan.py:368-406) -- inconsistent, but it is
-    # what the published numbers count. On run 6062 it differs from 'noncosmic' by 2.8
-    # points, more than the whole systematic budget of table 8.6, so both are reported.
     _require_choice("denominator", denominator, SystemExit)
-    _require_choice("numerator_mode", numerator_mode, SystemExit)
     _require_choice("overflow_policy", overflow_policy, SystemExit)
 
     grp = event_index[event_index["run"] == run]
@@ -157,8 +149,13 @@ def build_multiplicity(event_index: pd.DataFrame, run: int, n_bins: int = 8,
     total_events = int(len(grp))
     cosmic_events = int(cosmic.sum())
 
-    contributing = grp if numerator_mode == "production" else grp[~cosmic]
-    mult = contributing["n_accepted_clusters"].to_numpy(int)
+    leaked = int((cosmic & (grp["n_accepted_clusters"] > 0)).sum())
+    if leaked:
+        raise SystemExit(
+            f"[efficiency_fit] run {run}: {leaked:,} cosmic-vetoed events carry "
+            f"accepted candidates. This EventIndex was written by the removed "
+            f"single-pass cluster loop; reprocess it with `ambe data process`.")
+    mult = grp.loc[~cosmic, "n_accepted_clusters"].to_numpy(int)
     mult = mult[mult > 0]
 
     n_overflow = int((mult >= n_bins).sum())
@@ -182,16 +179,13 @@ def build_multiplicity(event_index: pd.DataFrame, run: int, n_bins: int = 8,
         raise SystemExit(
             f"[efficiency_fit] run {run}: negative zero bin ({zero_bin}). The "
             f"denominator ({denominator}={denom_val:,}) is smaller than the number of "
-            f"candidate-bearing events ({len(mult):,}). With numerator_mode="
-            f"'{numerator_mode}' this means cosmic-vetoed events are being counted in "
-            f"the numerator while excluded from the denominator -- use "
-            f"numerator_mode='noncosmic', or denominator='total_events'.")
+            f"candidate-bearing events ({len(mult):,}).")
     counts[0] = zero_bin
 
     return MultiplicityHist(
         run=int(run), counts=counts, total_events=total_events,
         cosmic_events=cosmic_events, denominator_mode=denominator,
-        numerator_mode=numerator_mode, provenance=provenance, n_overflow=n_overflow)
+        provenance=provenance, n_overflow=n_overflow)
 
 
 def multiplicity_from_counts(run: int, nonzero: dict[int, int], denominator_total: int,
@@ -227,7 +221,7 @@ def multiplicity_from_counts(run: int, nonzero: dict[int, int], denominator_tota
         run=int(run), counts=counts, total_events=int(tot),
         cosmic_events=int(cosmic_events),
         denominator_mode="ambe_triggers" if cosmic_events else "total_events",
-        numerator_mode="noncosmic", provenance=provenance, n_overflow=n_overflow)
+        provenance=provenance, n_overflow=n_overflow)
 
 
 def background_scale_factor(acq_window_ns: float, sig_start_ns: float,
@@ -344,7 +338,7 @@ def multinomial_deviance(model: np.ndarray, counts: np.ndarray) -> np.ndarray:
     # lambda = 0 column of the scan cube is exactly zero above bin 1.
     # Subtract the saturated model per bin, not per histogram -- that summation order
     # is what keeps this bit-identical to the scalar form it replaces.
-    sat = xlogy(c, c / c.sum())
+    sat = xlogy(c, c / c.sum(axis=-1, keepdims=True))
     m = np.clip(np.asarray(model, dtype=float), 1e-300, None)
     m = m / m.sum(axis=-1, keepdims=True)
     return 2.0 * np.sum(sat - xlogy(c, m), axis=-1)
@@ -364,7 +358,8 @@ def bootstrap_background_templates(bkg: "MultiplicityHist", n_draws: int,
 
 def pseudo_experiment_p_value(model_p: np.ndarray, n_events: int, chi2_obs: float,
                               data_unc_fn, n_toys: int,
-                              rng: np.random.Generator) -> float:
+                              rng: np.random.Generator,
+                              statistic: str = "thesis_chi2") -> float:
     """Fraction of toy datasets with a chi2 at least as large as the observed one."""
     # Preferred over the analytic chi2 CDF, whose assumptions fail here: the bins are
     # normalised and hence correlated, the empty-bin floor distorts the statistic, and
@@ -376,8 +371,11 @@ def pseudo_experiment_p_value(model_p: np.ndarray, n_events: int, chi2_obs: floa
     # so the toys AND the generator state afterwards match the loop. That matters --
     # run() shares one rng across both fits and the published p-values depend on it.
     toys = rng.multinomial(n_tot, p, size=int(n_toys)).astype(float)
-    unc = data_unc_fn(toys, n_tot)
-    c2 = np.sum(((p - toys / n_tot) / unc) ** 2, axis=-1)
+    if statistic == "multinomial":
+        c2 = multinomial_deviance(p, toys)
+    else:
+        unc = data_unc_fn(toys, n_tot)
+        c2 = np.sum(((p - toys / n_tot) / unc) ** 2, axis=-1)
     return float(np.count_nonzero(c2 >= chi2_obs)) / float(n_toys)
 
 
@@ -585,7 +583,12 @@ def fit_datadriven(source: MultiplicityHist, bkg: MultiplicityHist,
             prof = mc_profile_datadriven(eff, bkg_p, n_bins, n_throws, rng)
             den = None
         profiles.append(prof)
-        if likelihood == "multinomial":
+        if likelihood == "multinomial" and templates is not None:
+            # Marginal likelihood over the template posterior, not the deviance of the
+            # mean template, which would drop the background uncertainty entirely.
+            dev = multinomial_deviance(reps, source.counts)
+            chi2_vals[i] = -2.0 * (logsumexp(-0.5 * dev) - np.log(len(dev)))
+        elif likelihood == "multinomial":
             chi2_vals[i] = multinomial_deviance(prof, source.counts)
         elif den is not None:
             chi2_vals[i] = thesis_chi2(prof, data, den)
@@ -599,6 +602,146 @@ def fit_datadriven(source: MultiplicityHist, bkg: MultiplicityHist,
         chi2_min=float(chi2_vals[best]), ndof=n_bins - 1,
         eff_grid=eff_grid, chi2_eff=chi2_vals, best_profile=profiles[best],
         warnings=warnings, n_params=1, n_bins_fit=n_bins)
+
+
+def scaled_template_mean(bkg: MultiplicityHist, scale: float) -> float:
+    """Mean multiplicity of the template after reweighting bin k by scale**k."""
+    k = np.arange(len(bkg.counts))
+    w = bkg.normed * scale ** k
+    return float((k * w).sum() / w.sum())
+
+
+def _template_from_logits(logits: np.ndarray) -> np.ndarray:
+    z = np.concatenate([[0.0], logits])
+    z = np.exp(z - z.max())
+    return z / z.sum()
+
+
+def _joint_deviance(eff: float, sc: float, logits: np.ndarray,
+                    source: MultiplicityHist, bkg: MultiplicityHist) -> float:
+    """Source deviance at (eff, B_s) plus the background run's own deviance at B."""
+    b = _template_from_logits(logits)
+    w = b * sc ** np.arange(len(b))
+    model = analytic_profile_datadriven(eff, w / w.sum(), len(source.counts))
+    return float(multinomial_deviance(model, source.counts)
+                 + multinomial_deviance(b, bkg.counts))
+
+
+def fit_datadriven_profile(source: MultiplicityHist, bkg: MultiplicityHist,
+                           eff_grid: np.ndarray,
+                           s_grid: Optional[np.ndarray] = None) -> FitResult:
+    """Joint profile likelihood: the true template bins are nuisance parameters.
+
+    The background run enters as its own multinomial term, so its statistics
+    constrain the template instead of being sampled (bootstrap) or added to a chi2
+    denominator (thesis). With s_grid the template rate s is free too, B_s(k) ~ B(k)s^k;
+    without it s = 1.
+    """
+    from scipy.optimize import minimize
+
+    free_s = s_grid is not None
+    b0 = (bkg.counts + 0.5) / (bkg.counts + 0.5).sum()
+    lg0 = np.log(b0[1:] / b0[0])
+    k = len(lg0)
+
+    def unpack(x, eff=None, sc=None):
+        i = 0
+        if eff is None:
+            eff = 1.0 / (1.0 + np.exp(-x[i])); i += 1
+        if sc is None:
+            sc = np.exp(x[i]) if free_s else 1.0; i += int(free_s)
+        return eff, sc, x[i:]
+
+    def best_over(x0, eff=None, sc=None):
+        f = lambda x: _joint_deviance(*unpack(x, eff, sc), source, bkg)
+        r = minimize(f, x0, method="Nelder-Mead",
+                     options=dict(xatol=1e-7, fatol=1e-7, maxiter=20000, maxfev=20000))
+        r = minimize(f, r.x, method="Nelder-Mead",
+                     options=dict(xatol=1e-8, fatol=1e-8, maxiter=20000, maxfev=20000))
+        return r.fun, r.x
+
+    e0 = min(max(source.naive_efficiency, 0.01), 0.99)
+    starts = []
+    for sc0 in ([0.1, 0.3, 1.0] if free_s else [1.0]):
+        x0 = np.concatenate([[np.log(e0 / (1 - e0))],
+                             [np.log(sc0)] if free_s else [], lg0])
+        starts.append(best_over(x0))
+    dmin, xbest = min(starts, key=lambda t: t[0])
+    eff_b, s_b, lg_b = unpack(xbest)
+
+    def profile(grid, fixed):
+        vals = np.empty(len(grid))
+        i0 = int(np.argmin(np.abs(grid - (eff_b if fixed == "eff" else s_b))))
+        for order in (range(i0, len(grid)), range(i0 - 1, -1, -1)):
+            x = np.delete(xbest, 0) if fixed == "eff" else np.delete(xbest, 1)
+            for i in order:
+                kw = {"eff": grid[i]} if fixed == "eff" else {"sc": grid[i]}
+                vals[i], x = best_over(x, **kw)
+        return vals
+
+    chi2_eff = profile(eff_grid, "eff")
+    if not eff_grid[0] <= eff_b <= eff_grid[-1]:
+        # The unconstrained optimum left the scan range (at eps -> 0 the free
+        # template can absorb the whole source histogram). Take the in-range minimum.
+        i = int(np.argmin(chi2_eff))
+        dmin_i, x_i = best_over(np.delete(xbest, 0), eff=eff_grid[i])
+        eff_b, s_b, lg_b = unpack(x_i, eff=eff_grid[i])
+        xbest = np.concatenate([[np.log(eff_b / (1 - eff_b))], x_i])
+        dmin = dmin_i
+    lo, hi = delta_chi2_interval(eff_grid, chi2_eff, 1.0)
+    b = _template_from_logits(lg_b)
+    w = b * s_b ** np.arange(len(b))
+    res = FitResult(
+        model="data-driven-scaled" if free_s else "data-driven",
+        best_eff=float(eff_b), eff_lo=lo, eff_hi=hi, chi2_min=float(dmin),
+        ndof=len(source.counts) - (1 + int(free_s)), eff_grid=eff_grid,
+        chi2_eff=chi2_eff,
+        best_profile=analytic_profile_datadriven(eff_b, w / w.sum(), len(source.counts)),
+        n_params=1 + int(free_s), n_bins_fit=len(source.counts))
+    if free_s:
+        chi2_s = profile(s_grid, "s")
+        res.best_lambda = float(s_b)
+        res.lam_lo, res.lam_hi = delta_chi2_interval(s_grid, chi2_s, 1.0)
+        res.lam_grid, res.chi2_lam = s_grid, chi2_s
+        res.eff_joint_lo, res.eff_joint_hi = delta_chi2_interval(eff_grid, chi2_eff, 2.30)
+    return res
+
+
+def fit_datadriven_scaled(source: MultiplicityHist, bkg: MultiplicityHist,
+                          eff_grid: np.ndarray, s_grid: np.ndarray,
+                          likelihood: str = "thesis_chi2",
+                          bkg_unc_mode: str = "thesis_diagonal",
+                          n_bootstrap: int = 400, seed: int = 0) -> FitResult:
+    """2D scan over (eps_n, s): measured background shape, rate reweighted by s**k."""
+    # Every s reuses the same bootstrap replicas, so the surface is smooth in s.
+    surface = np.empty((len(eff_grid), len(s_grid)))
+    profiles = {}
+    warnings: list[str] = []
+    for j, sc in enumerate(s_grid):
+        r = fit_datadriven(source, bkg, eff_grid, bkg_scale=float(sc),
+                           likelihood=likelihood, bkg_unc_mode=bkg_unc_mode,
+                           n_bootstrap=n_bootstrap, rng=np.random.default_rng(seed))
+        surface[:, j] = r.chi2_eff
+        profiles[j] = r
+        warnings = r.warnings
+    bi, bj = np.unravel_index(int(np.argmin(surface)), surface.shape)
+    best = fit_datadriven(source, bkg, eff_grid[bi:bi + 1], bkg_scale=float(s_grid[bj]),
+                          likelihood=likelihood, bkg_unc_mode=bkg_unc_mode,
+                          n_bootstrap=n_bootstrap, rng=np.random.default_rng(seed))
+    chi2_eff = surface.min(axis=1)
+    chi2_s = surface.min(axis=0)
+    eff_lo, eff_hi = delta_chi2_interval(eff_grid, chi2_eff, 1.0)
+    s_lo, s_hi = delta_chi2_interval(s_grid, chi2_s, 1.0)
+    eff_jlo, eff_jhi = delta_chi2_interval(eff_grid, chi2_eff, 2.30)
+    n_bins = len(source.counts)
+    return FitResult(
+        model="data-driven-scaled", best_eff=float(eff_grid[bi]),
+        eff_lo=eff_lo, eff_hi=eff_hi, eff_joint_lo=eff_jlo, eff_joint_hi=eff_jhi,
+        n_params=2, n_bins_fit=n_bins,
+        chi2_min=float(surface[bi, bj]), ndof=n_bins - 2,
+        eff_grid=eff_grid, chi2_eff=chi2_eff, best_profile=best.best_profile,
+        best_lambda=float(s_grid[bj]), lam_lo=s_lo, lam_hi=s_hi,
+        lam_grid=s_grid, chi2_lam=chi2_s, chi2_surface=surface, warnings=warnings)
 
 
 def fit_poisson(source: MultiplicityHist, eff_grid: np.ndarray, lam_grid: np.ndarray,
@@ -837,6 +980,139 @@ def _resolve_event_index(ctx) -> pd.DataFrame:
     return load_event_index(paths)
 
 
+def _position_groups(ei: pd.DataFrame, source_runs, bkg_run: int) -> list[tuple]:
+    """[(label, (x, y, z), [runs])]: one entry per run, then one per position summed."""
+    pos = (ei.groupby("run")[["sourceX", "sourceY", "sourceZ"]].first()
+           .astype(float))
+    runs = [r for r in pos.index if r != bkg_run]
+    if source_runs != "all":
+        runs = [r for r in runs if r in {int(x) for x in source_runs}]
+    groups = [(f"run {r}", tuple(pos.loc[r]), [int(r)]) for r in runs]
+    by_pos: dict[tuple, list[int]] = {}
+    for r in runs:
+        by_pos.setdefault(tuple(pos.loc[r]), []).append(int(r))
+    groups += [("position", p, rs) for p, rs in sorted(by_pos.items())]
+    return groups
+
+
+def _summed_hist(ei: pd.DataFrame, runs: list[int], n_bins: int, denominator: str,
+                 overflow_policy: str) -> MultiplicityHist:
+    hs = [build_multiplicity(ei, r, n_bins, denominator,
+                             overflow_policy=overflow_policy) for r in runs]
+    if len(hs) == 1:
+        return hs[0]
+    return MultiplicityHist(
+        run=hs[0].run, counts=sum(h.counts for h in hs),
+        total_events=sum(h.total_events for h in hs),
+        cosmic_events=sum(h.cosmic_events for h in hs),
+        denominator_mode=denominator, provenance=f"EventIndex runs {runs}",
+        n_overflow=sum(h.n_overflow for h in hs))
+
+
+def _fit_group(label, pos, runs, src, bkg, index, *, eff_grid, lam_grid, s_grid,
+               likelihood, bkg_unc_mode, n_boot, seed, n_gof_toys) -> dict:
+    x, y, z = pos
+    rng = np.random.default_rng(seed + index)
+    rp = fit_poisson(src, eff_grid, lam_grid, likelihood=likelihood)
+    if bkg_unc_mode == "profile":
+        rd = fit_datadriven_profile(src, bkg, eff_grid)
+        rs = fit_datadriven_profile(src, bkg, eff_grid, s_grid)
+    else:
+        rd = fit_datadriven(src, bkg, eff_grid, likelihood=likelihood,
+                            bkg_unc_mode=bkg_unc_mode, n_bootstrap=n_boot,
+                            rng=np.random.default_rng(seed))
+        rs = fit_datadriven_scaled(src, bkg, eff_grid, s_grid,
+                                   likelihood=likelihood, bkg_unc_mode=bkg_unc_mode,
+                                   n_bootstrap=n_boot, seed=seed)
+    row = dict(level=label.split()[0], x_pos=x, y_pos=y, z_pos=z,
+               runs=" ".join(map(str, runs)), total_events=src.total_events,
+               cosmic_events=src.cosmic_events, n_trig=src.denominator,
+               hist=" ".join(str(int(c)) for c in src.counts),
+               naive_eff=src.naive_efficiency,
+               naive_err=np.sqrt(src.naive_efficiency
+                                 * (1 - src.naive_efficiency) / src.denominator))
+    for tag, r in (("poisson", rp), ("dd", rd), ("dds", rs)):
+        edge = (r.best_eff <= eff_grid[0] or r.best_eff >= eff_grid[-1]
+                or (r.lam_grid is not None
+                    and (r.best_lambda <= r.lam_grid[0]
+                         or r.best_lambda >= r.lam_grid[-1])))
+        if tag != "poisson" and bkg_unc_mode == "profile":
+            # The source term alone is saturated by the free template bins; only the
+            # joint deviance carries goodness of fit.
+            from scipy.stats import chi2 as _chi2
+            p_val = float(_chi2.sf(r.chi2_min, r.ndof_standard))
+        else:
+            obs = (float(multinomial_deviance(r.best_profile, src.counts))
+                   if likelihood == "multinomial" else r.chi2_min)
+            p_val = pseudo_experiment_p_value(r.best_profile, src.denominator,
+                                              obs, _toy_unc, n_gof_toys, rng,
+                                              statistic=likelihood)
+        row.update({
+            f"{tag}_eff": r.best_eff, f"{tag}_eff_lo": r.eff_lo,
+            f"{tag}_eff_hi": r.eff_hi, f"{tag}_stat": r.chi2_min,
+            f"{tag}_ndof": r.ndof_standard, f"{tag}_p": p_val,
+            f"{tag}_thesis_chi2": float(thesis_chi2(r.best_profile, src.normed,
+                                                    src.normed_unc)),
+            f"{tag}_at_grid_edge": bool(edge)})
+    row.update(poisson_lambda=rp.best_lambda, poisson_lambda_lo=rp.lam_lo,
+               poisson_lambda_hi=rp.lam_hi, dds_s=rs.best_lambda,
+               dds_s_lo=rs.lam_lo, dds_s_hi=rs.lam_hi,
+               dds_lambda_eff=scaled_template_mean(bkg, rs.best_lambda),
+               delta_model_signed=rs.best_eff - rp.best_eff)
+    return row
+
+
+def run_by_position(ctx, fp: dict, ei: pd.DataFrame, *, n_bins: int,
+                    eff_grid: np.ndarray, lam_grid: np.ndarray,
+                    likelihood: str, bkg_unc_mode: str, overflow_policy: str,
+                    n_gof_toys: int, n_jobs: int = 1,
+                    out_suffix: str = "") -> pd.DataFrame:
+    """Poisson, fixed-template and scaled-template fits at every source position."""
+    bkg_run = int(fp["background_run"])
+    denom = _require_choice("denominator", fp.get("denominator", "ambe_triggers"),
+                            SystemExit)
+    if bkg_unc_mode == "profile" and likelihood != "multinomial":
+        raise SystemExit("[efficiency_fit] background_uncertainty: profile is a joint "
+                         "multinomial likelihood; set likelihood: multinomial")
+    s_grid = make_grid(fp["s_grid"])
+    n_boot = int(fp.get("n_bootstrap", 400))
+    seed = int(fp.get("seed", 0))
+
+    bkg = build_multiplicity(ei, bkg_run, n_bins, denom,
+                             overflow_policy=overflow_policy)
+    print(f"\n--- per-position fits, denominator={denom}, likelihood={likelihood}, "
+          f"background_uncertainty={bkg_unc_mode}, n_bins={n_bins}")
+    print("   background " + bkg.summary())
+
+    from joblib import Parallel, delayed
+    groups = _position_groups(ei, fp["source_runs"], bkg_run)
+    jobs = [(label, pos, runs, _summed_hist(ei, runs, n_bins, denom, overflow_policy))
+            for label, pos, runs in groups]
+    opts = dict(eff_grid=eff_grid, lam_grid=lam_grid, s_grid=s_grid,
+                likelihood=likelihood, bkg_unc_mode=bkg_unc_mode, n_boot=n_boot,
+                seed=seed, n_gof_toys=n_gof_toys)
+    rows = Parallel(n_jobs=n_jobs, verbose=0)(
+        delayed(_fit_group)(label, pos, runs, src, bkg, i, **opts)
+        for i, (label, pos, runs, src) in enumerate(jobs))
+    for (label, (x, y, z), _, _), row in zip(jobs, rows):
+        print(f"   {label:>9} ({x:g},{y:g},{z:g}) N={row['n_trig']:,} "
+              f"naive={row['naive_eff']:.4f}  poisson={row['poisson_eff']:.4f} "
+              f"(lam {row['poisson_lambda']:.3f})  dd={row['dd_eff']:.4f}  "
+              f"dds={row['dds_eff']:.4f} (s {row['dds_s']:.3f}, "
+              f"lam_eff {row['dds_lambda_eff']:.3f})")
+
+    df = pd.DataFrame(rows)
+    df["background_run"] = bkg_run
+    df["background_hist"] = " ".join(str(int(c)) for c in bkg.counts)
+    df["likelihood"] = likelihood
+    df["background_uncertainty"] = bkg_unc_mode
+    df["n_bins"] = n_bins
+    out = ctx.csv_path("efficiency_fit_by_position" + out_suffix)
+    df.to_csv(out, index=False)
+    print(f"\n[efficiency_fit] wrote {out}")
+    return df
+
+
 def run(ctx, argv=None):
     """`ambe stats efficiency --config <yaml>` -- thesis chapter 8 extraction."""
     import argparse
@@ -849,6 +1125,11 @@ def run(ctx, argv=None):
                     default=True,
                     help="report ambe_triggers and total_events (default on); "
                          "--no-both-denominators restricts to fit_params.denominator")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="parallel position groups (per-position mode only)")
+    ap.add_argument("--n-bins", type=int, default=None,
+                    help="override fit_params.n_bins; the per-position CSV gets a "
+                         "_nbins<N> suffix")
     args, _ = ap.parse_known_args(argv or [])
 
     fp = dict(ctx.fit_params or {})
@@ -856,10 +1137,7 @@ def run(ctx, argv=None):
         raise SystemExit("[efficiency_fit] config has no fit_params block")
     syst_cfg = dict((ctx.extra or {}).get("systematics") or {})
 
-    src_run = int(fp["source_run"])
-    bkg_run = int(fp["background_run"])
-    xchk_run = fp.get("crosscheck_run")
-    n_bins = int(fp.get("n_bins", 8))
+    n_bins = int(args.n_bins or fp.get("n_bins", 8))
     engine = args.engine or fp.get("engine", "analytic")
     # argparse `choices` only guards the CLI; a typo in the config used to fall
     # through an `else` and silently run the toy-MC path.
@@ -919,6 +1197,24 @@ def run(ctx, argv=None):
 
     ei = _resolve_event_index(ctx)
 
+    if bkg_unc_mode == "profile" and "source_runs" not in fp:
+        raise SystemExit("[efficiency_fit] background_uncertainty: profile is only "
+                         "implemented for the per-position fits (fit_params.source_runs)")
+    if "source_runs" in fp:
+        if "source_run" in fp:
+            raise SystemExit("[efficiency_fit] set fit_params.source_run OR "
+                             "source_runs, not both")
+        return run_by_position(ctx, fp, ei, n_bins=n_bins, eff_grid=eff_grid,
+                               lam_grid=lam_grid, likelihood=likelihood,
+                               bkg_unc_mode=bkg_unc_mode,
+                               overflow_policy=overflow_policy,
+                               n_gof_toys=n_gof_toys, n_jobs=args.jobs,
+                               out_suffix=f"_nbins{n_bins}" if args.n_bins else "")
+
+    src_run = int(fp["source_run"])
+    bkg_run = int(fp["background_run"])
+    xchk_run = fp.get("crosscheck_run")
+
     print("\n" + "=" * 78)
     print("NEUTRON DETECTION EFFICIENCY -- multiplicity fit (thesis ch. 8.6)")
     print("=" * 78)
@@ -930,7 +1226,7 @@ def run(ctx, argv=None):
     rows: list[dict] = []
     results: dict = {}
 
-    def row_for(r, *, denominator, numerator_mode, primary, model, is_nominal,
+    def row_for(r, *, denominator, primary, model, is_nominal,
                 source_run, src_hist, bkg_hist, delta_model_signed,
                 delta_bt=None, delta_bt_unc=None, delta_bt_basis="n/a",
                 delta_bt_publishable=False, delta_h=None, delta_h_unc=None,
@@ -938,7 +1234,7 @@ def run(ctx, argv=None):
         """One CSV row. The key order here IS the column order -- do not reorder."""
         # The cross-check rows differ only in the systematics block, hence the defaults.
         return dict(
-            denominator=denominator, numerator_mode=numerator_mode, primary=primary,
+            denominator=denominator, primary=primary,
             model=model,
             is_nominal=is_nominal,
             source_run=source_run, background_run=bkg_run,
@@ -967,79 +1263,74 @@ def run(ctx, argv=None):
 
     denoms = (["ambe_triggers", "total_events"] if args.both_denominators
               else [fp.get("denominator", "ambe_triggers")])
-    num_modes = ["noncosmic", "production"]
-
     for denom in denoms:
-        for num_mode in num_modes:
-            src = build_multiplicity(ei, src_run, n_bins, denom, num_mode,
-                                     overflow_policy=overflow_policy)
-            bkg = build_multiplicity(ei, bkg_run, n_bins, denom, num_mode,
-                                     overflow_policy=overflow_policy)
-            primary = (denom == fp.get("denominator", "ambe_triggers")
-                       and num_mode == fp.get("numerator_mode", "noncosmic"))
-            head = f"\n--- denominator={denom}  numerator={num_mode}" \
-                   + ("   [PRIMARY]" if primary else "")
-            print(head)
-            print("   " + src.summary())
-            print("   " + bkg.summary())
-            for h in (src, bkg):
-                if h.n_overflow:
-                    print(f"   *** run {h.run}: {h.n_overflow:,} acquisitions exceed "
-                          f"n_bins={n_bins} and were folded into bin {n_bins - 1} "
-                          f"(overflow_policy='clip'). Read that bin as "
-                          f"'>= {n_bins - 1}'. Raise n_bins to avoid merging "
-                          f"physically different multiplicities. ***")
+        src = build_multiplicity(ei, src_run, n_bins, denom,
+                                 overflow_policy=overflow_policy)
+        bkg = build_multiplicity(ei, bkg_run, n_bins, denom,
+                                 overflow_policy=overflow_policy)
+        primary = denom == fp.get("denominator", "ambe_triggers")
+        head = f"\n--- denominator={denom}" + ("   [PRIMARY]" if primary else "")
+        print(head)
+        print("   " + src.summary())
+        print("   " + bkg.summary())
+        for h in (src, bkg):
+            if h.n_overflow:
+                print(f"   *** run {h.run}: {h.n_overflow:,} acquisitions exceed "
+                      f"n_bins={n_bins} and were folded into bin {n_bins - 1} "
+                      f"(overflow_policy='clip'). Read that bin as "
+                      f"'>= {n_bins - 1}'. Raise n_bins to avoid merging "
+                      f"physically different multiplicities. ***")
 
-            rp = fit_poisson(src, eff_grid, lam_grid, engine=engine,
-                             n_throws=n_throws, rng=rng, likelihood=likelihood)
-            rd = fit_datadriven(src, bkg, eff_grid, engine=engine,
-                                n_throws=n_throws, rng=rng,
-                                bkg_scale=scale, likelihood=likelihood,
-                                bkg_unc_mode=bkg_unc_mode,
-                                n_bootstrap=int(fp.get("n_bootstrap", 400)))
-            if primary:
-                assert_interior(rp, "poisson")
-                assert_interior(rd, "data-driven")
-                for r in (rp, rd):
-                    r.p_value = pseudo_experiment_p_value(
-                        r.best_profile, src.denominator, r.chi2_min,
-                        _toy_unc, n_gof_toys, rng)
-                    r.p_value_basis = (f"{n_gof_toys:,} multinomial pseudo-experiments "
-                                       f"at the best-fit model")
-            print("   " + rp.summary())
-            print("   " + rd.summary())
-            for w in rd.warnings:
-                print(f"   [caveat] {w}")
-
-            # The other model is the alternative; its distance is the model systematic.
-            r_nom = rp if nominal_model == "poisson" else rd
-            r_alt = rd if nominal_model == "poisson" else rp
-            sb = systematics(
-                r_nom.best_eff, r_alt.best_eff,
-                n_trig_bkg=bkg.denominator, n_trig_src=src.denominator,
-                livetime_bkg_s=(syst_cfg.get("livetime_s") or {}).get(bkg_run),
-                livetime_src_s=(syst_cfg.get("livetime_s") or {}).get(src_run),
-                livetime_bkg_unc_s=(syst_cfg.get("livetime_unc_s") or {}).get(bkg_run),
-                livetime_src_unc_s=(syst_cfg.get("livetime_unc_s") or {}).get(src_run),
-                delta_h=syst_cfg.get("delta_h_housing_fraction"),
-                delta_h_unc=syst_cfg.get("delta_h_housing_fraction_unc"),
-                housing_n_captures=syst_cfg.get("housing_n_captures"),
-                housing_n_simulated=syst_cfg.get("housing_n_simulated"))
-            print("   " + sb.summary())
-
+        rp = fit_poisson(src, eff_grid, lam_grid, engine=engine,
+                         n_throws=n_throws, rng=rng, likelihood=likelihood)
+        rd = fit_datadriven(src, bkg, eff_grid, engine=engine,
+                            n_throws=n_throws, rng=rng,
+                            bkg_scale=scale, likelihood=likelihood,
+                            bkg_unc_mode=bkg_unc_mode,
+                            n_bootstrap=int(fp.get("n_bootstrap", 400)))
+        if primary:
+            assert_interior(rp, "poisson")
+            assert_interior(rd, "data-driven")
             for r in (rp, rd):
-                rows.append(row_for(
-                    r, denominator=denom, numerator_mode=num_mode, primary=primary,
-                    model=r.model, is_nominal=(r is r_nom),
-                    source_run=src_run, src_hist=src, bkg_hist=bkg,
-                    delta_model_signed=sb.delta_model_signed,
-                    delta_bt=sb.delta_bt, delta_bt_unc=sb.delta_bt_unc,
-                    delta_bt_basis=sb.delta_bt_basis,
-                    delta_bt_publishable=sb.delta_bt_publishable,
-                    delta_h=sb.delta_h, delta_h_unc=sb.delta_h_unc,
-                    syst_plus=sb.total_plus, syst_minus=sb.total_minus))
-            if primary:
-                results = dict(poisson=rp, datadriven=rd, syst=sb, src=src, bkg=bkg)
+                r.p_value = pseudo_experiment_p_value(
+                    r.best_profile, src.denominator, r.chi2_min,
+                    _toy_unc, n_gof_toys, rng)
+                r.p_value_basis = (f"{n_gof_toys:,} multinomial pseudo-experiments "
+                                   f"at the best-fit model")
+        print("   " + rp.summary())
+        print("   " + rd.summary())
+        for w in rd.warnings:
+            print(f"   [caveat] {w}")
+
+        # The other model is the alternative; its distance is the model systematic.
+        r_nom = rp if nominal_model == "poisson" else rd
+        r_alt = rd if nominal_model == "poisson" else rp
+        sb = systematics(
+            r_nom.best_eff, r_alt.best_eff,
+            n_trig_bkg=bkg.denominator, n_trig_src=src.denominator,
+            livetime_bkg_s=(syst_cfg.get("livetime_s") or {}).get(bkg_run),
+            livetime_src_s=(syst_cfg.get("livetime_s") or {}).get(src_run),
+            livetime_bkg_unc_s=(syst_cfg.get("livetime_unc_s") or {}).get(bkg_run),
+            livetime_src_unc_s=(syst_cfg.get("livetime_unc_s") or {}).get(src_run),
+            delta_h=syst_cfg.get("delta_h_housing_fraction"),
+            delta_h_unc=syst_cfg.get("delta_h_housing_fraction_unc"),
+            housing_n_captures=syst_cfg.get("housing_n_captures"),
+            housing_n_simulated=syst_cfg.get("housing_n_simulated"))
+        print("   " + sb.summary())
+
+        for r in (rp, rd):
+            rows.append(row_for(
+                r, denominator=denom, primary=primary,
+                model=r.model, is_nominal=(r is r_nom),
+                source_run=src_run, src_hist=src, bkg_hist=bkg,
+                delta_model_signed=sb.delta_model_signed,
+                delta_bt=sb.delta_bt, delta_bt_unc=sb.delta_bt_unc,
+                delta_bt_basis=sb.delta_bt_basis,
+                delta_bt_publishable=sb.delta_bt_publishable,
+                delta_h=sb.delta_h, delta_h_unc=sb.delta_h_unc,
+                syst_plus=sb.total_plus, syst_minus=sb.total_minus))
+        if primary:
+            results = dict(poisson=rp, datadriven=rd, syst=sb, src=src, bkg=bkg)
 
     # Cross-check run, primary convention only.
     if xchk_run:
@@ -1047,11 +1338,9 @@ def run(ctx, argv=None):
         try:
             xsrc = build_multiplicity(ei, xr, n_bins,
                                       fp.get("denominator", "ambe_triggers"),
-                                      fp.get("numerator_mode", "noncosmic"),
                                       overflow_policy=overflow_policy)
             xbkg = build_multiplicity(ei, bkg_run, n_bins,
                                       fp.get("denominator", "ambe_triggers"),
-                                      fp.get("numerator_mode", "noncosmic"),
                                       overflow_policy=overflow_policy)
             print(f"\n--- cross-check run {xr} (independent position)")
             print("   " + xsrc.summary())
@@ -1068,7 +1357,6 @@ def run(ctx, argv=None):
             for r in (xp, xd):
                 rows.append(row_for(
                     r, denominator=fp.get("denominator", "ambe_triggers"),
-                    numerator_mode=fp.get("numerator_mode", "noncosmic"),
                     primary=False, model=f"{r.model} (crosscheck {xr})",
                     is_nominal=(r is x_nom),
                     source_run=xr, src_hist=xsrc, bkg_hist=xbkg,
@@ -1193,7 +1481,6 @@ def run(ctx, argv=None):
                                cosmic_events=src.cosmic_events,
                                denominator=src.denominator,
                                denominator_mode=src.denominator_mode,
-                               numerator_mode=src.numerator_mode,
                                n_overflow=src.n_overflow,
                                provenance=src.provenance,
                                naive_efficiency=src.naive_efficiency),
@@ -1202,7 +1489,6 @@ def run(ctx, argv=None):
                                    cosmic_events=bkg.cosmic_events,
                                    denominator=bkg.denominator,
                                    denominator_mode=bkg.denominator_mode,
-                                   numerator_mode=bkg.numerator_mode,
                                    n_overflow=bkg.n_overflow,
                                    provenance=bkg.provenance,
                                    naive_efficiency=bkg.naive_efficiency),

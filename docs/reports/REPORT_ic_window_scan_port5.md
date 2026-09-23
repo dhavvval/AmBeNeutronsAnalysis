@@ -219,7 +219,9 @@ Scale: 2291 events over the five Port-5 runs at the production window; all have
 summed efficiency is **0.6798 → 0.6476**, i.e. ~3.2 pp, and it is present in every
 published v4 box number.
 
-This is pre-existing and was **not** changed. `icscan` reproduces it exactly as the
+**Update 2026-09-22:** fixed. The cluster loop decides the veto over every cluster first and `legacy_ordering` is gone; v4 was reprocessed as `AmBe2.0v4_all28_box_veto`. The text below describes the scan as it was run.
+
+At the time this was pre-existing and was **not** changed. `icscan` reproduces it exactly as the
 primary `efficiency` column — that is what makes the closure test meaningful and keeps
 every scan point comparable to the published figure — and carries the stricter reading
 as `efficiency_noncosmic` / `unique_neutron_triggers_noncosmic` /

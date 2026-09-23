@@ -12,6 +12,7 @@ import pytest
 from ambe.efficiency_extraction.efficiency_fit import (
     EMPTY_BIN_UNC_COUNTS, analytic_profile_datadriven, analytic_profile_poisson,
     background_scale_factor, build_multiplicity, delta_chi2_interval, fit_datadriven,
+    fit_datadriven_profile, fit_datadriven_scaled,
     fit_poisson, make_grid, mc_profile_poisson, multiplicity_from_counts)
 import pandas as pd
 
@@ -117,26 +118,45 @@ def test_denominator_choice_changes_the_answer():
     assert t.naive_efficiency == pytest.approx(350 / 1000)
 
 
-def test_production_numerator_leaks_cosmic_events():
-    """The documented icscan.py:368-406 inconsistency must be reproducible on demand
-    and must NOT be the default."""
+def test_eventindex_from_the_single_pass_loop_is_refused():
+    """A cosmic-vetoed event carrying candidates can only come from the removed loop."""
     ei = _event_index(6062, n_total=1000, n_cosmic=200,
                       mult_map={1: 300}, cosmic_with_cand=40)
-    strict = build_multiplicity(ei, 6062, numerator_mode="noncosmic")
-    prod = build_multiplicity(ei, 6062, numerator_mode="production")
-    assert strict.n_with_candidate == 300
-    assert prod.n_with_candidate == 340
-    assert prod.naive_efficiency > strict.naive_efficiency
+    with pytest.raises(SystemExit, match="single-pass cluster loop"):
+        build_multiplicity(ei, 6062)
 
 
-def test_negative_zero_bin_is_refused_not_silently_clipped():
-    """production numerator + ambe_triggers denominator can underflow: the numerator
-    counts cosmic-vetoed candidate events that the denominator has removed."""
-    ei = _event_index(1, n_total=100, n_cosmic=80, mult_map={1: 15},
-                      cosmic_with_cand=70)
-    # denominator = 100 - 80 = 20; production numerator = 15 + 70 = 85 > 20
-    with pytest.raises(SystemExit, match="negative zero bin"):
-        build_multiplicity(ei, 1, numerator_mode="production")
+def test_scaled_template_at_unit_scale_is_the_fixed_template_fit():
+    src = multiplicity_from_counts(1, {1: 900, 2: 80, 3: 10}, 2000, n_bins=5)
+    bkg = multiplicity_from_counts(2, {1: 30, 2: 5}, 400, n_bins=5)
+    grid = np.linspace(0.2, 0.8, 301)
+    fixed = fit_datadriven(src, bkg, grid)
+    scaled = fit_datadriven_scaled(src, bkg, grid, np.array([0.9, 1.0, 1.1]))
+    j = 1
+    assert np.allclose(scaled.chi2_surface[:, j], fixed.chi2_eff)
+
+
+def test_scaled_template_recovers_injected_efficiency_and_scale():
+    bkg = multiplicity_from_counts(2, {1: 3000, 2: 900, 3: 200}, 20000, n_bins=6)
+    s_true, eff_true = 0.5, 0.6
+    w = bkg.normed * s_true ** np.arange(6)
+    model = analytic_profile_datadriven(eff_true, w / w.sum(), 6)
+    counts = np.round(model * 200000)
+    nonzero = {k: int(c) for k, c in enumerate(counts) if k > 0}
+    src = multiplicity_from_counts(1, nonzero, int(counts.sum()), n_bins=6)
+    r = fit_datadriven_scaled(src, bkg, np.linspace(0.4, 0.8, 401),
+                              np.linspace(0.2, 1.0, 161))
+    assert r.best_eff == pytest.approx(eff_true, abs=0.003)
+    assert r.best_lambda == pytest.approx(s_true, abs=0.02)
+
+
+def test_scaled_template_zero_background_limit_is_naive_counting():
+    src = multiplicity_from_counts(1, {1: 600}, 1000, n_bins=4)
+    bkg = multiplicity_from_counts(2, {1: 5, 2: 2}, 100, n_bins=4)
+    r = fit_datadriven_scaled(src, bkg, np.linspace(0.3, 0.9, 601),
+                              np.linspace(0.0, 1.0, 101))
+    assert r.best_eff == pytest.approx(0.6, abs=0.002)
+    assert r.best_lambda == pytest.approx(0.0, abs=0.011)
 
 
 def test_overflow_fails_loudly_by_default():
@@ -616,3 +636,17 @@ def test_background_scale_rescales_uncertainties_too():
     # fit stays well defined, which it did not when the two were inconsistent.
     assert r1.best_eff != r2.best_eff
     assert np.isfinite(r2.chi2_min)
+
+
+def test_profile_fit_recovers_injected_efficiency_with_a_small_template():
+    """The joint fit must not be dragged by a template whose rate is wrong."""
+    bkg = multiplicity_from_counts(2, {1: 3, 2: 2}, 22, n_bins=4)
+    lam, eff_true = 0.08, 0.6
+    model = analytic_profile_poisson(eff_true, lam, 4)
+    counts = np.round(model * 20000)
+    src = multiplicity_from_counts(1, {k: int(c) for k, c in enumerate(counts) if k},
+                                   int(counts.sum()), n_bins=4)
+    r = fit_datadriven_profile(src, bkg, np.linspace(0.5, 0.7, 201),
+                               np.linspace(0.0, 1.5, 61))
+    assert r.best_eff == pytest.approx(eff_true, abs=0.005)
+    assert r.eff_lo < eff_true < r.eff_hi

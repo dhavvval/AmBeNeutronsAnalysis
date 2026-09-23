@@ -59,15 +59,14 @@ def main():
     ap.add_argument("--tag", default="effpair_box")
     ap.add_argument("--nbins", type=int, default=8)
     ap.add_argument("--denominator", default="ambe_triggers")
-    ap.add_argument("--numerator", default="noncosmic")
     args = ap.parse_args()
 
     ei = load_event_index([
         str(REPOSITORY_ROOT / f"TriggerSummary/EventIndex_AmBe2.0v4_{args.tag}_{args.source}.parquet"),
         str(REPOSITORY_ROOT / f"TriggerSummary/EventIndex_AmBe2.0v4_{args.tag}_{args.bkg}.parquet"),
     ])
-    src = build_multiplicity(ei, args.source, args.nbins, args.denominator, args.numerator)
-    bkg = build_multiplicity(ei, args.bkg, args.nbins, args.denominator, args.numerator)
+    src = build_multiplicity(ei, args.source, args.nbins, args.denominator)
+    bkg = build_multiplicity(ei, args.bkg, args.nbins, args.denominator)
 
     eg = make_grid({"min": 0.30, "max": 0.95, "step": 0.001})
 

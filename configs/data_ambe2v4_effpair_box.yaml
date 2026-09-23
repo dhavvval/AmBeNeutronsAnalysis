@@ -52,7 +52,6 @@ fit_params:
   n_bins: 8
 
   denominator: ambe_triggers        # ambe_triggers | total_events
-  numerator_mode: noncosmic         # noncosmic | production
 
   nominal_model: poisson            # data_driven | poisson
 
@@ -90,6 +89,7 @@ fit_params:
 
   eff_grid:    {min: 0.30, max: 0.95, step: 0.001}
   lambda_grid: {min: 0.00, max: 0.60, step: 0.002}
+  s_grid:      {min: 0.00, max: 1.50, step: 0.005}
 
   n_throws: 1000000
   seed: 20260910

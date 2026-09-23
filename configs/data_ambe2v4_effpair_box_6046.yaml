@@ -50,7 +50,6 @@ fit_params:
 
   n_bins: 8
   denominator: ambe_triggers
-  numerator_mode: noncosmic
 
   nominal_model: poisson
   gof_min_p_value: 0.01

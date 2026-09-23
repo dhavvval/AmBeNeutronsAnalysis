@@ -223,6 +223,43 @@ def _load_and_prepare(ctx: RunContext) -> pd.DataFrame:
     return df
 
 
+FIT_MAPS = {
+    "fit_poisson": ("poisson", "Poisson-background fit"),
+    "fit_datadriven": ("dds", "data-driven fit, 6264 shape with fitted rate"),
+}
+
+
+def _fit_heatmap(ctx: RunContext, name: str, short: str) -> None:
+    """Fitted eps_n by position, from `ambe stats efficiency` (efficiency_fit_by_position)."""
+    tag, what = FIT_MAPS[name]
+    path = ctx.csv_path("efficiency_fit_by_position")
+    if not path.exists():
+        raise SystemExit(f"[plots.heatmap] {name} needs {path}; run "
+                         f"`ambe stats efficiency --config <cfg>` first")
+    df = pd.read_csv(path)
+    df = df[df["level"] == "position"].copy()
+    df["port"] = [PORT_INFO.get((x, y, z), "Unknown")
+                  for x, y, z in zip(df["x_pos"], df["y_pos"], df["z_pos"])]
+    df["eff"] = 100 * df[f"{tag}_eff"]
+    df["err"] = 50 * (df[f"{tag}_eff_hi"] - df[f"{tag}_eff_lo"])
+    eff = df.pivot(index="y_pos", columns="port", values="eff").reindex(columns=PORT_ORDER)
+    err = df.pivot(index="y_pos", columns="port", values="err").reindex(columns=PORT_ORDER)
+    labels = np.vectorize(lambda e, u: "empty" if pd.isna(e) else heat_label(e, u))(
+        eff.values, err.values)
+    fig, ax = plt.subplots(figsize=_figsize(eff))
+    sns.heatmap(eff, annot=labels, fmt="", cmap="YlOrBr", cbar=True,
+                annot_kws=heat_annot_kws(), mask=eff.isna(), linecolor="black",
+                linewidths=0.2, cbar_kws={"label": "Efficiency (%)"}, ax=ax)
+    ax.set_title(f"Neutron detection efficiency for {ctx.campaign}, {what} ({short})",
+                 fontsize=HEAT_TITLE_SIZE)
+    ax.set_xlabel("Ports", fontsize=HEAT_LABEL_SIZE)
+    ax.set_ylabel("Y Position (cm)", fontsize=HEAT_LABEL_SIZE)
+    ax.tick_params(labelsize=HEAT_TICK_SIZE)
+    ax.invert_yaxis()
+    plt.xticks(rotation=45); plt.yticks(rotation=0)
+    save_plot(fig, ctx, f"efficiency_heatmap_{name}")
+
+
 def run(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     p = argparse.ArgumentParser(prog="ambe plots heatmap")
     p.parse_args(list(argv) if argv else [])
@@ -273,10 +310,11 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     # Drawing them anyway would put a number on a slide that this deck cannot measure.
     maps = list((ctx.extra.get("plots", {}).get("heatmap", {}) or {}).get(
         "maps", ["statistics", "efficiency", "residual"]))
-    unknown = set(maps) - {"statistics", "efficiency", "residual"}
+    unknown = set(maps) - {"statistics", "efficiency", "residual"} - set(FIT_MAPS)
     if unknown:
         raise SystemExit(f"[plots.heatmap] unknown map(s) {sorted(unknown)}; "
-                         f"choose from statistics, efficiency, residual")
+                         f"choose from statistics, efficiency, residual, "
+                         f"{', '.join(FIT_MAPS)}")
     print(f"[plots.heatmap] emitting: {', '.join(maps)}")
 
     # 1. Statistics heatmap
@@ -308,6 +346,10 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     ax.invert_yaxis()
     plt.xticks(rotation=45); plt.yticks(rotation=0)
     save_plot(fig, ctx, "statistics_heatmap")
+
+    for name in maps:
+        if name in FIT_MAPS:
+            _fit_heatmap(ctx, name, short)
 
     if "efficiency" not in maps and "residual" not in maps:
         return

@@ -50,11 +50,9 @@ class AmBeNeutronProcessing:
                  cuts: Optional[CutCriteria] = None,
                  selection: Optional[Selection] = None,
                  extra_positions: Optional[Dict[int, Tuple[float, float, float]]] = None,
-                 cosmic_veto: bool = True,
-                 legacy_ordering: bool = False):
+                 cosmic_veto: bool = True):
         self.config = config or WaveformConfig()
         self.cuts = cuts or CutCriteria()
-        self.legacy_ordering = bool(legacy_ordering)
         self.cosmic_veto = bool(cosmic_veto)
         # Per-run positions that must NOT join the campaign map. See
         # get_source_location for why the special runs are kept out of it.
@@ -749,11 +747,10 @@ class AmBeNeutronProcessing:
     def select_event_clusters(self, times, pe, cb, hits, count, run=None, timestamp=None):
         """Return veto, single-category and multiple-category cluster indices."""
         cosmic = [k for k in range(len(times)) if self.cosmic_cut(times[k], pe[k])]
-        if cosmic and not self.legacy_ordering:
+        if cosmic:
             return cosmic, [], []
-        stop = cosmic[0] if cosmic else len(times)
         single, multiple = [], []
-        for k in range(stop):
+        for k in range(len(times)):
             key = cluster_key(run, timestamp, times[k]) if run is not None else None
             if pe[k] == float('-inf'):
                 continue
@@ -761,7 +758,7 @@ class AmBeNeutronProcessing:
                 single.append(k)
             if self.ambe_multiple_cut(pe[k], cb[k], times[k], count, hits[k], key):
                 multiple.append(k)
-        return (cosmic[:1] if self.legacy_ordering else cosmic), single, multiple
+        return cosmic, single, multiple
 
     def process_events_efficient(self, event_data: Dict[str, np.ndarray],
                                 good_events: Set[int], x_pos: float, y_pos: float, z_pos: float,
@@ -1395,16 +1392,13 @@ def run(ctx, argv=None):
         print(f"[data.process] extra source positions (not in the campaign map): "
               f"{ {k: v for k, v in extra.items()} }")
 
-    legacy_ordering = bool(st.get("legacy_ordering", False))
-    if legacy_ordering:
-        print("[data.process] *** legacy_ordering: ON. The cluster loop runs in ONE "
-              "pass, so an event with a candidate ordered before its cosmic cluster "
-              "counts in BOTH the numerator and cosmic_events. This reproduces the "
-              "published 57.23 % path and must not be used for a new measurement. ***")
+    if "legacy_ordering" in st:
+        raise SystemExit("[data.process] stage1.legacy_ordering was removed: the cosmic "
+                         "veto is decided over every cluster before any candidate is "
+                         "banked. Delete the key from the config.")
 
     processor = AmBeNeutronProcessing(config=wf, cuts=cuts, selection=selection,
-                                      extra_positions=extra,
-                                      legacy_ordering=legacy_ordering)
+                                      extra_positions=extra)
     result = processor.run_complete_analysis_pipeline(
         data_directory=st["data_directory"],
         waveform_dir=st.get("waveform_dir", st["data_directory"]),

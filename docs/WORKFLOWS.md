@@ -102,16 +102,17 @@ IC selection before use. Source/no-source and dummy-trigger plots remain separat
 The default PE/CB view is 0 to `cuts.pe_max + 20` PE and CB 0.1–0.5, for both box and
 MVA. This is a display range, not an added MVA cut; values outside it are not drawn.
 
-## Comparing the two cosmic-veto orderings
+## The cosmic veto
 
 The old loop could save a neutron candidate before reaching a later vetoing cluster.
 That event then contributed to the numerator while being subtracted from the denominator.
-The current default checks the whole event first. This cleanup retains that default
-and the explicit `stage1.legacy_ordering: true` reproduction option.
+The loop now checks the whole event first, and that is the only path: `stage1.legacy_ordering`
+was removed on 2026-09-22 (a config that still sets it is refused), and `efficiency_fit`
+no longer has a `numerator_mode`. An EventIndex written by the old loop is refused by
+`build_multiplicity`. The pre-fix published numbers (57.23 %, all28_box of 2026-08-26)
+can no longer be regenerated; the files stay on disk for comparison.
 
-Process identical files and IC gates under two new tags, with
-`stage1.dump_event_index: true`; set legacy ordering true for one and false for the other.
-Then compare the event indices:
+To compare an old EventIndex against a reprocessed one:
 
 ```bash
 python -m ambe.diagnostics.compare_veto \

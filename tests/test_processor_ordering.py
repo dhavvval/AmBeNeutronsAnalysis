@@ -52,10 +52,9 @@ def _event_data(clusters):
     }
 
 
-def _run_event(clusters, legacy=False):
+def _run_event(clusters):
     """Process one event; return (event_row, stats)."""
-    proc = AmBeNeutronProcessing(cuts=CUTS, selection=BoxSelection(CUTS),
-                                 legacy_ordering=legacy)
+    proc = AmBeNeutronProcessing(cuts=CUTS, selection=BoxSelection(CUTS))
     rows = []
     _, stats = proc.process_events_efficient(
         _event_data(clusters), good_events=None,
@@ -145,32 +144,3 @@ def test_every_accepted_cluster_lies_inside_the_configured_window():
     # nothing -- which is itself the correct answer.
     times = processed["cluster_time"] if isinstance(processed, dict) else []
     assert all(CUTS.ct_min <= t <= CUTS.ct_max for t in times)
-
-
-# --------------------------------------------------------------------------- #
-# The legacy path stays reproducible
-# --------------------------------------------------------------------------- #
-def test_legacy_ordering_still_reproduces_the_leak():
-    """The published 57.23 % path was produced by the order-dependent loop, so it
-    must remain available -- explicitly, never by default."""
-    row, stats = _run_event([CAND_A, CAND_B, COSMIC_PROMPT], legacy=True)
-    assert row["is_cosmic"] is True
-    leaked = row["n_accepted_single"] + row["n_accepted_multiple"]
-    assert leaked == 2, "legacy mode must still bank candidates seen before the cosmic"
-    assert stats["cosmic_events"] == 1
-
-
-def test_legacy_ordering_is_off_by_default():
-    proc = AmBeNeutronProcessing(cuts=CUTS, selection=BoxSelection(CUTS))
-    assert proc.legacy_ordering is False
-
-
-def test_legacy_and_fixed_agree_when_the_cosmic_comes_first():
-    """The two paths differ only in the ordering-sensitive case; with the cosmic
-    cluster first the old loop broke immediately and was already correct."""
-    clusters = [COSMIC_PROMPT, CAND_A, CAND_B]
-    a, sa = _run_event(clusters, legacy=False)
-    b, sb = _run_event(clusters, legacy=True)
-    assert (a["is_cosmic"], a["n_accepted_single"], a["n_accepted_multiple"]) == \
-           (b["is_cosmic"], b["n_accepted_single"], b["n_accepted_multiple"])
-    assert sa["cosmic_events"] == sb["cosmic_events"]
