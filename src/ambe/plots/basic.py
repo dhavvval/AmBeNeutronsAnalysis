@@ -33,13 +33,9 @@ class AmBeNeutronAnalyzer:
                  output_pdf: str = str(REPOSITORY_ROOT / 'ambe_output' / 'capture_time.pdf'),
                  campaign_label: str = 'AmBe 2.0v4',
                  min_cluster_hits: int = 10,
-                 selection_label: str = '',
-                 apply_hitid_swap: bool = True):
+                 selection_label: str = ''):
         self.data_directory = data_directory
         self.output_pdf = output_pdf
-        # The 453/455 hitID swap is a DATA-specific PMT correction; see load_and_group_data.
-        # Default True so every existing data caller is unaffected; MC configs set false.
-        self.apply_hitid_swap = bool(apply_hitid_swap)
         # Plot-only hits cut applied in prepare_data. See the note there: it is not
         # part of any published selection, so it has to be stated, not assumed.
         self.min_cluster_hits = min_cluster_hits
@@ -135,19 +131,6 @@ class AmBeNeutronAnalyzer:
             if df.empty:
                 print(f"No data in file: {filename}")
                 continue
-
-            # Legacy data PMT correction; MC callers disable it with apply_hitid_swap.
-            id1, id2 = 453, 455
-            if self.apply_hitid_swap and \
-                    df['hitID'].astype(str).str.contains(f'{id1}|{id2}').any():
-                original_hitids = df['hitID'].copy()
-                df['hitID'] = (df['hitID'].astype(str)
-                              .str.replace(f'{id1}', 'TEMP', regex=False)
-                              .str.replace(f'{id2}', f'{id1}', regex=False)
-                              .str.replace('TEMP', f'{id2}', regex=False))
-                
-                if (df['hitID'] != original_hitids).any():
-                    print(f"Swapped hitID {id1} and {id2} in file: {filename}")
 
             if 'run' not in df.columns:
                 df['run'] = run_number
@@ -1140,14 +1123,10 @@ def run(ctx, argv=None):
     mch = ctx.cuts.get("plot_min_cluster_hits", 10)
     print(f"[plots.basic] plot-only cut clusterHits >= {mch}"
           f"{'  (disabled)' if not mch else ''}")
-    hitid_swap = bool(ctx.cuts.get("apply_hitid_swap", True))
-    if not hitid_swap:
-        print("[plots.basic] hitID 453/455 swap DISABLED (data-specific PMT correction)")
     analyzer = AmBeNeutronAnalyzer(data_directory=data_dir, output_pdf=out_pdf,
                                    min_cluster_hits=int(mch or 0),
                                    campaign_label=ctx.campaign or 'AmBe 2.0v4',
-                                   selection_label=ctx.cuts.get('selection_label', ''),
-                                   apply_hitid_swap=hitid_swap)
+                                   selection_label=ctx.cuts.get('selection_label', ''))
     fc = ctx.fit_params
     if fc:
         analyzer.update_fitting_config(**{k: v for k, v in fc.items()

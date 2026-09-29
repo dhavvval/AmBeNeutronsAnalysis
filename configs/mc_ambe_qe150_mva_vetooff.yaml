@@ -62,10 +62,6 @@ cuts:
   # Plot-only cut in plots/basic.py. 0 here, same as both v4 decks, so MC and data are
   # comparable and neither deck is misrepresented as carrying a hidden hits requirement.
   plot_min_cluster_hits: 0
-  # The 453/455 hitID swap in plots/basic.py is a DATA-specific PMT correction and it
-  # fires on any hitID string merely CONTAINING "453"/"455". MC detector IDs would trip
-  # it and be silently relabelled.
-  apply_hitid_swap: false
   selection_label: "MVA neutron (GBT eff80, score > 0.423621) - prompt veto OFF"
 
 plots:
