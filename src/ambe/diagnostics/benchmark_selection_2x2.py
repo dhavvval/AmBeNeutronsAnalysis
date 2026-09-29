@@ -71,7 +71,8 @@ def main() -> None:
     p.add_argument("--features", required=True)
     p.add_argument("--model", required=True)
     p.add_argument("--out-dir", required=True)
-    p.add_argument("--score-col", default="rf_score")
+    p.add_argument("--score-col", default="rf_score",
+                   help="score column, or 'auto' for the primary model (nn > xgb > gbt > rf)")
     p.add_argument("--score-cut", type=float, default=0.643,
                    help="frozen Stage-B cut (rf @ 80%% MC sig eff = 0.643)")
     p.add_argument("--sig-eff", type=float, default=0.80,
@@ -107,6 +108,10 @@ def main() -> None:
     df = pd.read_parquet(final)
     df["is_neutron"] = df["dominant_class"].isin(NEUTRON_CLASSES)
 
+    if args.score_col == "auto":
+        from ..mc.mva_analysis import primary_score_col
+        args.score_col = primary_score_col(df)
+        print(f"[2x2] --score-col auto -> {args.score_col}")
     sc = args.score_col
     # Two truth definitions, reported side by side so nothing is hidden:
     #   composition : dominant_class in {1,2,3,4}  (the MVA's own signal def)
@@ -126,7 +131,7 @@ def main() -> None:
             (f"{args.box} box-cut", box_cut(sub, box), box["note"]),
             (f"MVA frozen @{args.score_cut:.3f}", sub[sc] >= args.score_cut, "frozen rf cut"),
             (f"MVA self {int(args.sig_eff*100)}% eff", sub[sc] >= thr_self,
-             f"rf>={thr_self:.3f}"),
+             f"{sc.split('_')[0]}>={thr_self:.3f}"),
         ]:
             m = metrics(sub, sel, truth)
             rows.append({"truth_def": truth_def, "clustering": method,

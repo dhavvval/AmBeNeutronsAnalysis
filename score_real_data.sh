@@ -23,7 +23,7 @@
 # Outputs (alongside the input parquet):
 #   <stem>_optics.parquet                  split: method==optics rows
 #   <stem>_clusterfinder.parquet           split: method==clusterfinder rows
-#   <stem>_optics__scored.parquet          with rf_score, gbt_score, xgb_score, nn_score
+#   <stem>_optics__scored.parquet          with one <model>_score per frozen model (nn primary)
 #   <stem>_clusterfinder__scored.parquet   same
 #
 # Activate the venv with tensorflow + xgboost + scikit-learn + joblib + pandas
@@ -145,14 +145,21 @@ for name, df in frames.items():
             print(f"{name:<8}  {sc:<10} {thr:<5}  {n:>8d}  {len(df):>8d}  {frac:6.1f}%")
     print()
 
-# Per-event multiplicity at gbt_score > 0.5
-print("--- per-event passing-cluster counts (gbt_score > 0.5) ---")
+# Per-event multiplicity at primary_score > 0.5. The primary model is the NN for
+# artifacts frozen since 2026-09-23, falling back to xgb/gbt/rf for older ones.
+from ambe.mc.mva_analysis import primary_score_col
 for name, df in frames.items():
-    if "eventID" not in df.columns or "gbt_score" not in df.columns:
-        print(f"  {name}: skipped (eventID or gbt_score missing)")
+    if "eventID" not in df.columns:
+        print(f"  {name}: skipped (eventID missing)")
         continue
+    try:
+        pcol = primary_score_col(df)
+    except KeyError:
+        print(f"  {name}: skipped (no score column)")
+        continue
+    print(f"--- {name}: per-event passing-cluster counts ({pcol} > 0.5) ---")
     n_events_total = df["eventID"].nunique()
-    passing = df[df["gbt_score"] > 0.5]
+    passing = df[df[pcol] > 0.5]
     n_per_event = passing.groupby("eventID").size()
     n_events_with_pass = int((n_per_event > 0).sum())
     pct = (n_events_with_pass / n_events_total * 100) if n_events_total else 0.0

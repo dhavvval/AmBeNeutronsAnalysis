@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from ..paths import REPOSITORY_ROOT
 import glob
 import pickle
@@ -1335,10 +1336,22 @@ def build_selection(ctx, name: str):
     scored = mva.get("scored")
     if isinstance(scored, str):
         scored = [scored]
+    point = mva.get("point", "eff80")
+    score_col, threshold = mva.get("score_col", "gbt_score"), mva.get("threshold")
+    if score_col == "auto" or threshold == "auto":
+        # Column and cut both come from the frozen artifact: its primary model (the
+        # NN for artifacts frozen since 2026-09-23) at the stored working point. The
+        # pair is never mixed, so a cut can't be applied to the wrong model's score.
+        if not mva.get("model"):
+            raise SystemExit("mva: score_col/threshold 'auto' needs `model: <frozen.pkl>`")
+        from ..mc.mva_analysis import frozen_working_point
+        score_col, threshold = frozen_working_point(mva["model"], point)
+        print(f"[processor] mva: {score_col} > {threshold:.6f} from "
+              f"{Path(mva['model']).name} ({point})")
     sel = get_selection("mva", cuts=cuts, scored=scored,
-                        threshold=float(mva["threshold"]),
-                        score_col=mva.get("score_col", "gbt_score"),
-                        point=mva.get("point", "eff80"))
+                        threshold=float(threshold),
+                        score_col=score_col,
+                        point=point)
     return sel, cuts
 
 

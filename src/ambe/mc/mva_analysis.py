@@ -2,10 +2,12 @@
 """
 Cluster-level MVA for neutron signal selection.
 
-Trains Random Forest, Gradient Boosted Tree, XGBoost, and a feedforward
-neural network on physics-only cluster features. The default NN is a
-lightweight test architecture (see NN_* constants); swap those to restore
-the thesis-sized model.
+Trains a feedforward neural network (the PRIMARY model) and XGBoost (the cross-check)
+on physics-only cluster features. Random Forest and sklearn GBT are still available with
+`--models rf,gbt,xgb,nn` so older results can be reproduced, but are no longer trained by
+default. Every working point (80 % signal efficiency, fixed false positives per event) is
+set on the primary model's score; `primary_score_col()` is what downstream code should use
+to pick the score column.
 
 Signal     : is_truth_neutron == 1
 Background : is_truth_neutron == 0  AND  is_prompt_cluster == 0
@@ -21,16 +23,21 @@ Outputs (under <output_root>/<run_name>/)
     plots/<run_name>__mva.pdf
         Page 1: ROC curves (all models, cluster-level test set)
         Page 2: Score distributions  signal vs background (one panel per model)
-        Page 3: Feature importances  RF, GBT, XGBoost
-        Page 4: Top-6 feature distributions (by RF importance)
-        Page 5: Neural network training history (if tensorflow available)
-        Page 6: Event-level efficiency vs score threshold
+        Page 3: Grouped permutation importance (NN and XGBoost, test-set AUC drop)
+        Page 4: NN integrated gradients + XGBoost TreeSHAP (mean |attribution|)
+        Page 5: XGBoost SHAP beeswarm (top features)
+        Page 6: Top-6 feature distributions (by primary-model permutation importance)
+        Page 7: Neural network training history (if tensorflow available)
+        Page 8: Event-level efficiency vs score threshold (primary model)
 
     parquet/<run_name>__mva_scores.parquet
-        All columns from cluster_features + {rf,gbt,xgb,nn}_score
+        All columns from cluster_features + {xgb,nn}_score (+ rf/gbt if requested)
 
     csv/<run_name>__mva_summary.csv
-        AUC values and per-feature importance table
+        Per-feature importance table (permutation, integrated gradients, SHAP)
+    csv/<run_name>__mva_working_points.csv
+        Threshold, signal efficiency and false positives per event for each model at
+        80 % signal efficiency and at fixed false-positive rates per event
 """
 from __future__ import annotations
 
@@ -142,6 +149,75 @@ _NAMED_BACKGROUNDS = {
 }
 
 COLORS = {"signal": "#0077BB", "background": "#BBBBBB", "prompt": "#EE7733"}
+
+TREE_KEYS      = ("rf", "gbt", "xgb")
+DEFAULT_MODELS = "xgb,nn"
+PRIMARY_ORDER  = ("nn", "xgb", "gbt", "rf")   # preferred score column, best first
+
+# Feature groups for grouped permutation importance. Correlated duplicates (four
+# sigma_t variants, beta vs beta_fit) each look unimportant when permuted alone because
+# the model reads the same information from their twins; permuting the group together
+# measures what the information is worth.
+FEATURE_GROUPS = {
+    "multiplicity": ["n_hits", "pe_total", "n_hits_early"],
+    "timing_spread": ["sigma_t_mad", "sigma_t_mad_corr", "sigma_t_mad_tof",
+                      "sigma_t_early_mad", "t_window_80pct"],
+    "charge_shape": ["pe_balance", "charge_bal_legacy", "spatial_rms"],
+    "position": ["d_wall", "d_source", "vtx_y", "vtx_fit_y", "d_source_fit"],
+    "isotropy_centroid": ["beta1", "beta2", "beta3", "beta4", "beta5"],
+    "isotropy_fit": ["beta1_fit", "beta2_fit", "beta3_fit", "beta4_fit", "beta5_fit"],
+    "vertex_fit": ["fit_converged", "n_fit_hits", "fit_rms_ns", "fit_goodness_reco",
+                   "fit_goodness_init", "d_wall_fit", "sigma_t_mad_tof_fit"],
+}
+
+
+def primary_score_col(df: pd.DataFrame, prefer: Optional[str] = None) -> str:
+    """The score column downstream selections should cut on.
+
+    The NN is the primary model; XGBoost is the cross-check. Older score tables that
+    only carry gbt/rf scores still resolve, so pre-2026-09 results stay readable.
+    """
+    order = ((prefer,) if prefer else ()) + PRIMARY_ORDER
+    for key in order:
+        if key and f"{key}_score" in df.columns:
+            return f"{key}_score"
+    raise KeyError("no *_score column (expected one of nn/xgb/gbt/rf)")
+
+
+def frozen_working_point(model_path, point: str = "eff80",
+                         model: Optional[str] = None) -> tuple[str, float]:
+    """(score column, threshold) for a working point stored in a frozen artifact.
+
+    Uses the artifact's primary model unless `model` names another. Artifacts frozen
+    before 2026-09-23 carry no working points; those need an explicit threshold.
+    """
+    meta = joblib.load(model_path).get("meta", {})
+    key = model or meta.get("primary_model")
+    wps = [w for w in meta.get("working_points", [])
+           if w.get("model") == key and w.get("point") == point]
+    if not key or not wps:
+        raise SystemExit(f"[mva] {Path(model_path).name} has no stored working point "
+                         f"'{point}' for model '{key}' (pre-2026-09 artifact?). Give "
+                         "score_col and threshold explicitly.")
+    return f"{key}_score", float(wps[0]["threshold"])
+
+
+def _parse_models(spec: str) -> list[str]:
+    keys = [k.strip() for k in spec.split(",") if k.strip()]
+    bad = [k for k in keys if k not in _NAME]
+    if bad:
+        sys.exit(f"[mva] unknown --models entries {bad}; choose from {list(_NAME)}")
+    if "xgb" in keys and not _HAS_XGB:
+        print("[mva] WARNING: xgboost not installed — dropping 'xgb'.  pip install xgboost")
+        keys.remove("xgb")
+    if "nn" in keys and not _HAS_KERAS:
+        print("[mva] " + "!" * 70 + "\n[mva] WARNING: tensorflow not installed — the PRIMARY "
+              "model (nn) cannot be trained.\n[mva] Falling back to the next model in "
+              f"{PRIMARY_ORDER}. Install tensorflow before quoting results.\n[mva] " + "!" * 70)
+        keys.remove("nn")
+    if not keys:
+        sys.exit("[mva] no trainable model left in --models")
+    return keys
 _NAME  = {"rf": "Random Forest", "gbt": "GBT", "xgb": "XGBoost", "nn": "Neural Network"}
 _LS    = {"rf": "-",             "gbt": "--",   "xgb": "-.",       "nn": ":"}
 
@@ -254,11 +330,41 @@ def _apply_cc_filter(df: pd.DataFrame, cc_only: bool, run_name: str) -> pd.DataF
 # Data preparation
 # ---------------------------------------------------------------------------
 
+def attach_capture_labels(df: pd.DataFrame, capture_table: Optional[str],
+                          method: str) -> pd.DataFrame:
+    """Join the capture-matched truth from `ambe mc capture` onto the feature table.
+
+    Clusters are matched on (eventID, method, cluster_id) and must also agree on n_hits,
+    which guards against the two tables having been clustered differently (different
+    OPTICS settings, a hit_t_min_ns cut, ...). Unmatched clusters are dropped and
+    counted, never defaulted to background.
+    """
+    if not capture_table:
+        sys.exit("[mva] --label-scheme capture needs --capture-table")
+    ct = pd.read_parquet(capture_table,
+                         columns=["eventID", "method", "cluster_id", "n_hits",
+                                  "n_cap_dom", "n_caps_time"])
+    ct = ct[ct.method == method].rename(columns={"n_hits": "_ct_n_hits"})
+    ct["is_capture_signal"] = ((ct.n_caps_time >= 1) & (ct.n_cap_dom >= 3)).astype(int)
+    sub = df[df["method"] == method]
+    m = sub.merge(ct[["eventID", "method", "cluster_id", "_ct_n_hits", "is_capture_signal"]],
+                  on=["eventID", "method", "cluster_id"], how="left")
+    ok = m["_ct_n_hits"].notna() & (m["_ct_n_hits"] == m["n_hits"])
+    print(f"[mva] capture labels: {int(ok.sum())}/{len(m)} clusters matched "
+          f"({(~ok).sum()} dropped: absent from the capture table or n_hits differs); "
+          f"signal fraction {m.loc[ok, 'is_capture_signal'].mean():.3f}")
+    if ok.mean() < 0.95:
+        print("[mva] WARNING: <95 % matched — the capture table was probably built on a "
+              "subset of files or with different clustering settings")
+    return m[ok].drop(columns=["_ct_n_hits"])
+
+
 def prepare_data(df: pd.DataFrame,
                  method: str = "optics",
                  bkg_mode: str = "all",
                  keep_prompt_bkg: bool = False,
-                 fv_signal_only: bool = True) -> tuple[np.ndarray, np.ndarray, list[str], pd.DataFrame]:
+                 fv_signal_only: bool = True,
+                 label_scheme: str = "composition") -> tuple[np.ndarray, np.ndarray, list[str], pd.DataFrame]:
     """
     Filter to one clustering method, build feature matrix and binary labels.
 
@@ -288,7 +394,12 @@ def prepare_data(df: pd.DataFrame,
     # collapsing the AUC to ~0.5. Composition-based labels for BOTH sides fixes it.
     NEUTRON_CLASSES = [1, 2, 3, 4]
     has_dc = "dominant_class" in sub.columns
-    if has_dc:
+    if label_scheme == "capture":
+        # Thesis (NTag) label: a true capture within 50 ns contributes >= 3 hits,
+        # whatever neutron trackID BackTracker gave them. Rows without a match in the
+        # capture table were dropped in attach_capture_labels.
+        is_sig = sub["is_capture_signal"] == 1
+    elif has_dc:
         is_sig = sub["dominant_class"].isin(NEUTRON_CLASSES)
     else:
         # Fallback for parquets without dominant_class (older features runs)
@@ -366,7 +477,9 @@ def prepare_data(df: pd.DataFrame,
         # "all": background = every NON-neutron-dominated cluster (class -5 physics +
         # class 0 dark noise), excluding the prompt cluster if flagged. Symmetric with
         # the neutron-dominated signal definition above — no neutron clusters leak in.
-        if has_dc:
+        if label_scheme == "capture":
+            is_bkg = sub["is_capture_signal"] == 0
+        elif has_dc:
             is_bkg = ~sub["dominant_class"].isin(NEUTRON_CLASSES)
         else:
             is_bkg = sub["is_truth_neutron"] == 0
@@ -603,13 +716,15 @@ def cap_background(X: np.ndarray, y: np.ndarray,
 def cv_roc_trees(
         X_tr: np.ndarray, y_tr: np.ndarray,
         n_splits: int = 5,
+        keys: tuple = ("xgb", "nn"),
 ) -> tuple[dict, dict]:
     """
-    Stratified k-fold cross-validation on the training set for tree models.
+    Stratified k-fold cross-validation on the training set.
 
-    Fits fresh RF, GBT and XGBoost on each fold's inner-train
-    partition and evaluates on the inner-test partition.  Imputation medians and
-    sample weights are computed inside each fold (no leakage).
+    Fits fresh copies of the requested models (trees and, if 'nn' is requested, the
+    NN) on each fold's inner-train partition and evaluates on the inner-test
+    partition.  Imputation medians and sample weights are computed inside each fold
+    (no leakage).
 
     Returns
     -------
@@ -617,11 +732,9 @@ def cv_roc_trees(
     cv_curves: dict  key -> list of (fpr, tpr) per fold
     """
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-    cv_aucs   = {"rf": [], "gbt": []}
-    cv_curves = {"rf": [], "gbt": []}
-    if _HAS_XGB:
-        cv_aucs["xgb"]   = []
-        cv_curves["xgb"] = []
+    cv_keys   = [k for k in keys if (k in TREE_KEYS) or (k == "nn" and _HAS_KERAS)]
+    cv_aucs   = {k: [] for k in cv_keys}
+    cv_curves = {k: [] for k in cv_keys}
 
     for fold, (inner_tr, inner_te) in enumerate(skf.split(X_tr, y_tr)):
         X_f_tr, X_f_te = X_tr[inner_tr], X_tr[inner_te]
@@ -633,9 +746,13 @@ def cv_roc_trees(
             X_f_tr[:, j] = np.where(np.isnan(X_f_tr[:, j]), medians[j], X_f_tr[:, j])
             X_f_te[:, j] = np.where(np.isnan(X_f_te[:, j]), medians[j], X_f_te[:, j])
 
-        fold_models = train_trees(X_f_tr, y_f_tr)
-        for key, model in fold_models.items():
-            sc = model.predict_proba(X_f_te)[:, 1]
+        fold_models = train_trees(X_f_tr, y_f_tr, keys=tuple(k for k in cv_keys
+                                                             if k in TREE_KEYS))
+        fold_scores = {k: m.predict_proba(X_f_te)[:, 1] for k, m in fold_models.items()}
+        if "nn" in cv_keys:
+            nn_f, sc_f, _ = train_nn(X_f_tr, y_f_tr, verbose=0)
+            fold_scores["nn"] = nn_f.predict(sc_f.transform(X_f_te), verbose=0).ravel()
+        for key, sc in fold_scores.items():
             fpr, tpr, _ = roc_curve(y_f_te, sc)
             fold_auc = float(auc(fpr, tpr))
             cv_aucs[key].append(fold_auc)
@@ -656,28 +773,32 @@ def cv_roc_trees(
 # Tree model training
 # ---------------------------------------------------------------------------
 
-def train_trees(X_tr: np.ndarray, y_tr: np.ndarray) -> dict:
+def train_trees(X_tr: np.ndarray, y_tr: np.ndarray,
+                keys: tuple = ("xgb",)) -> dict:
     """
-    Fit RF, GBT, and XGBoost.
-    Returns dict keyed by 'rf', 'gbt', 'xgb'.
+    Fit the requested tree models (any of 'rf', 'gbt', 'xgb').
+    Returns dict keyed by model key.
     """
     sw = compute_sample_weight("balanced", y_tr)
+    models = {}
 
-    rf = RandomForestClassifier(
-        n_estimators=300, min_samples_leaf=5,
-        random_state=42, n_jobs=-1,
-    )
-    rf.fit(X_tr, y_tr, sample_weight=sw)
+    if "rf" in keys:
+        rf = RandomForestClassifier(
+            n_estimators=300, min_samples_leaf=5,
+            random_state=42, n_jobs=-1,
+        )
+        rf.fit(X_tr, y_tr, sample_weight=sw)
+        models["rf"] = rf
 
-    gbt = GradientBoostingClassifier(
-        n_estimators=200, learning_rate=0.05,
-        max_depth=4, subsample=0.8, random_state=42,
-    )
-    gbt.fit(X_tr, y_tr, sample_weight=sw)
+    if "gbt" in keys:
+        gbt = GradientBoostingClassifier(
+            n_estimators=200, learning_rate=0.05,
+            max_depth=4, subsample=0.8, random_state=42,
+        )
+        gbt.fit(X_tr, y_tr, sample_weight=sw)
+        models["gbt"] = gbt
 
-    models = {"rf": rf, "gbt": gbt}
-
-    if _HAS_XGB:
+    if "xgb" in keys and _HAS_XGB:
         n_neg = int((y_tr == 0).sum())
         n_pos = int((y_tr == 1).sum())
         xgb = _XGBClassifier(
@@ -733,7 +854,7 @@ def _build_nn(n_features: int):
     return model
 
 
-def train_nn(X_tr: np.ndarray, y_tr: np.ndarray):
+def train_nn(X_tr: np.ndarray, y_tr: np.ndarray, verbose: Optional[int] = None):
     """
     Scale features with StandardScaler (fit on train only — no leakage),
     then train the feedforward NN with early stopping.
@@ -749,6 +870,14 @@ def train_nn(X_tr: np.ndarray, y_tr: np.ndarray):
     # the NN weight init is random each run, so retraining gives a slightly
     # different network (the 30.3<->33.0 us OPTICS+NN drift). Seeding fixes that.
     tf.keras.utils.set_random_seed(42)
+
+    # Keras' validation_split takes the LAST 15 % of rows, unshuffled. The training
+    # rows arrive in file order with --merge-run and --external-background rows
+    # appended at the end, so without this shuffle the early-stopping set was
+    # almost entirely world-run or external-background clusters and val_auc did not
+    # measure what it claimed to. Seeded, so the NN stays bit-reproducible.
+    perm = np.random.default_rng(42).permutation(len(y_tr))
+    X_tr, y_tr = X_tr[perm], y_tr[perm]
 
     scaler = StandardScaler()
     X_sc = scaler.fit_transform(X_tr)
@@ -771,7 +900,7 @@ def train_nn(X_tr: np.ndarray, y_tr: np.ndarray):
                 patience=7, min_lr=1e-5, verbose=0,
             ),
         ],
-        verbose=NN_VERBOSE,
+        verbose=NN_VERBOSE if verbose is None else verbose,
     )
     return model, scaler, history
 
@@ -886,10 +1015,12 @@ def _importance_page(pdf, tree_models: dict, features: list, run_name: str):
     pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
 
 
-def _top_features_page(pdf, X_te, y_te, rf, features, run_name):
-    top6 = np.argsort(rf.feature_importances_)[::-1][:6]
+def _top_features_page(pdf, X_te, y_te, importance, features, run_name,
+                       model_name="primary model"):
+    top6 = np.argsort(importance)[::-1][:6]
     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-    fig.suptitle("Top 6 Discriminating Features (Random Forest)", fontsize=12)
+    fig.suptitle(f"Top 6 Discriminating Features (permutation importance, {model_name})",
+                 fontsize=12)
     for ax, fi in zip(axes.flat, top6):
         feat = features[fi]
         sig_v = X_te[y_te == 1, fi]
@@ -900,8 +1031,8 @@ def _top_features_page(pdf, X_te, y_te, rf, features, run_name):
         kw = dict(bins=bins, density=True, alpha=0.6, edgecolor="none")
         ax.hist(sig_v, color=COLORS["signal"],     label="Neutron", **kw)
         ax.hist(bkg_v, color=COLORS["background"], label="Background", **kw)
-        imp = rf.feature_importances_[fi]
-        ax.set_title(f"{feat}  (importance = {imp:.3f})", fontsize=10)
+        imp = importance[fi]
+        ax.set_title(f"{feat}  (AUC drop = {imp:.3f})", fontsize=10)
         ax.set_xlabel(feat, fontsize=9); ax.legend(fontsize=8); ax.grid(alpha=0.3)
     plt.tight_layout()
     pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
@@ -983,6 +1114,158 @@ def _event_level_page(pdf, sub, run_name, score_col="gbt_score"):
 
 
 # ---------------------------------------------------------------------------
+# Attribution and working points
+# ---------------------------------------------------------------------------
+
+def _score_fn(key: str, model, nn_scaler=None):
+    if key == "nn":
+        return lambda X: model.predict(nn_scaler.transform(X), verbose=0, batch_size=4096).ravel()
+    return lambda X: model.predict_proba(X)[:, 1]
+
+
+def _feature_groups(features: list) -> dict:
+    groups = {g: [features.index(f) for f in fs if f in features]
+              for g, fs in FEATURE_GROUPS.items()}
+    groups = {g: idx for g, idx in groups.items() if idx}
+    seen = {i for idx in groups.values() for i in idx}
+    for i, f in enumerate(features):
+        if i not in seen:
+            groups[f] = [i]
+    return groups
+
+
+def permutation_importance_auc(score_fn, X: np.ndarray, y: np.ndarray, features: list,
+                               n_repeats: int = 5, seed: int = 42) -> tuple[pd.DataFrame,
+                                                                          pd.DataFrame]:
+    """Test-set AUC drop when a feature (or a correlated group, permuted JOINTLY so the
+    within-group correlation is kept) is shuffled.  Returns (per_group, per_feature)."""
+    rng = np.random.default_rng(seed)
+    base = roc_auc_score(y, score_fn(X))
+
+    def drop(idx):
+        d = []
+        for _ in range(n_repeats):
+            Xp = X.copy()
+            Xp[:, idx] = X[rng.permutation(len(X))][:, idx]
+            d.append(base - roc_auc_score(y, score_fn(Xp)))
+        return float(np.mean(d)), float(np.std(d))
+
+    g_rows = []
+    for g, idx in _feature_groups(features).items():
+        m, sd = drop(idx)
+        g_rows.append(dict(group=g, features=",".join(features[i] for i in idx),
+                           auc_drop=m, auc_drop_std=sd))
+    f_rows = []
+    for i, f in enumerate(features):
+        m, sd = drop([i])
+        f_rows.append(dict(feature=f, auc_drop=m, auc_drop_std=sd))
+    return (pd.DataFrame(g_rows).sort_values("auc_drop", ascending=False),
+            pd.DataFrame(f_rows))
+
+
+def integrated_gradients(nn_model, X_sc: np.ndarray, steps: int = 32,
+                         batch: int = 2048) -> np.ndarray:
+    """Integrated gradients of the NN output w.r.t. its (standardised) inputs, from the
+    all-zero baseline = the training-set mean cluster.  Rows sum to
+    f(x) - f(baseline) up to the Riemann error; that closure is checked by the caller."""
+    X_sc = np.asarray(X_sc, dtype=np.float32)
+    alphas = (np.arange(steps, dtype=np.float32) + 0.5) / steps
+    out = np.zeros_like(X_sc)
+    for b0 in range(0, len(X_sc), batch):
+        x = tf.constant(X_sc[b0:b0 + batch])
+        total = tf.zeros_like(x)
+        for a in alphas:
+            xi = a * x
+            with tf.GradientTape() as tape:
+                tape.watch(xi)
+                p = nn_model(xi, training=False)
+            total += tape.gradient(p, xi)
+        out[b0:b0 + batch] = (x * total / steps).numpy()
+    return out
+
+
+def xgb_tree_shap(model, X: np.ndarray) -> np.ndarray:
+    """Exact TreeSHAP values (log-odds) from XGBoost itself; last column is the bias."""
+    import xgboost
+    return model.get_booster().predict(xgboost.DMatrix(X), pred_contribs=True)
+
+
+def working_points(y: np.ndarray, scores: dict, event_ids: Optional[np.ndarray],
+                   fp_targets=(0.01, 0.05, 0.10)) -> pd.DataFrame:
+    """Threshold, signal efficiency and false positives per event, per model.
+
+    'eff80' fixes the signal efficiency (the old working point).  'fpXX' fixes the
+    number of background clusters passing per event, the Super-K NTag logic: the
+    background count per event is what enters N_BG in a multiplicity measurement.
+    """
+    n_ev = len(np.unique(event_ids)) if event_ids is not None else len(y)
+    rows = []
+    for key, sc in scores.items():
+        sig, bkg = sc[y == 1], np.sort(sc[y == 0])[::-1]
+        pts = [("eff80", float(np.quantile(sig, 0.20)))]
+        for tgt in fp_targets:
+            k = int(np.floor(tgt * n_ev))
+            thr = float(bkg[k]) + 1e-12 if k < len(bkg) else float(sc.min())
+            pts.append((f"fp{tgt:g}_per_event", thr))
+        for name, thr in pts:
+            rows.append(dict(model=key, point=name, threshold=thr,
+                             signal_eff=float((sig >= thr).mean()),
+                             bkg_eff=float((bkg >= thr).mean()) if len(bkg) else np.nan,
+                             fp_per_event=float((bkg >= thr).sum() / max(n_ev, 1)),
+                             n_test_events=n_ev))
+    return pd.DataFrame(rows)
+
+
+def _perm_importance_page(pdf, perm_groups: dict):
+    keys = list(perm_groups)
+    fig, axes = plt.subplots(1, len(keys), figsize=(7 * len(keys), 5.5), squeeze=False)
+    fig.suptitle("Grouped Permutation Importance (test-set AUC drop)", fontsize=12)
+    for ax, key in zip(axes[0], keys):
+        g = perm_groups[key].sort_values("auc_drop")
+        ax.barh(g.group, g.auc_drop, xerr=g.auc_drop_std, color=COLORS["signal"], alpha=0.85)
+        ax.set_xlabel("AUC drop when permuted", fontsize=10)
+        ax.set_title(_NAME[key], fontsize=11)
+    plt.tight_layout()
+    pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
+
+
+def _attribution_page(pdf, attr: dict, features: list):
+    keys = list(attr)
+    fig, axes = plt.subplots(1, len(keys), figsize=(7 * len(keys), 6.5), squeeze=False)
+    fig.suptitle("Mean |attribution| per feature (test set)", fontsize=12)
+    for ax, key in zip(axes[0], keys):
+        name, vals = attr[key]
+        m = np.abs(vals).mean(axis=0)
+        order = np.argsort(m)
+        ax.barh([features[i] for i in order], m[order], color="steelblue", alpha=0.85)
+        ax.set_xlabel(name, fontsize=10)
+        ax.set_title(_NAME[key], fontsize=11)
+        ax.tick_params(axis="y", labelsize=7)
+    plt.tight_layout()
+    pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
+
+
+def _beeswarm_page(pdf, vals: np.ndarray, X: np.ndarray, features: list, title: str,
+                   top: int = 12):
+    order = np.argsort(np.abs(vals).mean(axis=0))[::-1][:top]
+    rng = np.random.default_rng(0)
+    fig, ax = plt.subplots(figsize=(9, 0.45 * top + 2))
+    for r, fi in enumerate(order[::-1]):
+        v = X[:, fi]
+        lo, hi = np.nanpercentile(v, 2), np.nanpercentile(v, 98)
+        c = np.clip((v - lo) / max(hi - lo, 1e-12), 0, 1)
+        ax.scatter(vals[:, fi], r + rng.uniform(-0.3, 0.3, len(v)), c=c, cmap="coolwarm",
+                   s=4, alpha=0.6, lw=0)
+    ax.axvline(0, color="k", lw=0.8)
+    ax.set_yticks(range(len(order)))
+    ax.set_yticklabels([features[i] for i in order[::-1]], fontsize=8)
+    ax.set_xlabel("Attribution (colour: feature value, blue = low, red = high)")
+    ax.set_title(title)
+    plt.tight_layout()
+    pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
 # Application mode — score new data with a frozen model (no training)
 # ---------------------------------------------------------------------------
 
@@ -997,7 +1280,7 @@ def score_data(model_path: Path, data_path: Path) -> Path:
     its training median (and reported), so the column vector the model expects is
     always present.
 
-    Writes <data_stem>__scored.parquet (all original columns + rf_score/gbt_score)
+    Writes <data_stem>__scored.parquet (all original columns + one <key>_score per model)
     and returns its path.
     """
     art = joblib.load(model_path)
@@ -1009,7 +1292,14 @@ def score_data(model_path: Path, data_path: Path) -> Path:
     print(f"[score]   trained on run '{meta.get('run_name','?')}', "
           f"bkg_mode={meta.get('bkg_mode','?')}, "
           f"n_sig={meta.get('n_sig','?')} n_bkg={meta.get('n_bkg','?')}")
-    print(f"[score]   {len(features)} features, models={sorted(models.keys())}")
+    print(f"[score]   {len(features)} features, trees={sorted(models.keys())}"
+          f"{' + nn' if art.get('nn') else ''}, primary="
+          f"{meta.get('primary_model', 'n/a (pre-2026-09 artifact)')}")
+    for wp_ in meta.get("working_points", []):
+        if wp_.get("model") == meta.get("primary_model"):
+            print(f"[score]   working point {wp_['point']:>18s}: {wp_['model']}_score >= "
+                  f"{wp_['threshold']:.4f}  (MC sig eff {wp_['signal_eff']:.3f}, "
+                  f"{wp_['fp_per_event']:.3f} fp/event)")
 
     df = pd.read_parquet(data_path)
     print(f"[score] data parquet: {data_path.name}  ({len(df)} clusters)")
@@ -1092,11 +1382,26 @@ def main(argv=None):
                    help="Pipeline YAML config (required for training; for "
                         "--score-data only needed when --model is omitted)")
     p.add_argument("--method",    default="optics",
-                   choices=["optics", "clusterfinder"])
+                   choices=["optics", "clusterfinder", "peak"])
     p.add_argument("--test-size", type=float, default=0.2,
                    help="Fraction of clusters held out for testing (default 0.2)")
+    p.add_argument("--models", default=DEFAULT_MODELS,
+                   help="Comma-separated models to train, from rf,gbt,xgb,nn "
+                        f"(default {DEFAULT_MODELS}; rf/gbt only to reproduce old results)")
+    p.add_argument("--primary", default="nn", choices=["nn", "xgb", "gbt", "rf"],
+                   help="Model whose score sets the working points (default nn)")
+    p.add_argument("--label-scheme", default="composition",
+                   choices=["composition", "capture"],
+                   help="composition = dominant_class in {1,2,3,4} (default, unchanged); "
+                        "capture = a true WCSim capture within 50 ns contributes >= 3 hits "
+                        "(needs --capture-table from `ambe mc capture`)")
+    p.add_argument("--out-tag", default="",
+                   help="extra suffix on every output name (e.g. the method), so several "
+                        "trainings of one run never overwrite each other")
+    p.add_argument("--capture-table", default=None, metavar="PARQUET",
+                   help="__capture_truth_clusters parquet for --label-scheme capture")
     p.add_argument("--no-nn", action="store_true",
-                   help="Skip neural network training (faster — tree models only)")
+                   help="Skip neural network training (same as dropping nn from --models)")
     p.add_argument("--no-cv", action="store_true",
                    help="Skip 5-fold cross-validation (faster — single train/test split only)")
     p.add_argument("--bkg-mode", default="all",
@@ -1188,11 +1493,16 @@ def main(argv=None):
         sys.exit("[mva] --config is required for training mode "
                  "(only --score-data with --model can omit it).")
 
-    if not _HAS_XGB:
-        print("[mva] WARNING: xgboost not installed — skipping XGBoost.  pip install xgboost")
-    if not _HAS_KERAS:
-        print("[mva] WARNING: tensorflow not installed — skipping NN.  pip install tensorflow")
-    if _HAS_KERAS:
+    model_keys = _parse_models(args.models)
+    if args.no_nn and "nn" in model_keys:
+        model_keys.remove("nn")
+    tree_keys = tuple(k for k in model_keys if k in TREE_KEYS)
+    primary = next((k for k in (args.primary,) + PRIMARY_ORDER if k in model_keys), None)
+    if primary != args.primary:
+        print(f"[mva] WARNING: primary model '{args.primary}' not trained; "
+              f"working points use '{primary}' instead")
+    print(f"[mva] models={model_keys}  primary={primary}")
+    if _HAS_KERAS and "nn" in model_keys:
         # TF auto-selects one GPU if CUDA is visible; no MirroredStrategy -> single-device only.
         gpus = tf.config.list_physical_devices("GPU")
         print(f"[mva] TensorFlow: {len(gpus)} GPU(s) visible"
@@ -1272,9 +1582,12 @@ def main(argv=None):
     else:
         bkg_mode = args.bkg_mode
         keep_prompt = bool(args.keep_prompt_bkg)
+        if args.label_scheme == "capture":
+            df = attach_capture_labels(df, args.capture_table, args.method)
         X, y, features, sub = prepare_data(df, method=args.method, bkg_mode=bkg_mode,
                                            keep_prompt_bkg=keep_prompt,
-                                           fv_signal_only=bool(args.fv_signal))
+                                           fv_signal_only=bool(args.fv_signal),
+                                           label_scheme=args.label_scheme)
         excl_str = "incl. prompt" if keep_prompt else "excl. prompt"
         bkg_label_str = {"darknoise":  "dark noise only (class 0)",
                          "nonneutron": "class-5 spurious (prompt gamma + near-capture)",
@@ -1285,7 +1598,9 @@ def main(argv=None):
         # Merged trainings get their own tag so they never overwrite the tank-only
         # baseline artifacts — the two must stay comparable side by side.
         merge_tag = "__merged" if args.merge_run else ""
-        mode_tag = ("" if bkg_mode == "all" else f"__{bkg_mode}") + kp_tag + merge_tag
+        label_tag = "__caplabel" if args.label_scheme == "capture" else ""
+        mode_tag = (("" if bkg_mode == "all" else f"__{bkg_mode}") + kp_tag + merge_tag
+                    + label_tag + (f"__{args.out_tag}" if args.out_tag else ""))
         plot_run_name = (f"{display_label} [{bkg_mode} bkg{', +prompt' if kp_tag else ''}]"
                          if (bkg_mode != "all" or kp_tag) else display_label)
         skip_event_level = False
@@ -1322,18 +1637,18 @@ def main(argv=None):
     # Stratified k-fold CV on training set 
     if not args.no_cv:
         print(f"\n[mva] 5-fold cross-validation on training set …")
-        cv_aucs, cv_curves = cv_roc_trees(X_tr, y_tr, n_splits=5)
+        cv_aucs, cv_curves = cv_roc_trees(X_tr, y_tr, n_splits=5, keys=tuple(model_keys))
         print()
     else:
         print("[mva] CV skipped (--no-cv)")
         cv_aucs, cv_curves = {}, {}
 
-    tree_label = "RF, GBT" + (", XGBoost" if _HAS_XGB else "")
-    print(f"[mva] training final models on full train set ({tree_label}) …")
-    tree_models = train_trees(X_tr, y_tr)
+    tree_label = ", ".join(_NAME[k] for k in tree_keys) or "none"
+    print(f"[mva] training final tree models on full train set ({tree_label}) …")
+    tree_models = train_trees(X_tr, y_tr, keys=tree_keys) if tree_keys else {}
 
     nn_model, nn_scaler, nn_history = None, None, None
-    if _HAS_KERAS and not args.no_nn:
+    if _HAS_KERAS and "nn" in model_keys:
         hidden = "-".join([str(NN_HIDDEN_UNITS)] * NN_HIDDEN_LAYERS)
         arch = f"{len(features)}-{hidden}-1" if hidden else f"{len(features)}-1"
         print(f"[mva] training NN  ({arch}, ReLU, dropout={NN_DROPOUT})"
@@ -1341,8 +1656,8 @@ def main(argv=None):
         nn_model, nn_scaler, nn_history = train_nn(X_tr, y_tr)
         n_epochs = len(nn_history.history["loss"])
         print(f"[mva] NN stopped at epoch {n_epochs} / {NN_EPOCHS}")
-    elif args.no_nn:
-        print("[mva] NN skipped (--no-nn)")
+    else:
+        print("[mva] NN not trained (not in --models, --no-nn, or no tensorflow)")
 
     # ── Freeze fitted models for application to real data ─────────────────
     # Trees go into a joblib .pkl alongside the exact feature order, the
@@ -1383,10 +1698,12 @@ def main(argv=None):
                 "scaler": nn_scaler,
                 "keras_file": nn_keras_path.name,  # relative to .pkl directory
             }
-        joblib.dump(artifact, model_out)
-        nn_msg = f" + NN -> {nn_keras_path.name}" if nn_keras_path else ""
-        print(f"[mva] froze fitted models -> {model_out}  "
-              f"({len(features)} features, models={sorted(tree_models.keys())}{nn_msg})")
+        artifact["meta"]["models"] = list(model_keys)
+        artifact["meta"]["primary_model"] = primary
+        artifact["meta"]["label_scheme"] = args.label_scheme
+        pending_freeze = (artifact, model_out, nn_keras_path)
+    else:
+        pending_freeze = None
 
     model_scores  = []   # (display_name, test_scores, linestyle) — for plots
     all_score_cols = {}  # col_name -> scores on full X, for parquet
@@ -1424,18 +1741,75 @@ def main(argv=None):
     score_path = parquet_dir / f"{run_name}__mva_scores{mode_tag}.parquet"
     csv_path   = csv_dir     / f"{run_name}__mva_summary{mode_tag}.csv"
 
+    # ── Working points on the test set ────────────────────────────────────
+    test_scores = {}
+    for key, model in tree_models.items():
+        test_scores[key] = model.predict_proba(X_te)[:, 1]
+    if nn_model is not None:
+        test_scores["nn"] = nn_model.predict(nn_scaler.transform(X_te), verbose=0).ravel()
+    ev_te = (sub.loc[idx_te, "eventID"].to_numpy() if "eventID" in sub.columns
+             and not skip_event_level else None)
+    wp = working_points(y_te, test_scores, ev_te)
+    wp_path = csv_dir / f"{run_name}__mva_working_points{mode_tag}.csv"
+    wp.to_csv(wp_path, index=False)
+
+    if pending_freeze is not None:
+        artifact, model_out, nn_keras_path = pending_freeze
+        artifact["meta"]["working_points"] = wp.to_dict("records")
+        joblib.dump(artifact, model_out)
+        nn_msg = f" + NN -> {nn_keras_path.name}" if nn_keras_path else ""
+        print(f"[mva] froze fitted models -> {model_out}  "
+              f"({len(features)} features, trees={sorted(tree_models.keys())}{nn_msg}, "
+              f"primary={primary})")
+
+    # ── Attribution ───────────────────────────────────────────────────────
+    perm_groups, perm_feats, attr = {}, {}, {}
+    fitted = dict(tree_models)
+    if nn_model is not None:
+        fitted["nn"] = nn_model
+    for key, model in fitted.items():
+        if key not in ("nn", "xgb"):
+            continue
+        print(f"[mva] permutation importance ({_NAME[key]}) …")
+        perm_groups[key], perm_feats[key] = permutation_importance_auc(
+            _score_fn(key, model, nn_scaler), X_te, y_te, features)
+    if nn_model is not None:
+        X_te_sc = nn_scaler.transform(X_te)
+        ig = integrated_gradients(nn_model, X_te_sc)
+        f0 = float(nn_model.predict(np.zeros((1, X_te_sc.shape[1])), verbose=0).ravel()[0])
+        closure = np.abs(ig.sum(axis=1) - (test_scores["nn"] - f0))
+        print(f"[mva] integrated-gradients closure: median |sum(IG) - Δf| = "
+              f"{np.median(closure):.4f} (score units)")
+        attr["nn"] = ("mean |integrated gradient| (score units)", ig)
+    if "xgb" in tree_models:
+        shap = xgb_tree_shap(tree_models["xgb"], X_te)
+        margin = tree_models["xgb"].predict(X_te, output_margin=True)
+        print(f"[mva] TreeSHAP closure: max |sum(SHAP) - margin| = "
+              f"{np.max(np.abs(shap.sum(axis=1) - margin)):.2e} (log-odds)")
+        attr["xgb"] = ("mean |TreeSHAP| (log-odds)", shap[:, :-1])
+
+    rank_key = primary if primary in perm_feats else next(iter(perm_feats), None)
+    rank_imp = (perm_feats[rank_key].set_index("feature").loc[features, "auc_drop"]
+                .to_numpy() if rank_key else np.zeros(len(features)))
+
     print(f"[mva] writing plots -> {pdf_path}")
-    best_event_col = next(
-        (c for c in ["xgb_score", "nn_score", "gbt_score"] if c in sub.columns),
-        "gbt_score",
-    )
+    best_event_col = primary_score_col(sub, prefer=primary)
     with PdfPages(pdf_path) as pdf:
         if cv_aucs:
             _cv_roc_page(pdf, cv_aucs, cv_curves, plot_run_name)
         _roc_page(pdf, y_te, model_scores, plot_run_name, args.method)
         _score_dist_page(pdf, y_te, model_scores, plot_run_name)
-        _importance_page(pdf, tree_models, features, plot_run_name)
-        _top_features_page(pdf, X_te, y_te, tree_models["rf"], features, plot_run_name)
+        if perm_groups:
+            _perm_importance_page(pdf, perm_groups)
+        if attr:
+            _attribution_page(pdf, attr, features)
+        if "xgb" in attr:
+            _beeswarm_page(pdf, attr["xgb"][1], X_te, features, "XGBoost TreeSHAP (test set)")
+        if "nn" in attr:
+            _beeswarm_page(pdf, attr["nn"][1], X_te, features,
+                           "Neural network integrated gradients (test set)")
+        _top_features_page(pdf, X_te, y_te, rank_imp, features, plot_run_name,
+                           model_name=_NAME.get(rank_key, "n/a"))
         if nn_history is not None:
             _nn_history_page(pdf, nn_history, plot_run_name)
         if not skip_event_level:
@@ -1445,32 +1819,38 @@ def main(argv=None):
     print(f"[mva] wrote scores -> {score_path}")
 
     imp_df = pd.DataFrame({"feature": features})
+    grp_of = {features[i]: g for g, idx in _feature_groups(features).items() for i in idx}
+    imp_df["group"] = imp_df.feature.map(grp_of)
+    for key, pf_ in perm_feats.items():
+        imp_df[f"{key}_perm_auc_drop"] = pf_.set_index("feature").loc[features, "auc_drop"].values
+        gmap = perm_groups[key].set_index("group")["auc_drop"]
+        imp_df[f"{key}_group_perm_auc_drop"] = imp_df.group.map(gmap).values
+    for key, (_, vals) in attr.items():
+        imp_df[f"{key}_{'ig' if key == 'nn' else 'shap'}_mean_abs"] = np.abs(vals).mean(axis=0)
     for key, model in tree_models.items():
-        if hasattr(model, "feature_importances_"):
-            imp_df[f"{key}_importance"] = model.feature_importances_
-    if "rf_importance" in imp_df.columns:
-        imp_df = imp_df.sort_values("rf_importance", ascending=False).reset_index(drop=True)
-        imp_df.insert(0, "rf_rank", range(1, len(features) + 1))
-
+        if key != "xgb" and hasattr(model, "feature_importances_"):
+            imp_df[f"{key}_gain_importance"] = model.feature_importances_
+    if rank_key:
+        imp_df = imp_df.sort_values(f"{rank_key}_perm_auc_drop", ascending=False
+                                    ).reset_index(drop=True)
+        imp_df.insert(0, "rank", range(1, len(features) + 1))
     imp_df.to_csv(csv_path, index=False)
 
-    print(f"\n[mva] ===== SUMMARY =====")
+    print(f"\n[mva] ===== SUMMARY =====  (primary model: {_NAME.get(primary, primary)})")
     for name, sc, _ in model_scores:
         key = next((k for k, n in _NAME.items() if n == name), None)
         cv_str = (f"  CV={np.mean(cv_aucs[key]):.4f}±{np.std(cv_aucs[key]):.4f}"
                   if key and key in cv_aucs else "")
         print(f"  AUC  {name:20s} : test={roc_auc_score(y_te, sc):.4f}{cv_str}")
-    if "rf_importance" in imp_df.columns:
-        imp_cols = [c for c in imp_df.columns if c.endswith("_importance")]
-        print(f"\n  Feature importances (RF rank):")
-        for _, row in imp_df.iterrows():
-            parts = [f"{row['feature']:22s}"]
-            for c in imp_cols:
-                tag = c.replace("_importance", "").upper()
-                parts.append(f"{tag}={row[c]:.4f}")
-            print(f"    {int(row.get('rf_rank', 0)):2d}. {'  '.join(parts)}")
-    print(f"\n[mva] wrote summary -> {csv_path}")
-    print(f"[mva] wrote plots   -> {pdf_path}")
+    print("\n  Working points (test set):")
+    print(wp.round(4).to_string(index=False))
+    for key, g in perm_groups.items():
+        print(f"\n  Grouped permutation importance — {_NAME[key]} (AUC drop):")
+        for _, r in g.iterrows():
+            print(f"    {r.group:20s} {r.auc_drop:+.4f} ± {r.auc_drop_std:.4f}")
+    print(f"\n[mva] wrote summary        -> {csv_path}")
+    print(f"[mva] wrote working points -> {wp_path}")
+    print(f"[mva] wrote plots          -> {pdf_path}")
 
 
 def cli(ctx, argv=None):
