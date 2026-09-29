@@ -91,7 +91,7 @@ def extract_cf_features_one_file(fp, geo_path, offsets_path, max_events: int = 0
       OPTICS twin:  labels = run_optics_on_event(df_residual, ...)
       this (CF):    labels = assign_clusterfinder_labels(df_residual, df_cf)
     """
-    geo  = load_geometry(geo_path, offsets_path)
+    geo  = load_geometry(geo_path, offsets_path, frame="world_legacy")
     if input_kind == "mc":
         run, port = int(mc_run), (mc_label or "mc")
         src_cm = None
@@ -338,7 +338,7 @@ def main():
 
     # Build geometry once in the parent so a bad path fails fast.
     print(f"[cf-features] geometry: {args.geometry}")
-    _ = load_geometry(args.geometry, args.offsets)
+    _ = load_geometry(args.geometry, args.offsets, frame="world_legacy")
     gate_msg = "WAVEFORM-GATED" if gate_sets is not None else "ungated (all events)"
     print(f"[cf-features] extracting ClusterFinder features [{gate_msg}] "
           f"(CF labels via assign_clusterfinder_labels on residual hits; "

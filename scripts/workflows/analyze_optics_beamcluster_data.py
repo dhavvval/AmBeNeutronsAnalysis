@@ -575,7 +575,7 @@ def extract_features_one_file(fp, geo_path, offsets_path, max_events: int = 0,
     self-contained and picklable for a ProcessPoolExecutor (no large geo object
     crosses the process boundary).
     """
-    geo  = load_geometry(geo_path, offsets_path)
+    geo  = load_geometry(geo_path, offsets_path, frame="world_legacy")
     run  = run_number_from_path(Path(fp))
     port = port_name(run)
     src_cm = SOURCE_POSITIONS.get(run)
@@ -752,7 +752,7 @@ def main():
     if args.features_out:
         # Sanity-build the geometry once in the parent so a bad path fails fast.
         print(f"[features] geometry: {args.geometry}")
-        _ = load_geometry(args.geometry, args.offsets)
+        _ = load_geometry(args.geometry, args.offsets, frame="world_legacy")
         gate_msg = "WAVEFORM-GATED" if gate_sets is not None else "ungated (all events)"
         print(f"[features] extracting MVA features [{gate_msg}] "
               f"(OPTICS ms={MIN_SAMPLES}, xi={XI}, t_unit={T_UNIT_NS} ns; "

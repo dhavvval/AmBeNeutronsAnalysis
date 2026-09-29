@@ -399,7 +399,7 @@ def main():
     MICHEL_MIN_DT_NS = float(michel_block.get("michel_min_dt_ns", MICHEL_MIN_DT_NS))
     MICHEL_MAX_DT_NS = float(michel_block.get("michel_max_dt_ns", MICHEL_MAX_DT_NS))
 
-    geo   = load_geometry(geo_path, off_path)
+    geo   = load_geometry(geo_path, off_path, frame="world_legacy")
     files = _resolve_files(root_path)
     print(f"[michel] found {len(files)} file(s)")
 

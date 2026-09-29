@@ -58,7 +58,7 @@ def main():
     args = parser.parse_args()
 
     print(f"Loading geometry from {args.geo}")
-    geo = load_geometry(args.geo, args.offsets)
+    geo = load_geometry(args.geo, args.offsets, frame="world_legacy")
 
     print(f"Reading hits from {args.input}")
     hits = pd.read_parquet(args.input)

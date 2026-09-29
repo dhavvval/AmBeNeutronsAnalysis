@@ -419,7 +419,7 @@ def main():
     # Load geometry
     print("[setup] loading geometry...")
     try:
-        geo = load_geometry(args.geo, args.offsets)
+        geo = load_geometry(args.geo, args.offsets, frame="world_legacy")
     except Exception as e:
         print(f"WARNING: could not load geometry ({e}). "
               f"Features requiring offsets will use fallback.")

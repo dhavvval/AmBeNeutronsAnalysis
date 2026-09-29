@@ -161,11 +161,11 @@ TANK_HALF_HEIGHT_M = 1.98
 
 
 def load_geometry(geo_path: str, offsets_path: str,
-                  frame: str = "tank", apply_offsets: bool = True) -> ANNIEGeometry:
+                  frame: str, apply_offsets: bool = True) -> ANNIEGeometry:
     """
     Load PMT geometry and per-channel timing offsets.
 
-    frame="tank" (default) shifts PMT positions into the tank-centred hit frame and
+    frame (required): "tank" shifts PMT positions into the tank-centred hit frame and
     bounds the tank by its physical inner cylinder.  frame="world_legacy" reproduces
     the pre-2026-09-23 behaviour exactly (world-frame PMTs, PMT-envelope bounds), for
     re-deriving features that frozen models were trained on.
