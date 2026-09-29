@@ -1,0 +1,71 @@
+run_name: sweep_v3_tank_truthtag
+display_label: "OPTICS sweep — ccv3 TANK truthtag (36-config grid)"
+campaign: "OPTICS hyperparameter sweep on cc_neutrino_v3_truthtag (productionv3 tank/fmvmrd)"
+description: >
+  OPTICS sweep over the ccv3 TANK truth-tag sample. This config is a copy of
+  cc_neutrino_v3_truthtag.yaml with ONE change: the optics: block lists the full
+  4x3x3 = 36-config grid instead of the single frozen production point
+  (ms=8, xi=0.02, t=25). Every other setting — cc_stream, cc_cuts, residual
+  window, truth window, hit_prefilter — is copied VERBATIM from the production
+  config, so the swept hit population is exactly the one production uses and the
+  results are directly comparable to the frozen baseline.
+  NOTE the three values that differ from the older cc_neutrino_optics_sweep10.yaml
+  and must NOT be copied from it: prompt_window_ns is 10000 (not 2000),
+  hit_prefilter_ns is 0.0 (not 2000.0), and cc_stream is ccinc_truthtag
+  (not ccinc_truth). Sweeping with the old values would optimise for a hit
+  population this analysis does not use.
+  Companion sweep: sweep_v3_world_truthtag.yaml (same grid, world volume).
+  Compare the two __optics_summary.csv files: if the optima agree, one config
+  serves the merged tank+world training; if they diverge, the near-wall
+  (world) population genuinely prefers different clustering parameters.
+
+# output_root is DELIBERATELY not set here. paths.output_root() resolves
+# explicit > $AMBE_OUT > <repo>/ambe_output, so hardcoding it would override
+# the AMBE_OUT the EAF runner exports and write into the shared gpvm tree.
+# Set AMBE_OUT in the environment to choose where this run lands.
+
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/output/genie_wcsim_tank/productionv3/tank/fmvmrd/ANNIEEvent_cc_neutrino_v3*.root
+
+cuts:
+  min_pulses_per_event: 0
+
+  cc_stream: ccinc_truthtag
+
+  cc_cuts:
+    require_fv: true
+    fv_radius_cm: 100.0
+    fv_y_max_cm: 100.0
+    fv_require_z_negative: false
+    mu_p_min_mev: 600.0
+    mu_p_max_mev: 1200.0
+    cos_theta_min: 0.8
+    nhit_min: 4
+    require_cc: true
+    require_fsl_muon: true
+    require_no_veto: false
+    require_mrd: false
+    mrd_source: cluster
+    require_prompt_pe: false
+    prompt_pe_min: 500.0
+    prompt_pe_max: 3000.0
+
+fit_params: {}
+
+residual:
+  cc_only: true
+  prompt_window_ns: 10000
+
+optics:
+  
+  min_samples: [5, 8, 10, 12, 15, 20]
+  xi:          [0.02, 0.10]
+  t_unit_ns:   [15, 25]
+  truth_window_ns:  75.0
+  hit_prefilter_ns: 0.0
+  n_jobs: 1
+
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv
