@@ -16,6 +16,12 @@ Truth-fix deck (docs/presentations/ccinc_v3_truthfix.tex):
         --tag v3fix --old-tag old --tids-tag tids --scan-tag v3fixscan3 \
         --out PRESENTATION_PLOTS/ccinc_truthfix
 
+Cluster-purity deck (docs/presentations/ccinc_v3_clusterpurity.tex):
+
+    ambe plots provenance --deck clusterpurity --config configs/cc_neutrino_v3fixsmear_truthtag.yaml \
+        --world-config configs/cc_neutrino_v3fixsmearworld_truthtag.yaml --tag smear \
+        --out PRESENTATION_PLOTS/ccinc_clusterpurity
+
 Reads only products already on disk (`ambe mc match --mode stage0|stage1`,
 `ambe mc timewindows`, `ambe mc capture`); computes nothing new.
 """
@@ -556,6 +562,194 @@ def run_truthfix(ctx: RunContext, args) -> Path:
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Cluster-purity deck (docs/presentations/ccinc_v3_clusterpurity.tex)
+# --------------------------------------------------------------------------- #
+
+SAMPLE_LS = {"tank": "-", "world": "--"}
+
+
+def _purity_clusters(ctx: RunContext, tag: str) -> pd.DataFrame:
+    d = _pq(ctx, "truth_object_clusters", tag)
+    d = d[d.method.isin(BASE3)].copy()
+    d["purity"] = d.owner_frac
+    d["purity_clean"] = d.n_owner_hits / (d.n_hits - d.comp_untraced_lowpe).clip(lower=1)
+    return d
+
+
+def hit_match_vs_pe(tank: RunContext, world: RunContext, window_lo: float, out):
+    import pyarrow.parquet as pq
+    edges = np.array([0, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 5, 10, 30, 1e4])
+    xc = np.sqrt(np.maximum(edges[:-1], 0.1) * np.minimum(edges[1:], 60))
+    fig, axes = plt.subplots(1, 2, figsize=(10.5, 3.6), sharey=True)
+    parts = []
+    for ax, (name, ctx) in zip(axes, (("tank", tank), ("world", world))):
+        h = pq.read_table(ctx.parquet_path(f"{ctx.run_name}__pulses"),
+                          columns=["t", "pe", "is_untraced", "match_failure_reason"]).to_pandas()
+        h = h[h.t >= window_lo]
+        reason = np.where(h.is_untraced.astype(bool), h.match_failure_reason.astype(str), "matched")
+        idx = np.digitize(h.pe, edges) - 1
+        for r, c, lab in (("matched", C[0], "has a waveform pulse"),
+                          ("time_mismatch", C[1], "waveform pulses on the PMT, none within 8 ns"),
+                          ("no_entry", C[3], "no waveform pulse on the PMT")):
+            y = [np.mean(reason[idx == i] == r) if (idx == i).any() else np.nan for i in range(len(xc))]
+            ax.plot(xc, y, marker="o", ms=4, color=c, label=lab)
+        ax.set_xscale("log")
+        ax.set_xlabel("MCHit pulse PE")
+        ax.set_title(name)
+        parts.append(f"{name} {np.mean(reason != 'matched'):.1%}")
+    axes[0].set_ylabel("fraction of delayed MCHit pulses")
+    axes[0].legend(loc="center right", fontsize=7.5)
+    fig.suptitle("Unmatched MCHit pulses are sub-1-PE pulses the hit finder never sees ("
+                 + ", ".join(parts) + " unmatched)", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    _save(fig, out, "c01_hit_match_vs_pe")
+
+
+def purity_before_after(d: pd.DataFrame, out):
+    fig, axes = plt.subplots(1, 3, figsize=(11, 3.6), sharey=True)
+    for ax, meth in zip(axes, BASE3):
+        parts = []
+        for name in ("tank", "world"):
+            g = d[(d["sample"] == name) & (d.method == meth) & (d.owner_class == "n_capture")]
+            for col, c in (("purity", C[1]), ("purity_clean", C[0])):
+                x = np.sort(g[col].to_numpy())
+                ax.step(x, 1 - np.arange(len(x)) / len(x), where="post", color=c, ls=SAMPLE_LS[name],
+                        lw=2 if name == "tank" else 1.4,
+                        label=f"{name}, {'all hits' if col == 'purity' else 'unmatched < 1 PE removed'}")
+            parts.append(f"{g.purity.mean():.3f}→{g.purity_clean.mean():.3f}")
+        ax.set_xlim(0.5, 1.005)
+        ax.set_xlabel("owner purity")
+        ax.set_title(f"{METHOD_LABEL[meth]}: mean {parts[0]} (tank)", fontsize=10)
+    axes[0].set_ylabel("capture clusters with purity ≥ x")
+    axes[0].legend(loc="lower left", fontsize=7)
+    fig.suptitle("Removing unmatched hits below 1 PE: capture-cluster purity", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    _save(fig, out, "c02_purity_before_after")
+
+
+def composition_clean(d: pd.DataFrame, out):
+    cats = [("owner", C[0]), ("other particles", C[1]), ("dark noise", "#8a8984"),
+            ("unmatched ≥ 1 PE", C[3])]
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.0), sharey=True)
+    for ax, name in zip(axes, ("tank", "world")):
+        rows, labels = [], []
+        for oc in ("n_capture", "michel"):
+            for meth in BASE3:
+                g = d[(d["sample"] == name) & (d.method == meth) & (d.owner_class == oc)]
+                n = max((g.n_hits - g.comp_untraced_lowpe).sum(), 1)
+                other = (g.n_hits - g.comp_untraced - g.comp_darknoise - g.n_owner_hits).sum()
+                rows.append([g.n_owner_hits.sum() / n, other / n, g.comp_darknoise.sum() / n,
+                             (g.comp_untraced - g.comp_untraced_lowpe).sum() / n])
+                labels.append(f"{METHOD_LABEL[meth]}\n{'capture' if oc == 'n_capture' else 'Michel'}")
+        rows = np.array(rows)
+        x = np.arange(len(rows))
+        b = np.zeros(len(rows))
+        for j, (lab, col) in enumerate(cats):
+            ax.bar(x, rows[:, j], bottom=b, width=0.72, color=col, label=lab, edgecolor="white", lw=1)
+            b += rows[:, j]
+        ax.set_xticks(x, labels, fontsize=7)
+        ax.set_ylim(0.85, 1.0)
+        ax.set_title(name)
+    axes[0].set_ylabel("fraction of cluster hits (axis from 0.85)")
+    axes[1].legend(loc="lower right", fontsize=7.5)
+    fig.suptitle("After removing unmatched hits below 1 PE, what is left in a cluster", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    _save(fig, out, "c03_composition_clean")
+
+
+def neutrons_per_cluster(d: pd.DataFrame, out):
+    groups = [METHOD_LABEL[m] for m in BASE3]
+    fig, axes = plt.subplots(1, 2, figsize=(11, 3.6), sharey=True)
+    for ax, name in zip(axes, ("tank", "world")):
+        vals = []
+        for col, thr in (("n_neutrons", 2), ("n_neutrons_3", 2), ("n_captures", 2)):
+            vals.append([(d[(d["sample"] == name) & (d.method == m) & (d.owner_class == "n_capture")][col] >= thr).mean()
+                         for m in BASE3])
+        _bars(ax, groups, ["2+ neutrons (any hit)", "2+ neutrons (≥ 3 hits each)", "2+ captures"],
+              vals, [C[1], C[3], C[0]], width=0.26)
+        ax.set_title(name)
+    axes[0].set_ylabel("fraction of capture clusters")
+    axes[0].legend(loc="upper left", fontsize=7.5)
+    g = d[(d["sample"] == "tank") & (d.owner_class == "n_capture")]
+    one = {m: (g[g.method == m].n_neutrons == 1).mean() for m in BASE3}
+    fig.suptitle("One neutron per capture cluster (tank): " + ", ".join(
+        f"{METHOD_LABEL[m]} {one[m]:.1%}" for m in BASE3), fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    _save(fig, out, "c04_neutrons_per_cluster")
+
+
+def merged_capture_dt(d: pd.DataFrame, out):
+    fig, ax = plt.subplots(figsize=(6.4, 3.8))
+    bins = np.logspace(0, 5, 31)
+    parts = []
+    for meth, c in zip(BASE3, C):
+        g = d[(d.method == meth) & (d.owner_class == "n_capture") & (d.n_captures >= 2)]
+        ax.hist(g.dt_captures_min.dropna(), bins=bins, histtype="step", lw=2, color=c,
+                label=f"{METHOD_LABEL[meth]} ({len(g)} clusters)")
+        parts.append(f"{METHOD_LABEL[meth]} {g.dt_captures_min.median():.0f} ns")
+    ax.set_xscale("log")
+    ax.set_xlabel("time between the merged captures [ns]")
+    ax.set_ylabel("capture clusters with 2+ captures")
+    ax.legend(loc="upper left")
+    ax.set_title("Merged captures, tank + world; median " + ", ".join(parts), fontsize=9)
+    _save(fig, out, "c05_merged_capture_dt")
+
+
+def purity_vs_size(d: pd.DataFrame, out):
+    bins = np.array([3, 6, 8, 10, 13, 17, 22, 30, 45, 70, 1000])
+    xc = np.sqrt(bins[:-1] * np.minimum(bins[1:], 100))
+    fig, ax = plt.subplots(figsize=(6.4, 3.8))
+    for meth, c in zip(BASE3, C):
+        g = d[(d["sample"] == "tank") & (d.method == meth) & (d.owner_class == "n_capture")]
+        idx = np.digitize(g.n_hits, bins) - 1
+        for col, ls in (("purity", ":"), ("purity_clean", "-")):
+            y = [g[col][idx == i].mean() if (idx == i).sum() >= 20 else np.nan for i in range(len(xc))]
+            ax.plot(xc, y, marker="o", ms=3.5, color=c, ls=ls,
+                    label=f"{METHOD_LABEL[meth]}{'' if col == 'purity_clean' else ', all hits'}")
+    ax.set_xscale("log")
+    ax.set_xlabel("cluster hits")
+    ax.set_ylabel("mean owner purity")
+    ax.legend(loc="center right", bbox_to_anchor=(1.0, 0.66), fontsize=7, ncol=2)
+    ax.set_title("Capture-cluster purity vs size (tank); solid = unmatched < 1 PE removed", fontsize=10)
+    _save(fig, out, "c06_purity_vs_size")
+
+
+def purity_table(d: pd.DataFrame, out) -> pd.DataFrame:
+    rows = []
+    for (name, meth, oc), g in d.groupby(["sample", "method", "owner_class"]):
+        rows.append(dict(sample=name, clusterer=METHOD_LABEL[meth], tag=oc, clusters=len(g),
+                         purity_all=g.purity.mean(), purity_clean=g.purity_clean.mean(),
+                         purity_clean_p10=g.purity_clean.quantile(0.1),
+                         pure_100=(g.purity_clean >= 0.9999).mean(),
+                         one_neutron=(g.n_neutrons <= 1).mean() if oc == "n_capture" else np.nan,
+                         two_plus_captures=(g.n_captures >= 2).mean() if oc == "n_capture" else np.nan,
+                         hits_removed=g.comp_untraced_lowpe.sum() / g.n_hits.sum()))
+    t = pd.DataFrame(rows)
+    t.to_csv(out / "clusterpurity_table.csv", index=False)
+    print(t.round(4).to_string(index=False))
+    return t
+
+
+def run_clusterpurity(ctx: RunContext, args) -> Path:
+    _style()
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    world = load_context(args.world_config)
+    tag = f"{args.tag}_plurality"
+    d = pd.concat([_purity_clusters(ctx, tag).assign(sample="tank"),
+                   _purity_clusters(world, tag).assign(sample="world")], ignore_index=True)
+    lo = float((ctx.extra.get("residual", {}) or {}).get("prompt_window_ns", 2000.0))
+    hit_match_vs_pe(ctx, world, lo, out)
+    purity_before_after(d, out)
+    composition_clean(d, out)
+    neutrons_per_cluster(d, out)
+    merged_capture_dt(d, out)
+    purity_vs_size(d, out)
+    purity_table(d, out)
+    return out
+
+
 def run(ctx: RunContext, args) -> Path:
     _style()
     out = Path(args.out)
@@ -578,23 +772,25 @@ def run(ctx: RunContext, args) -> Path:
 
 def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     p = argparse.ArgumentParser(prog="ambe plots provenance")
-    p.add_argument("--deck", choices=["provenance", "truthfix"], required=True,
+    p.add_argument("--deck", choices=["provenance", "truthfix", "clusterpurity"], required=True,
                    help="provenance = ccinc_v3_cluster_provenance.tex figures; truthfix = "
-                        "ccinc_v3_truthfix.tex (old vs fixed DirectParent labels; --config is the fixed tank run)")
+                        "ccinc_v3_truthfix.tex (old vs fixed DirectParent labels; --config is the fixed tank run); "
+                        "clusterpurity = ccinc_v3_clusterpurity.tex (--config tank, --world-config world, --tag)")
     p.add_argument("--world-config", required=True)
     p.add_argument("--capture-config")
     p.add_argument("--capture-tag")
     p.add_argument("--old-config")
     p.add_argument("--old-world-config")
-    p.add_argument("--tag", help="truthfix: particle-mode tag of the fixed runs")
+    p.add_argument("--tag", help="truthfix/clusterpurity: particle-mode tag of the runs")
     p.add_argument("--old-tag", help="truthfix: particle-mode tag of the old-label runs")
     p.add_argument("--tids-tag", help="truthfix: capture-unit tag with trackIDs per capture")
     p.add_argument("--scan-tag", help="truthfix: tag of the --scan-peak run on the fixed tank")
     p.add_argument("--out", required=True)
     a = p.parse_args(list(argv) if argv else [])
     need = {"provenance": ["capture_config", "capture_tag"],
-            "truthfix": ["old_config", "old_world_config", "tag", "old_tag", "tids_tag", "scan_tag"]}[a.deck]
+            "truthfix": ["old_config", "old_world_config", "tag", "old_tag", "tids_tag", "scan_tag"],
+            "clusterpurity": ["tag"]}[a.deck]
     miss = [f"--{k.replace('_', '-')}" for k in need if getattr(a, k) is None]
     if miss:
         p.error(f"--deck {a.deck} needs {' '.join(miss)}")
-    run_truthfix(ctx, a) if a.deck == "truthfix" else run(ctx, a)
+    {"truthfix": run_truthfix, "clusterpurity": run_clusterpurity, "provenance": run}[a.deck](ctx, a)

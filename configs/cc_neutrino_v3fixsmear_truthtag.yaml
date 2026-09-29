@@ -1,0 +1,68 @@
+# productionv3fix tank WCSim re-run through today's ToolAnalysis dev build (cff4e58:
+# ANNIEsoft merge, PMTWaveformSim time smearing on, waveform hit charge/PE branches).
+# Files: tank parts 3 and 12; made by v3fix_local/today_samples/run_today.sh.
+run_name: cc_neutrino_v3fixsmear_truthtag
+display_label: "CC Neutrino v3 — TRUTH-tag, fixed geometry + capture truth (FV, p_mu, cos, isCC, FSL mu)"
+campaign: "MC CC Neutrino productionv3fix tank parts 3+12, dev build cff4e58 (smearing on)"
+description: >
+  Same streamline and cuts as the productionv3fix truth-tag config it was copied from, on
+  productionv3fix tank parts 3 and 12 (10,000 events) re-run through the dev ToolAnalysis build cff4e58.
+  Used for the cluster-purity study (ambe plots provenance --deck clusterpurity).
+
+output_root: ambe_output
+
+inputs:
+  root_files:
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_*.root
+
+cuts:
+  min_pulses_per_event: 0
+
+  cc_stream: ccinc_truthtag
+
+  cc_cuts:
+    # phase space — identical in both streamlines
+    require_fv: true
+    fv_radius_cm: 100.0
+    fv_y_max_cm: 100.0
+    fv_require_z_negative: false
+    mu_p_min_mev: 600.0
+    mu_p_max_mev: 1200.0
+    cos_theta_min: 0.8
+    nhit_min: 4
+    # tagging — this is what differs between the two streamlines
+    require_cc: true
+    require_fsl_muon: true
+    require_no_veto: false
+    require_mrd: false
+    mrd_source: cluster
+    require_prompt_pe: false
+    prompt_pe_min: 500.0
+    prompt_pe_max: 3000.0
+
+fit_params: {}
+
+residual:
+  cc_only: false          # keep non-selected tank events; cc_pass is carried per cluster
+  prompt_window_ns: 2000
+
+optics:
+  min_samples: [8]
+  xi: [0.02]
+  t_unit_ns: [25]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 0.0
+
+features:
+  methods: [optics, clusterfinder, peak]
+  min_samples: 8
+  xi: 0.02
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0
+  truth_window_ns: 75.0
+
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv
+  frame: tank                   # PMT table shifted into the tank-centred hit frame
+  apply_timing_offsets: false   # data calibration; WCSim hits carry no per-PMT offsets
