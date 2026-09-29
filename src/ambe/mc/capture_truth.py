@@ -82,6 +82,7 @@ DEFAULTS = dict(
     object_gap_ns=200.0,     # particle mode: split one particle's light at gaps longer than this
     nu_smear_m=0.30,         # per-axis smear of the true neutrino vertex (INIT stand-in)
     window_ns=None,          # [t_lo, t_hi] for captures; None -> from the residual filter
+    lowpe_cut=1.0,           # unmatched hits below this PE are counted in comp_untraced_lowpe
 )
 
 
@@ -293,6 +294,23 @@ def build_truth_objects(df_ev: pd.DataFrame, cap_t: np.ndarray, offset_ns: float
     return obj, pd.DataFrame(rows)
 
 
+def neutron_content(u, c, owner, is_nobj, tid_of, capj_of, cls_of, tmed_of, mh) -> dict:
+    """How many distinct neutrons and captures one cluster holds (u, c: its objects and hit counts)."""
+    if not len(u):
+        return dict(n_neutrons=0, n_neutrons_3=0, n_captures=0, n_hits_other_neutrons=0,
+                    dt_captures_min=np.nan)
+    nm = is_nobj[u]
+    per_tid = pd.Series(c[nm]).groupby(tid_of[u][nm]).sum()
+    own_tid = tid_of[owner] if is_nobj[owner] else None
+    capm = (cls_of[u] == "n_capture") & (capj_of[u] >= 0)
+    cj, first = np.unique(capj_of[u][capm], return_index=True)
+    tcap = np.sort(tmed_of[u][capm][first])
+    return dict(n_neutrons=int(len(per_tid)), n_neutrons_3=int((per_tid >= mh).sum()),
+                n_captures=int(len(cj)),
+                n_hits_other_neutrons=int(per_tid.sum() - per_tid.get(own_tid, 0)),
+                dt_captures_min=float(np.diff(tcap).min()) if len(tcap) > 1 else np.nan)
+
+
 def match_clusters_to_objects(lbl: dict, obj: np.ndarray, objs: pd.DataFrame,
                               df_ev: pd.DataFrame, cfg: dict, owner_rule: str
                               ) -> tuple[list, dict]:
@@ -302,6 +320,13 @@ def match_clusters_to_objects(lbl: dict, obj: np.ndarray, objs: pd.DataFrame,
     kind, _, phys = _source_keys(df_ev)
     is_dn = (df_ev["truth_class"].to_numpy(int) == 0) if "truth_class" in df_ev.columns \
         else np.zeros(len(df_ev), bool)
+    unm = (df_ev["is_untraced"].to_numpy(int) == 1) if "is_untraced" in df_ev.columns \
+        else np.zeros(len(df_ev), bool)
+    pe = df_ev["pe"].to_numpy(float) if "pe" in df_ev.columns else np.ones(len(df_ev))
+    is_nobj = (objs.source_kind.to_numpy() == "neutron") if n_obj else np.array([], bool)
+    tid_of = objs.source_trackID.to_numpy(int) if n_obj else np.array([], int)
+    capj_of = objs.cap_j.to_numpy(int) if n_obj else np.array([], int)
+    tmed_of = objs.t_med.to_numpy(float) if n_obj else np.array([], float)
     cls_of = objs.obj_class.to_numpy() if n_obj else np.array([])
     nh_of = objs.n_hits.to_numpy(int) if n_obj else np.array([], int)
     per_obj = {}
@@ -318,6 +343,7 @@ def match_clusters_to_objects(lbl: dict, obj: np.ndarray, objs: pd.DataFrame,
             ids = ids[ids >= 0]
             comp = {f"comp_{c}": 0 for c in OBJ_CLASSES}
             owner, n_own, n_contrib = -1, 0, 0
+            u = c = np.array([], int)
             if len(ids):
                 u, c = np.unique(ids, return_counts=True)
                 o = np.argsort(-c)
@@ -335,15 +361,17 @@ def match_clusters_to_objects(lbl: dict, obj: np.ndarray, objs: pd.DataFrame,
                 tag = "mixed"
             if owner >= 0 and n_own >= mh:
                 owned[owner] += 1
-            comp["comp_darknoise"] = int((mask & is_dn).sum())
-            comp["comp_untraced"] = int((mask & ~is_dn & ~phys).sum())
+            comp["comp_darknoise"] = int((mask & is_dn & ~unm).sum())
+            comp["comp_untraced"] = int((mask & unm).sum())
             assert sum(comp.values()) == nh
+            nq = neutron_content(u, c, owner, is_nobj, tid_of, capj_of, cls_of, tmed_of, mh)
+            nq["comp_untraced_lowpe"] = int((mask & unm & (pe < cfg["lowpe_cut"])).sum())
             rows.append(dict(method=method, cluster_id=int(cid), n_hits=nh,
                              t_med=float(np.median(t[mask])), owner_obj=owner,
                              owner_class=cls_of[owner] if owner >= 0 else "noise",
                              tag=tag, owner_frac=frac, n_owner_hits=n_own,
                              owner_completeness=n_own / nh_of[owner] if owner >= 0 else np.nan,
-                             n_objects_contrib=n_contrib, **comp))
+                             n_objects_contrib=n_contrib, **comp, **nq))
         per_obj[method] = dict(owned=owned, best=best, merged=merged)
     return rows, per_obj
 

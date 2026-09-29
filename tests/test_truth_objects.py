@@ -42,3 +42,20 @@ def test_objects_and_ownership():
     maj = match_clusters_to_objects(lbl, obj, objs, df, cfg, "majority50")[0]
     assert [r for r in maj if r["method"] == "merged"][0]["tag"] == "n_capture"
     assert per_obj["truth"]["owned"].tolist() == [1, 1, 1, 1]
+
+
+def test_neutron_content_and_unmatched_split():
+    df = _event()
+    extra = pd.DataFrame([dict(t=10020.0, pe=0.4, truth_class=0, is_untraced=1),
+                          dict(t=10025.0, pe=2.0, truth_class=0, is_untraced=1)])
+    df = pd.concat([df, extra], ignore_index=True).fillna(-5)
+    cfg = dict(DEFAULTS)
+    obj, objs = build_truth_objects(df, np.array([10000.0, 30000.0]), 10.0, cfg)
+    lbl = {"merged": np.where(df.t > 9000, 0, -1), "single": np.where((df.t > 9000) & (df.t < 11000), 0, -1)}
+    rows = {r["method"]: r for r in match_clusters_to_objects(lbl, obj, objs, df, cfg, "plurality")[0]}
+    m, s = rows["merged"], rows["single"]
+    assert (m["n_neutrons"], m["n_neutrons_3"], m["n_captures"]) == (2, 2, 2)
+    assert m["n_hits_other_neutrons"] == 6 and 19000 < m["dt_captures_min"] < 21000
+    assert (s["n_neutrons"], s["n_captures"], s["n_hits_other_neutrons"]) == (1, 1, 0)
+    assert s["comp_darknoise"] == 0 and s["comp_untraced"] == 2 and s["comp_untraced_lowpe"] == 1
+    assert m["comp_darknoise"] == 1 and m["comp_untraced"] == 2
