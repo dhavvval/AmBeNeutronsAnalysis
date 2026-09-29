@@ -83,6 +83,8 @@ DEFAULTS = dict(
     nu_smear_m=0.30,         # per-axis smear of the true neutrino vertex (INIT stand-in)
     window_ns=None,          # [t_lo, t_hi] for captures; None -> from the residual filter
     lowpe_cut=1.0,           # unmatched hits below this PE are counted in comp_untraced_lowpe
+    optics_scan=dict(min_samples=[4, 5, 6, 8, 10, 12], xi=[0.01, 0.02, 0.05, 0.1],
+                     t_unit_ns=[10, 25, 50, 100], nms=[False, True]),
 )
 
 
@@ -384,7 +386,7 @@ def label_event(df_ev: pd.DataFrame, df_cl: Optional[pd.DataFrame], methods: lis
 
     t = df_ev["t"].to_numpy(float)
     lbl = {}
-    need_opt = any(m.startswith("optics") for m in methods)
+    need_opt = any(m in ("optics", "optics_nms") for m in methods)
     need_cf = any(m.startswith("clusterfinder") for m in methods)
     if need_opt:
         pref = float(feat.get("hit_prefilter_ns", 0.0))
@@ -414,6 +416,19 @@ def label_event(df_ev: pd.DataFrame, df_cl: Optional[pd.DataFrame], methods: lis
         lbl["peak_tof"], _ = find_time_peaks(t, xyz=xyz, pmt=df_ev["pmtID"].to_numpy(int),
                                              pe=df_ev["pe"].to_numpy(float), ref_m=ref_m, **pk)
     for m in methods:
+        op = parse_optics_scan(m)
+        if op is None:
+            continue
+        pref = float(feat.get("hit_prefilter_ns", 0.0))
+        df_opt = _prefilter_hits(df_ev, df_cl, pref) if pref > 0 else df_ev
+        lo = run_optics_on_event(df_opt, min_samples=op["min_samples"], xi=op["xi"],
+                                 t_unit_ns=op["t_unit_ns"], source_pos_m=feat.get("_source_pos_m"))
+        if len(df_opt) < len(df_ev):
+            full = np.full(len(df_ev), -1, int)
+            full[df_opt.index] = lo
+            lo = full
+        lbl[m] = merge_clusters_in_time(lo, t, cfg["nms_ns"]) if op["nms"] else lo
+    for m in methods:
         sp = parse_scan_method(m)
         if sp is None or (sp.pop("_tof") and ref_m is None):
             continue
@@ -439,6 +454,25 @@ def parse_scan_method(name: str) -> Optional[dict]:
                 t_min_sep_ns=float(m.group(3)), _clean=bool(m.group(4)), _tof=bool(m.group(5)))
 
 
+_OSCAN = re.compile(r"^optics_ms(\d+)_xi(\d+(?:\.\d+)?)_tu(\d+(?:\.\d+)?)(_nms)?$")
+
+
+def parse_optics_scan(name: str) -> Optional[dict]:
+    """'optics_ms8_xi0.02_tu25[_nms]' -> run_optics_on_event kwargs (+ nms flag)."""
+    m = _OSCAN.match(name)
+    if not m:
+        return None
+    return dict(min_samples=int(m.group(1)), xi=float(m.group(2)), t_unit_ns=float(m.group(3)),
+                nms=bool(m.group(4)))
+
+
+def optics_scan_methods(cfg: dict) -> list:
+    sc = cfg["optics_scan"]
+    return [f"optics_ms{ms}_xi{xi:g}_tu{tu:g}{'_nms' if nms else ''}"
+            for ms in sc["min_samples"] for xi in sc["xi"] for tu in sc["t_unit_ns"]
+            for nms in sc["nms"]]
+
+
 def scan_methods(cfg: dict) -> list:
     sc = cfg.get("peak_scan", {}) or {}
     out = []
@@ -450,6 +484,29 @@ def scan_methods(cfg: dict) -> list:
                         out.append(f"peak_tw{tw:g}_n{nh}_s{sep:g}"
                                    f"{'_clean' if clean else ''}{'_tof' if tof else ''}")
     return out
+
+
+CLUSTER_FEATURES = ("pe_total", "pe_balance", "charge_bal_legacy", "sigma_t", "sigma_t_mad",
+                    "spatial_rms", "d_wall", "n_hits_early")
+
+
+def scan_table(cl: pd.DataFrame, per_obj: pd.DataFrame, methods: list) -> pd.DataFrame:
+    """One row per scanned method: capture-object recall plus capture-cluster purity."""
+    ob = per_obj[per_obj.method.isin(methods) & (per_obj.obj_class == "n_capture")]
+    t = ob.groupby("method")[["found", "split", "merged_into_other", "hit_completeness"]].mean()
+    c = cl[cl.method.isin(methods)]
+    n_ev = max(cl.eventID.nunique(), 1)
+    cap = c[c.tag == "n_capture"]
+    lab = (cap.n_hits - cap.comp_untraced).clip(lower=1)
+    g = cap.assign(pur=cap.n_owner_hits / cap.n_hits, pur_lab=cap.n_owner_hits / lab).groupby("method")
+    t = t.join(g.size().rename("capture_clusters"))
+    t = t.join(g.pur.mean().rename("purity")).join(g.pur_lab.mean().rename("purity_labelled"))
+    t = t.join(g.n_neutrons.apply(lambda x: (x <= 1).mean()).rename("one_neutron"))
+    t = t.join(g.n_captures.apply(lambda x: (x >= 2).mean()).rename("two_plus_captures"))
+    dn = cap.groupby("method").apply(lambda d: d.comp_darknoise.sum() / max(d.n_hits.sum(), 1))
+    t = t.join(dn.rename("darknoise_share"))
+    nc = (c.assign(nc=~c.tag.eq("n_capture")).groupby("method").nc.sum() / n_ev)
+    return t.join(nc.rename("non_capture_clusters_per_event"))
 
 
 def _mad(x: np.ndarray) -> float:
@@ -479,6 +536,8 @@ def _load_chunk(i_grp: int) -> pd.DataFrame:
     if "pe" not in chunk.columns:
         chunk["pe"] = 1.0
     chunk = cc_selection.apply_residual_filter(chunk, ctx, verbose=False)
+    if _G["hit_cleaning"] == "unmatched_lowpe" and "is_untraced" in chunk.columns:
+        chunk = chunk[~((chunk.is_untraced == 1) & (chunk.pe < cfg["lowpe_cut"]))]
     if cfg.get("hit_t_min_ns") is not None:
         chunk = chunk[chunk.t >= float(cfg["hit_t_min_ns"])]
     chunk["_source_file"] = chunk["_source_file"].map(lambda s: Path(str(s)).name)
@@ -517,6 +576,11 @@ def _process_group_particle(i_grp: int):
         df_cl = g["clusters"].get(evid) if g["clusters"] is not None else None
         lbl = label_event(df_ev, df_cl, methods, feat_ev, cfg, ref)
         rows, per_obj = match_clusters_to_objects(lbl, obj, objs, df_ev, cfg, g["owner_rule"])
+        if g["cluster_features"]:
+            from .cluster_features import compute_cluster_features
+            for r in rows:
+                f = compute_cluster_features(df_ev[lbl[r["method"]] == r["cluster_id"]], g["geo"])
+                r.update({f"f_{k}": f.get(k, np.nan) for k in CLUSTER_FEATURES})
         ev = dict(row_group=i_grp, eventID=int(evid), _source_file=src, eventNumber=evn,
                   cc_pass=int(df_ev["cc_pass"].iloc[0]) if "cc_pass" in df_ev.columns else -1,
                   n_caps_in_window=len(cap_t))
@@ -1089,11 +1153,14 @@ def run(ctx: RunContext, args) -> None:
 
     if args.scan_peak:
         methods = methods + [m for m in scan_methods(cfg) if m not in methods]
+    if args.scan_optics:
+        methods = methods + [m for m in optics_scan_methods(cfg) if m not in methods]
     _G.update(ctx=ctx, cfg=cfg, feat=feat, methods=methods, pulses_path=str(pulses_path),
               caps=caps_by_key, clusters=clusters, nuv=nuv, window=win,
               offset_ns=off["offset_ns"], geo=geo, vertex=args.vertex,
               vertex_methods=set(args.vertex_methods.split(",")),
-              owner_rule=args.owner_rule)
+              owner_rule=args.owner_rule, hit_cleaning=args.hit_cleaning,
+              cluster_features=args.cluster_features)
     worker = _process_group_particle if args.truth_unit == "particle" else _process_group
 
     t0 = time.time()
@@ -1155,7 +1222,7 @@ def write_particle_outputs(ctx: RunContext, cl: pd.DataFrame, ob: pd.DataFrame, 
     chk = object_physics_checks(ob, cfg, win)
     _out(ctx, "truth_object_checks", tag, "csv").with_suffix(".json").write_text(
         json.dumps(chk, indent=2))
-    base = [m for m in cl.method.unique() if parse_scan_method(m) is None]
+    base = [m for m in cl.method.unique() if parse_scan_method(m) is None and parse_optics_scan(m) is None]
     pd.set_option("display.width", 220)
     print(f"\n[capture] particle mode: {cl.eventID.nunique():,} events, {len(ob):,} objects "
           f"({dt:.0f}s)")
@@ -1164,6 +1231,14 @@ def write_particle_outputs(ctx: RunContext, cl: pd.DataFrame, ob: pd.DataFrame, 
     print(f"\n== cluster tags ({args.owner_rule}) ==\n"
           f"{per_tag[per_tag.method.isin(base)].round(3).to_string(index=False)}")
     print(f"\n== physics checks ==\n{json.dumps(chk, indent=2)}")
+    if args.scan_optics:
+        om = [m for m in cl.method.unique() if parse_optics_scan(m)]
+        so = scan_table(cl, per_obj, om)
+        so["score"] = (so.found * (1 - so.split) * (1 - so.merged_into_other)
+                       * so.one_neutron * so.purity_labelled)
+        so.to_csv(_out(ctx, "truth_object_optics_scan", tag, "csv"))
+        print(f"\n== OPTICS scan, top 10 by found x (1-split) x (1-merged) x one_neutron x purity ==\n"
+              f"{so.sort_values('score', ascending=False).head(10).round(4).to_string()}")
     if args.scan_peak:
         sc = per_obj[(~per_obj.method.isin(base)) & (per_obj.obj_class == "n_capture")]
         sp = (cl[~cl.method.isin(base)].assign(non_capture=lambda d: ~d.tag.eq("n_capture"))
@@ -1202,11 +1277,18 @@ def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     p.add_argument("--owner-rule", choices=["plurality", "majority50"], default=None,
                    help="particle mode: cluster tag = top object (plurality) or only when it "
                         "owns >= 50%% of the hits (majority50, else 'mixed')")
+    p.add_argument("--hit-cleaning", choices=["none", "unmatched_lowpe"], required=True,
+                   help="none = all MCHit pulses; unmatched_lowpe = drop MCHit pulses with no waveform "
+                        "pulse and PE < capture_truth.lowpe_cut before clustering")
+    p.add_argument("--cluster-features", action="store_true",
+                   help="particle mode: add f_<feature> columns (compute_cluster_features) per cluster")
+    p.add_argument("--scan-optics", action="store_true",
+                   help="particle mode: add the capture_truth.optics_scan grid of OPTICS methods")
     p.add_argument("--scan-peak", action="store_true",
                    help="particle mode: add the capture_truth.peak_scan grid of time-peak methods")
     a = p.parse_args(list(argv) if argv else [])
     if a.truth_unit == "particle" and a.owner_rule is None:
         p.error("--truth-unit particle needs --owner-rule")
-    if a.truth_unit == "capture" and (a.owner_rule or a.scan_peak):
-        p.error("--owner-rule/--scan-peak only apply to --truth-unit particle")
+    if a.truth_unit == "capture" and (a.owner_rule or a.scan_peak or a.scan_optics or a.cluster_features):
+        p.error("--owner-rule/--scan-peak/--scan-optics/--cluster-features only apply to --truth-unit particle")
     run(ctx, a)

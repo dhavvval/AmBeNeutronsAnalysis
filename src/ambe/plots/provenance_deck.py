@@ -731,6 +731,80 @@ def purity_table(d: pd.DataFrame, out) -> pd.DataFrame:
     return t
 
 
+def _recall(ctx: RunContext, tag: str) -> pd.DataFrame:
+    s = _csv(ctx, "truth_object_summary", tag)
+    s = s[(s.obj_class == "n_capture") & s.method.isin(BASE3)]
+    cols = ["found", "split", "merged_into_other", "hit_completeness"]
+    w = s.n_objects
+    g = s.assign(**{c: s[c] * w for c in cols}).groupby("method")[cols + ["n_objects"]].sum()
+    return g[cols].div(g.n_objects, axis=0)
+
+
+def cleaning_metrics(tank, world, tag, clean_tag, out) -> pd.DataFrame:
+    rows = []
+    for name, ctx in (("tank", tank), ("world", world)):
+        for lab, tg in (("none", tag), ("unmatched_lowpe", clean_tag)):
+            rc = _recall(ctx, tg)
+            d = _purity_clusters(ctx, tg)
+            for meth in BASE3:
+                g = d[(d.method == meth) & (d.owner_class == "n_capture")]
+                rows.append(dict(sample=name, cleaning=lab, clusterer=METHOD_LABEL[meth],
+                                 capture_clusters=len(g), purity=g.purity.mean(),
+                                 one_neutron=(g.n_neutrons <= 1).mean(),
+                                 two_plus_captures=(g.n_captures >= 2).mean(),
+                                 median_hits=g.n_hits.median(), **rc.loc[meth].to_dict()))
+    t = pd.DataFrame(rows)
+    t.to_csv(out / "cleanclustering_table.csv", index=False)
+    print(t.round(4).to_string(index=False))
+    fig, axes = plt.subplots(1, 4, figsize=(13, 3.4))
+    tk = t[t["sample"] == "tank"]
+    for ax, (col, lab) in zip(axes, (("found", "captures found"), ("split", "captures split"),
+                                     ("merged_into_other", "captures merged into another"),
+                                     ("purity", "capture-cluster purity"))):
+        vals = [tk[tk.cleaning == c].set_index("clusterer").loc[[METHOD_LABEL[m] for m in BASE3], col].to_numpy()
+                for c in ("none", "unmatched_lowpe")]
+        _bars(ax, [METHOD_LABEL[m] for m in BASE3], ["all MCHit pulses", "unmatched < 1 PE removed"],
+              vals, [C[1], C[0]], width=0.36)
+        lo = min(v.min() for v in vals)
+        if col in ("found", "purity"):
+            ax.set_ylim(max(0, lo - 0.05), 1.0)
+        ax.set_title(lab, fontsize=10)
+        ax.tick_params(axis="x", labelsize=8)
+    axes[0].legend(loc="lower left", fontsize=7)
+    fig.suptitle("Clustering without the sub-threshold MCHit pulses (tank, capture objects and clusters)",
+                 fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
+    _save(fig, out, "c07_cleaning_recall_purity")
+    return t
+
+
+def cleaning_features(tank, tag, clean_tag, out):
+    feats = [("n_hits", "cluster hits", np.arange(0, 61, 2)),
+             ("f_pe_total", "cluster PE", np.arange(0, 121, 4)),
+             ("f_charge_bal_legacy", "charge balance", np.linspace(0, 0.6, 31)),
+             ("f_sigma_t", "hit-time spread [ns]", np.linspace(0, 20, 41))]
+    a, b = _purity_clusters(tank, tag), _purity_clusters(tank, clean_tag)
+    fig, axes = plt.subplots(len(BASE3), len(feats), figsize=(13, 7.2))
+    for i, meth in enumerate(BASE3):
+        ga = a[(a.method == meth) & (a.owner_class == "n_capture")]
+        gb = b[(b.method == meth) & (b.owner_class == "n_capture")]
+        for j, (col, lab, bins) in enumerate(feats):
+            ax = axes[i, j]
+            ax.hist(ga[col].dropna(), bins=bins, histtype="step", lw=1.8, color=C[1], density=True,
+                    label=f"all, median {ga[col].median():.3g}")
+            ax.hist(gb[col].dropna(), bins=bins, histtype="step", lw=1.8, color=C[0], density=True,
+                    label=f"cleaned, median {gb[col].median():.3g}")
+            ax.legend(loc="upper right", fontsize=6.5)
+            ax.set_yticks([])
+            if i == len(BASE3) - 1:
+                ax.set_xlabel(lab)
+            if j == 0:
+                ax.set_ylabel(METHOD_LABEL[meth])
+    fig.suptitle("Capture-cluster features with and without the sub-threshold MCHit pulses (tank)", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    _save(fig, out, "c08_cleaning_features")
+
+
 def run_clusterpurity(ctx: RunContext, args) -> Path:
     _style()
     out = Path(args.out)
@@ -747,6 +821,9 @@ def run_clusterpurity(ctx: RunContext, args) -> Path:
     merged_capture_dt(d, out)
     purity_vs_size(d, out)
     purity_table(d, out)
+    if args.clean_tag:
+        cleaning_metrics(ctx, world, tag, f"{args.clean_tag}_plurality", out)
+        cleaning_features(ctx, tag, f"{args.clean_tag}_plurality", out)
     return out
 
 
@@ -782,6 +859,8 @@ def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     p.add_argument("--old-config")
     p.add_argument("--old-world-config")
     p.add_argument("--tag", help="truthfix/clusterpurity: particle-mode tag of the runs")
+    p.add_argument("--clean-tag", help="clusterpurity: tag of the --hit-cleaning unmatched_lowpe runs; "
+                                        "adds the with/without-cleaning comparison (needs --cluster-features)")
     p.add_argument("--old-tag", help="truthfix: particle-mode tag of the old-label runs")
     p.add_argument("--tids-tag", help="truthfix: capture-unit tag with trackIDs per capture")
     p.add_argument("--scan-tag", help="truthfix: tag of the --scan-peak run on the fixed tank")

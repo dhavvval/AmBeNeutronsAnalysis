@@ -59,3 +59,13 @@ def test_neutron_content_and_unmatched_split():
     assert (s["n_neutrons"], s["n_captures"], s["n_hits_other_neutrons"]) == (1, 1, 0)
     assert s["comp_darknoise"] == 0 and s["comp_untraced"] == 2 and s["comp_untraced_lowpe"] == 1
     assert m["comp_darknoise"] == 1 and m["comp_untraced"] == 2
+
+
+def test_optics_scan_names():
+    from ambe.mc.capture_truth import optics_scan_methods, parse_optics_scan
+    cfg = dict(DEFAULTS, optics_scan=dict(min_samples=[5, 8], xi=[0.02], t_unit_ns=[25], nms=[False, True]))
+    names = optics_scan_methods(cfg)
+    assert names == ["optics_ms5_xi0.02_tu25", "optics_ms5_xi0.02_tu25_nms",
+                     "optics_ms8_xi0.02_tu25", "optics_ms8_xi0.02_tu25_nms"]
+    assert parse_optics_scan(names[1]) == dict(min_samples=5, xi=0.02, t_unit_ns=25.0, nms=True)
+    assert parse_optics_scan("optics") is None and parse_optics_scan("peak_tw20_n6_s50") is None

@@ -7,7 +7,7 @@
 #     tmux attach -t capfull
 #
 # Prerequisite, on the GPVM (EAF has no /pnfs): the ROOT truth must already be cached
-#     ambe mc capture --config configs/cc_neutrino_v3_truthtag.yaml --truth-unit capture --cache-only
+#     ambe mc capture --config configs/cc_neutrino_v3_truthtag.yaml --truth-unit capture --hit-cleaning none --cache-only
 # This script symlinks those caches into the isolated capfix run directory.
 #
 # Everything writes under the capfix config's own output_root (see memory note
@@ -63,7 +63,7 @@ run () {                    # run <logfile> <ambe.cli args...>
 
 # 1. Capture-matched truth + clustering benchmark + vertex study, all 498 files.
 if (( START_STAGE <= 1 )); then
-  run "$LOG/capfull_capture.log" mc capture --truth-unit capture --config "$CFG" --jobs "$JOBS" --vertex \
+  run "$LOG/capfull_capture.log" mc capture --truth-unit capture --hit-cleaning none --config "$CFG" --jobs "$JOBS" --vertex \
       --timing-offsets off --tag full
 fi
 
