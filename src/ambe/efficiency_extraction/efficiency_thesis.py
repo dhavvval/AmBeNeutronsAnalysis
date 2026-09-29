@@ -148,11 +148,307 @@ def plot_chi2_projections(ctx, rp):
     return save_plot(fig, ctx, "eff_chi2_projections")
 
 
+MODEL_STYLE = {"counting": dict(color="0.35", marker="s", label="counting"),
+               "poisson": dict(color="C0", marker="o", label="Poisson fit"),
+               "dds": dict(color="C1", marker="D", label="data-driven fit")}
+
+
+def _load_by_position(ctx, suffix=""):
+    import pandas as pd
+    path = ctx.csv_path("efficiency_fit_by_position" + suffix)
+    if not path.exists():
+        raise SystemExit(f"[plots.efficiency] missing {path}; run "
+                         f"`ambe stats efficiency --config <cfg>` first")
+    df = pd.read_csv(path)
+    npz = path.with_suffix(".npz")
+    arrays = np.load(npz) if npz.exists() else None
+    from ..plots.heatmap import PORT_INFO
+    df["port"] = [PORT_INFO.get((x, y, z), "Unknown")
+                  for x, y, z in zip(df["x_pos"], df["y_pos"], df["z_pos"])]
+    return df, arrays
+
+
+def _ordered(df):
+    """Position rows in the heatmap's physical port order, then y; index kept."""
+    from ..plots.heatmap import PORT_ORDER
+    d = df[df.level == "position"].copy()
+    d["_p"] = d.port.map({p: k for k, p in enumerate(PORT_ORDER)})
+    return d.sort_values(["_p", "y_pos"]).drop(columns="_p")
+
+
+def _group(arrays, i, key):
+    return arrays[f"g{i}__{key}"]
+
+
+def _position_label(r):
+    return f"{r.port}, y = {r.y_pos:g} cm (run {r.runs})"
+
+
+def plot_bypos_fits(ctx, df, arrays):
+    """One page per position: multiplicity data with both best-fit models."""
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+    out = ctx.plot_path("eff_bypos_multiplicity_fits", "pdf")
+    with PdfPages(out) as pdf:
+        for i, r in _ordered(df).iterrows():
+            counts = _group(arrays, i, "counts")
+            n = counts.sum()
+            x = np.arange(len(counts))
+            unc = np.where(counts > 0, np.sqrt(counts), 1.15) / n
+            fig, ax = plt.subplots()
+            ax.errorbar(x, counts / n, yerr=unc, fmt="o", color="k", ms=6,
+                        label="data")
+            _step(ax, _group(arrays, i, "poisson_profile"), color="C0", lw=2,
+                  label=f"Poisson fit, ε = {r.poisson_eff:.3f}, λ = {r.poisson_lambda:.3f}")
+            _step(ax, _group(arrays, i, "dds_profile"), color="C1", lw=2, ls="--",
+                  label=f"data-driven fit, ε = {r.dds_eff:.3f}, s = {r.dds_s:.2f}")
+            ax.set_yscale("log")
+            ax.set_xticks(x)
+            ax.set_xticklabels([str(k) for k in x[:-1]] + [f"≥{x[-1]}"])
+            ax.set_xlabel("Neutron candidate multiplicity")
+            ax.set_ylabel("Fraction of AmBe triggers")
+            ax.set_title(f"{_position_label(r)}: {int(n):,} triggers, "
+                         f"deviance {r.poisson_stat:.1f} (Poisson) vs "
+                         f"{r.dds_stat:.2f} (data-driven)", fontsize=10)
+            ax.legend(fontsize=9, frameon=False)
+            fig.tight_layout()
+            pdf.savefig(fig)
+            plt.close(fig)
+    print(f"[plots.efficiency] wrote {out}")
+
+
+def plot_bypos_profiles(ctx, df, arrays):
+    """One page per position: profiled Delta(-2 ln L) in eps, lambda and s."""
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+    out = ctx.plot_path("eff_bypos_chi2_profiles", "pdf")
+    with PdfPages(out) as pdf:
+        for i, r in _ordered(df).iterrows():
+            fig, axes = plt.subplots(1, 3, figsize=(15, 4.6))
+            eg = _group(arrays, i, "eff_grid")
+            span = max(r.poisson_eff_hi - r.poisson_eff_lo,
+                       r.dds_eff_hi - r.dds_eff_lo)
+            for tag in ("poisson", "dds"):
+                c = _group(arrays, i, f"{tag}_chi2_eff")
+                axes[0].plot(eg, c - c.min(), color=MODEL_STYLE[tag]["color"],
+                             lw=2, label=MODEL_STYLE[tag]["label"])
+            lo = min(r.poisson_eff, r.dds_eff) - 4 * span
+            hi = max(r.poisson_eff, r.dds_eff) + 4 * span
+            axes[0].set_xlim(lo, hi)
+            axes[0].set_ylim(0, 10)
+            axes[0].set_xlabel("Neutron detection efficiency ε")
+            axes[0].set_ylabel("Δ(−2 ln L)")
+            axes[0].set_title(f"ε: Poisson {r.poisson_eff:.3f} "
+                              f"[{r.poisson_eff_lo:.3f}, {r.poisson_eff_hi:.3f}], "
+                              f"data-driven {r.dds_eff:.3f} "
+                              f"[{r.dds_eff_lo:.3f}, {r.dds_eff_hi:.3f}]", fontsize=9)
+            axes[0].legend(fontsize=9, frameon=False)
+
+            lg, cl = _group(arrays, i, "lam_grid"), _group(arrays, i, "poisson_chi2_lam")
+            axes[1].plot(lg, cl - cl.min(), color="C0", lw=2)
+            w = max(r.poisson_lambda_hi - r.poisson_lambda_lo, 0.005)
+            axes[1].set_xlim(max(lg[0], r.poisson_lambda - 5 * w),
+                             min(lg[-1], r.poisson_lambda + 5 * w))
+            axes[1].set_ylim(0, 10)
+            axes[1].set_xlabel("Poisson background rate λ [candidates/trigger]")
+            axes[1].set_title(f"λ = {r.poisson_lambda:.3f} "
+                              f"[{r.poisson_lambda_lo:.3f}, {r.poisson_lambda_hi:.3f}]",
+                              fontsize=9)
+
+            sg, cs = _group(arrays, i, "s_grid"), _group(arrays, i, "dds_chi2_s")
+            axes[2].plot(sg, cs - cs.min(), color="C1", lw=2)
+            axes[2].set_ylim(0, 10)
+            axes[2].set_xlabel("Template rate scale s (6264 shape)")
+            axes[2].set_title(f"s = {r.dds_s:.2f} [{r.dds_s_lo:.2f}, {r.dds_s_hi:.2f}], "
+                              f"λ_eff = {r.dds_lambda_eff:.3f}", fontsize=9)
+            fig.suptitle(f"Profiled likelihood, {_position_label(r)}; "
+                         f"68 % interval at Δ(−2 ln L) = 1", fontsize=11)
+            fig.tight_layout()
+            pdf.savefig(fig)
+            plt.close(fig)
+    print(f"[plots.efficiency] wrote {out}")
+
+
+def plot_bypos_vs_y(ctx, df):
+    """Efficiency vs y, one panel per port: counting, Poisson and data-driven."""
+    import matplotlib.pyplot as plt
+    from ..plots.heatmap import PORT_ORDER
+    d = df[df.level == "position"]
+    fig, axes = plt.subplots(1, len(PORT_ORDER), figsize=(18, 4.8), sharey=True)
+    for ax, port in zip(axes, PORT_ORDER):
+        g = d[d.port == port].sort_values("y_pos")
+        for k, (tag, off) in enumerate((("counting", -4), ("poisson", 0), ("dds", 4))):
+            st = MODEL_STYLE[tag]
+            if tag == "counting":
+                y, lo, hi = g.naive_eff, g.naive_err, g.naive_err
+            else:
+                y = g[f"{tag}_eff"]
+                lo, hi = y - g[f"{tag}_eff_lo"], g[f"{tag}_eff_hi"] - y
+            ax.errorbar(g.y_pos + off, 100 * y, yerr=[100 * lo, 100 * hi],
+                        fmt=st["marker"], color=st["color"], ms=6, capsize=2,
+                        label=st["label"])
+        ax.set_title(port)
+        ax.set_xlabel("y position (cm)")
+    axes[0].set_ylabel("Efficiency (%)")
+    axes[0].legend(fontsize=9, frameon=False)
+    fig.suptitle(ctx.title("Neutron detection efficiency by port and height"))
+    fig.tight_layout()
+    save_plot(fig, ctx, "eff_bypos_vs_y")
+
+
+def plot_bypos_gof(ctx, df):
+    """Joint deviance per position for both models, with the ndof in the title."""
+    import matplotlib.pyplot as plt
+    d = _ordered(df).reset_index(drop=True)
+    labels = [f"{r.port.replace('Port ', 'P')} y{r.y_pos:+g}" for r in d.itertuples()]
+    x = np.arange(len(d))
+    fig, ax = plt.subplots(figsize=(14, 4.8))
+    ax.plot(x, d.poisson_stat, "o", color="C0", ms=7,
+            label=f"Poisson fit ({int(d.poisson_ndof.iloc[0])} dof)")
+    ax.plot(x, d.dds_stat, "D", color="C1", ms=7,
+            label=f"data-driven fit ({int(d.dds_ndof.iloc[0])} dof)")
+    ax.set_yscale("log")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=70, fontsize=8)
+    ax.set_ylabel("Deviance at best fit")
+    ax.set_title(ctx.title(
+        f"Goodness of fit by position: data-driven p = {d.dds_p.min():.2f}–"
+        f"{d.dds_p.max():.2f}, Poisson p < 0.001 everywhere"), fontsize=11)
+    ax.legend(fontsize=9, frameon=False)
+    fig.tight_layout()
+    save_plot(fig, ctx, "eff_bypos_goodness_of_fit")
+
+
+def plot_bypos_background(ctx, df):
+    """Background rate per trigger: Poisson lambda vs the rescaled 6264 template mean."""
+    import matplotlib.pyplot as plt
+    d = _ordered(df).reset_index(drop=True)
+    labels = [f"{r.port.replace('Port ', 'P')} y{r.y_pos:+g}" for r in d.itertuples()]
+    x = np.arange(len(d))
+    fig, ax = plt.subplots(figsize=(14, 4.8))
+    ax.errorbar(x - 0.15, d.poisson_lambda,
+                yerr=[d.poisson_lambda - d.poisson_lambda_lo,
+                      d.poisson_lambda_hi - d.poisson_lambda],
+                fmt="o", color="C0", ms=6, capsize=2, label="Poisson λ")
+    ax.plot(x + 0.15, d.dds_lambda_eff, "D", color="C1", ms=6,
+            label="data-driven λ_eff (6264 shape × s^k)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=70, fontsize=8)
+    ax.set_ylabel("Background candidates per trigger")
+    bkg_mean = float(np.sum(np.arange(len(d.background_hist.iloc[0].split()))
+                            * np.array(d.background_hist.iloc[0].split(), float))
+                     / np.sum(np.array(d.background_hist.iloc[0].split(), float)))
+    ax.set_title(ctx.title(f"Background rate by position (6264 as measured: "
+                           f"{bkg_mean:.2f} per trigger)"), fontsize=11)
+    ax.legend(fontsize=9, frameon=False)
+    fig.tight_layout()
+    save_plot(fig, ctx, "eff_bypos_background_rate")
+
+
+def plot_bypos_model_difference(ctx, df):
+    """Data-driven minus Poisson, the background-model systematic, per position."""
+    import matplotlib.pyplot as plt
+    d = _ordered(df).reset_index(drop=True)
+    labels = [f"{r.port.replace('Port ', 'P')} y{r.y_pos:+g}" for r in d.itertuples()]
+    x = np.arange(len(d))
+    stat = 50 * (d.dds_eff_hi - d.dds_eff_lo)
+    fig, ax = plt.subplots(figsize=(14, 4.8))
+    ax.errorbar(x, 100 * d.delta_model_signed, yerr=stat, fmt="D", color="C1",
+                ms=6, capsize=2, label="data-driven − Poisson (bar: data-driven stat)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=70, fontsize=8)
+    ax.set_ylabel("Δε (percentage points)")
+    ax.set_title(ctx.title(f"Background-model difference: mean "
+                           f"{100 * d.delta_model_signed.mean():+.2f} pp"), fontsize=11)
+    ax.legend(fontsize=9, frameon=False)
+    fig.tight_layout()
+    save_plot(fig, ctx, "eff_bypos_model_difference")
+
+
+def plot_bypos_counting_residual(ctx, df):
+    """Counting minus each fitted efficiency, per position: the background correction."""
+    import matplotlib.pyplot as plt
+    d = _ordered(df).reset_index(drop=True)
+    labels = [f"{r.port.replace('Port ', 'P')} y{r.y_pos:+g}" for r in d.itertuples()]
+    x = np.arange(len(d))
+    fig, ax = plt.subplots(figsize=(14, 4.8))
+    means = {}
+    for tag, off in (("poisson", -0.15), ("dds", 0.15)):
+        st = MODEL_STYLE[tag]
+        res = 100 * (d.naive_eff - d[f"{tag}_eff"])
+        err = 50 * (d[f"{tag}_eff_hi"] - d[f"{tag}_eff_lo"])
+        means[tag] = res.mean()
+        ax.errorbar(x + off, res, yerr=err, fmt=st["marker"], color=st["color"],
+                    ms=6, capsize=2, label=f"counting − {st['label']}")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=70, fontsize=8)
+    ax.set_ylabel("Δε (percentage points)")
+    ax.set_title(ctx.title(
+        f"Counting minus fitted efficiency: mean {means['poisson']:.2f} pp (Poisson), "
+        f"{means['dds']:.2f} pp (data-driven)"), fontsize=11)
+    ax.legend(fontsize=9, frameon=False)
+    fig.tight_layout()
+    save_plot(fig, ctx, "eff_bypos_counting_residual")
+
+
+def plot_bypos_binning(ctx, df):
+    """epsilon at 5 and 8 bins minus the nominal, if those fits exist."""
+    import matplotlib.pyplot as plt
+    base = _ordered(df).reset_index(drop=True)
+    alts = []
+    for nb in (5, 8):
+        try:
+            alt, _ = _load_by_position(ctx, f"_nbins{nb}")
+        except SystemExit:
+            continue
+        alts.append((nb, alt[alt.level == "position"].reset_index(drop=True)))
+    if not alts:
+        return
+    labels = [f"{r.port.replace('Port ', 'P')} y{r.y_pos:+g}" for r in base.itertuples()]
+    x = np.arange(len(base))
+    fig, ax = plt.subplots(figsize=(14, 4.8))
+    for (nb, alt), marker, off in zip(alts, ("o", "s"), (-0.15, 0.15)):
+        m = base.merge(alt, on=["x_pos", "y_pos", "z_pos"], suffixes=("", "_a"))
+        ax.plot(x + off, 100 * (m.dds_eff_a - m.dds_eff), marker, color="C1",
+                ms=6, mfc="none" if nb == 8 else "C1",
+                label=f"{nb} bins − 4 bins, data-driven")
+    stat = 50 * (base.dds_eff_hi - base.dds_eff_lo)
+    ax.fill_between(x, -stat, stat, color="0.85",
+                    label="± data-driven stat (4 bins)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=70, fontsize=8)
+    ax.set_ylabel("Δε (percentage points)")
+    ax.set_title(ctx.title("Binning sensitivity of the data-driven efficiency"),
+                 fontsize=11)
+    ax.legend(fontsize=9, frameon=False)
+    fig.tight_layout()
+    save_plot(fig, ctx, "eff_bypos_binning_sensitivity")
+
+
+def run_by_position(ctx):
+    df, arrays = _load_by_position(ctx)
+    plot_bypos_vs_y(ctx, df)
+    plot_bypos_gof(ctx, df)
+    plot_bypos_background(ctx, df)
+    plot_bypos_model_difference(ctx, df)
+    plot_bypos_counting_residual(ctx, df)
+    plot_bypos_binning(ctx, df)
+    if arrays is None:
+        print("[plots.efficiency] no profile .npz beside the CSV; rerun "
+              "`ambe stats efficiency` to get the per-position fit and profile pages")
+        return
+    plot_bypos_fits(ctx, df, arrays)
+    plot_bypos_profiles(ctx, df, arrays)
+    print(f"[plots.efficiency] figures in {ctx.plots_dir}")
+
+
 def run(ctx, argv=None):
     set_style()
     fp = dict(ctx.fit_params or {})
     if not fp:
         raise SystemExit("[plots.efficiency] config has no fit_params block")
+    if "source_runs" in fp:
+        return run_by_position(ctx)
 
     src_run, bkg_run = int(fp["source_run"]), int(fp["background_run"])
     n_bins = int(fp.get("n_bins", 8))

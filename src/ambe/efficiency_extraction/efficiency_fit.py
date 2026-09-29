@@ -1059,7 +1059,13 @@ def _fit_group(label, pos, runs, src, bkg, index, *, eff_grid, lam_grid, s_grid,
                dds_s_lo=rs.lam_lo, dds_s_hi=rs.lam_hi,
                dds_lambda_eff=scaled_template_mean(bkg, rs.best_lambda),
                delta_model_signed=rs.best_eff - rp.best_eff)
-    return row
+    arrays = dict(counts=src.counts, eff_grid=eff_grid,
+                  poisson_chi2_eff=rp.chi2_eff, poisson_chi2_lam=rp.chi2_lam,
+                  poisson_profile=rp.best_profile, lam_grid=lam_grid,
+                  dd_chi2_eff=rd.chi2_eff, dd_profile=rd.best_profile,
+                  dds_chi2_eff=rs.chi2_eff, dds_chi2_s=rs.chi2_lam,
+                  dds_profile=rs.best_profile, s_grid=s_grid)
+    return row, arrays
 
 
 def run_by_position(ctx, fp: dict, ei: pd.DataFrame, *, n_bins: int,
@@ -1091,9 +1097,10 @@ def run_by_position(ctx, fp: dict, ei: pd.DataFrame, *, n_bins: int,
     opts = dict(eff_grid=eff_grid, lam_grid=lam_grid, s_grid=s_grid,
                 likelihood=likelihood, bkg_unc_mode=bkg_unc_mode, n_boot=n_boot,
                 seed=seed, n_gof_toys=n_gof_toys)
-    rows = Parallel(n_jobs=n_jobs, verbose=0)(
+    out = Parallel(n_jobs=n_jobs, verbose=0)(
         delayed(_fit_group)(label, pos, runs, src, bkg, i, **opts)
         for i, (label, pos, runs, src) in enumerate(jobs))
+    rows = [r for r, _ in out]
     for (label, (x, y, z), _, _), row in zip(jobs, rows):
         print(f"   {label:>9} ({x:g},{y:g},{z:g}) N={row['n_trig']:,} "
               f"naive={row['naive_eff']:.4f}  poisson={row['poisson_eff']:.4f} "
@@ -1107,9 +1114,13 @@ def run_by_position(ctx, fp: dict, ei: pd.DataFrame, *, n_bins: int,
     df["likelihood"] = likelihood
     df["background_uncertainty"] = bkg_unc_mode
     df["n_bins"] = n_bins
-    out = ctx.csv_path("efficiency_fit_by_position" + out_suffix)
-    df.to_csv(out, index=False)
-    print(f"\n[efficiency_fit] wrote {out}")
+    path = ctx.csv_path("efficiency_fit_by_position" + out_suffix)
+    df.to_csv(path, index=False)
+    npz = {"background_counts": bkg.counts}
+    for i, (_, arrays) in enumerate(out):
+        npz.update({f"g{i}__{k}": v for k, v in arrays.items()})
+    np.savez_compressed(path.with_suffix(".npz"), **npz)
+    print(f"\n[efficiency_fit] wrote {path} and {path.with_suffix('.npz').name}")
     return df
 
 
