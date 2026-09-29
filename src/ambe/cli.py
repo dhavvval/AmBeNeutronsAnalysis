@@ -58,6 +58,7 @@ COMMANDS: dict[tuple[str, str], str] = {
     ("plots", "basic"):         "ambe.plots.basic:cli",
     ("plots", "combined"):      "ambe.plots.combined:cli",
     ("plots", "heatmap"):       "ambe.plots.heatmap:cli",
+    ("plots", "provenance"):    "ambe.plots.provenance_deck:cli",
     ("plots", "efficiency"):    "ambe.efficiency_extraction.efficiency_thesis:cli",
     # Waveform-stage companion to `plots efficiency`: the Stage-1 AmBe small-PMT
     # selection, and whether the no-source run's flat background can be subtracted
