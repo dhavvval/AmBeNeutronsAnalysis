@@ -24,6 +24,7 @@ OutputPlots/
 mc_results/
 mc_parquet/
 ambe_output/
+ambe_output_capture/
 beamoff/
 mc_steven/
 optics_beamcluster_benchmark_smoke/
