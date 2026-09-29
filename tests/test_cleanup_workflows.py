@@ -74,7 +74,7 @@ def test_background_optics_cli_uses_shared_extractor(tmp_path, monkeypatch):
     output = tmp_path / "features.parquet"
     calls = []
     geometry = object()
-    monkeypatch.setattr(features, "load_geometry", lambda *args: geometry)
+    monkeypatch.setattr(features, "load_geometry", lambda *args, **kwargs: geometry)
 
     def extract(path, geo, **kwargs):
         calls.append((path, geo, kwargs))

@@ -148,9 +148,32 @@ class ANNIEGeometry:
     fallback_offset: float    # mean reliable offset (used when chankey missing)
 
 
-def load_geometry(geo_path: str, offsets_path: str) -> ANNIEGeometry:
+# FullTankPMTGeometry.csv is in the WCSim world frame (tank centre at y=-0.1446,
+# z=1.681 m).  Every hit table this package reads (MC pulses and data) is tank-centred,
+# so the PMT table is shifted into that frame.  Before 2026-09-23 it was not: the tank
+# centre sat 1.68 m away from every hit, the radius came out as 2.82 m (so d_wall never
+# saw the barrel), and the Gauss-Newton fit was seeded and bounded in the wrong frame.
+WORLD_TANK_CENTER_M = np.array([0.0, -0.1446, 1.681])
+# Inner tank (ANNIE: 3.05 m diameter, 3.96 m tall), tank-centred.  True captures reach
+# R ~ 1.5 m and |y| ~ 1.9 m, well outside the PMT envelope (R ~ 1.13 m).
+TANK_INNER_RADIUS_M = 1.524
+TANK_HALF_HEIGHT_M = 1.98
+
+
+def load_geometry(geo_path: str, offsets_path: str,
+                  frame: str = "tank", apply_offsets: bool = True) -> ANNIEGeometry:
     """
     Load PMT geometry and per-channel timing offsets.
+
+    frame="tank" (default) shifts PMT positions into the tank-centred hit frame and
+    bounds the tank by its physical inner cylinder.  frame="world_legacy" reproduces
+    the pre-2026-09-23 behaviour exactly (world-frame PMTs, PMT-envelope bounds), for
+    re-deriving features that frozen models were trained on.
+
+    apply_offsets=False zeroes every per-PMT timing offset.  The offsets are a DATA
+    calibration; WCSim hits carry none, and subtracting them from MC widens the
+    true-vertex ToF-corrected spread of single-capture light from 2.9 to 5.3 ns
+    (AmBe QE1.50, 2,349 captures).  Set `geometry.apply_timing_offsets: false` for MC.
 
     Parameters
     ----------
@@ -185,6 +208,11 @@ def load_geometry(geo_path: str, offsets_path: str) -> ANNIEGeometry:
         zd = float(row.get("z_dir", row.get("zd", 0)))
         pmt_dir[ck] = np.array([xd, yd, zd], dtype=float)
 
+    if frame == "tank":
+        pmt_pos = {k: v - WORLD_TANK_CENTER_M for k, v in pmt_pos.items()}
+    elif frame != "world_legacy":
+        raise ValueError(f"load_geometry: unknown frame {frame!r}")
+
     # Tank boundaries from PMT positions
     xs = np.array([v[0] for v in pmt_pos.values()])
     ys = np.array([v[1] for v in pmt_pos.values()])
@@ -199,6 +227,10 @@ def load_geometry(geo_path: str, offsets_path: str) -> ANNIEGeometry:
     tank_radius  = float(xzr.max()) + 0.01   # slight margin
     tank_top     = float(ys.max())  + 0.01
     tank_bot     = float(ys.min())  - 0.01
+    if frame == "tank":
+        tank_center = np.zeros(3)
+        tank_radius = TANK_INNER_RADIUS_M
+        tank_top, tank_bot = TANK_HALF_HEIGHT_M, -TANK_HALF_HEIGHT_M
 
     # ---- Timing offsets ----
     toff = pd.read_csv(offsets_path, comment="#", header=None,
@@ -214,7 +246,9 @@ def load_geometry(geo_path: str, offsets_path: str) -> ANNIEGeometry:
         except (ValueError, TypeError):
             pass
 
-    print(f"[cluster_features] geometry: {len(pmt_pos)} PMTs  "
+    if not apply_offsets:
+        pmt_offset, fallback = {}, 0.0
+    print(f"[cluster_features] geometry ({frame}): {len(pmt_pos)} PMTs  "
           f"| tank R={tank_radius:.3f}m  Y=[{tank_bot:.3f}, {tank_top:.3f}]m")
     print(f"[cluster_features] offsets: {len(pmt_offset)} channels  "
           f"| fallback={fallback:.1f} ns")
@@ -1020,6 +1054,147 @@ def _truth_label_cluster(mask: np.ndarray,
 # Main extraction driver
 # --------------------------------------------------------------------------- #
 
+_FEAT_STATE: dict = {}
+
+# Same time-peak parameters as `ambe mc capture`, so method=="peak" cluster_ids line up
+# with the capture-truth table (attach_capture_labels also checks n_hits).
+PEAK_PARAMS = dict(twidth_ns=20.0, nhitsth=6, t_min_sep_ns=50.0)
+
+
+def _features_for_group(i_grp: int) -> list:
+    """Feature rows for one row group (one source file). Module-level so it pickles
+    into a multiprocessing Pool; its inputs live in _FEAT_STATE, filled before fork."""
+    from . import cc_selection
+    from ..clustering.peak_finder import find_time_peaks
+    import pyarrow.parquet as pq
+    st = _FEAT_STATE
+    ctx, geo, clusters = st["ctx"], st["geo"], st["clusters"]
+    read_cols, methods = st["read_cols"], st["methods"]
+    min_samples, xi, t_unit_ns = st["min_samples"], st["xi"], st["t_unit_ns"]
+    hit_prefilter_ns, truth_window_ns = st["hit_prefilter_ns"], st["truth_window_ns"]
+    source_pos_m, min_pulses_per_event = st["source_pos_m"], st["min_pulses_per_event"]
+    pf = pq.ParquetFile(st["pulses_path"])
+    rows = []
+    chunk = pf.read_row_group(i_grp, columns=read_cols).to_pandas()
+    if "pe" not in chunk.columns:
+        chunk["pe"] = 1.0
+
+    # Reduce to the delayed residual (CC-passing, prompt window removed) for
+    # THIS chunk — same per-hit cut as the whole-table path.
+    chunk = cc_selection.apply_residual_filter(chunk, ctx, verbose=False)
+    if not len(chunk):
+        return rows
+
+    event_ids = chunk["eventID"].unique()
+    has_cc = "cc_pass" in chunk.columns
+    has_origin = "origin_in_tank" in chunk.columns
+    has_origin_fv = "origin_in_fv" in chunk.columns
+    for evid in event_ids:
+        df_ev = chunk[chunk["eventID"] == evid].reset_index(drop=True)
+        if len(df_ev) < min_pulses_per_event:
+            continue
+        # cc_pass is constant within an event (merged per-event by mc.processor)
+        ev_cc_pass = bool(df_ev["cc_pass"].iloc[0]) if has_cc and len(df_ev) else True
+        # Likewise origin_in_tank — a property of the neutrino interaction, so
+        # constant within the event.  -1 = unknown (event absent from the CC table);
+        # when the column is missing entirely the label rule downstream degrades to
+        # the tank-only behaviour rather than guessing.
+        ev_origin_in_tank = (int(df_ev["origin_in_tank"].iloc[0])
+                             if has_origin and len(df_ev) else -1)
+        ev_origin_in_fv = (int(df_ev["origin_in_fv"].iloc[0])
+                           if has_origin_fv and len(df_ev) else -1)
+
+        df_cl = (clusters[clusters["eventID"] == evid].reset_index(drop=True)
+                 if clusters is not None else None)
+
+        # Pre-filter and truth mask (same logic as optics.py)
+        if hit_prefilter_ns > 0:
+            df_optics = _prefilter_hits(df_ev, df_cl, hit_prefilter_ns)
+        else:
+            df_optics = df_ev
+
+        truth_mask = _apply_truth_window(df_ev, truth_window_ns)
+
+        # Run OPTICS (with source ToF correction if source_pos_m provided)
+        labels_optics = (run_optics_on_event(df_optics, min_samples=min_samples,
+                                             xi=xi, t_unit_ns=t_unit_ns,
+                                             source_pos_m=source_pos_m)
+                         if "optics" in methods
+                         else np.full(len(df_optics), -1, dtype=int))
+
+        # Re-align to full event
+        if len(df_optics) < len(df_ev):
+            labels_full = np.full(len(df_ev), -1, dtype=int)
+            labels_full[df_optics.index] = labels_optics
+        else:
+            labels_full = labels_optics
+
+        # Also get CF labels for comparison
+        cf_labels = (assign_clusterfinder_labels(df_ev, df_cl)
+                     if df_cl is not None else np.full(len(df_ev), -1, dtype=int))
+
+        # Per-event neutron capture reference time (for gamma-cluster tagging)
+        neu_hits_t = df_ev.loc[df_ev["truth_class"].isin(NEUTRON_CLASSES), "t"]
+        neu_ref_t  = float(neu_hits_t.median()) if len(neu_hits_t) >= 1 else float("nan")
+
+        # Extract features per cluster, per requested method
+        lbl_by_method = {"optics": labels_full, "clusterfinder": cf_labels}
+        if "peak" in methods:
+            lbl_by_method["peak"], _ = find_time_peaks(
+                df_ev["t"].to_numpy(float), xyz=df_ev[["x", "y", "z"]].to_numpy(float),
+                pmt=df_ev["pmtID"].to_numpy(int), pe=df_ev["pe"].to_numpy(float),
+                ref_m=None, **PEAK_PARAMS)
+        for method in methods:
+            lbls = lbl_by_method[method]
+            unique_clusters = [c for c in np.unique(lbls) if c >= 0]
+            for cid in unique_clusters:
+                mask = (lbls == cid)
+                df_clust = df_ev[mask].reset_index(drop=True)
+                feats = compute_cluster_features(df_clust, geo,
+                                                source_pos_m=source_pos_m)
+                if not feats:
+                    continue
+                is_n, dom_tid = _truth_label_cluster(mask, df_ev, truth_mask)
+                comp = _hit_composition(mask, df_ev)
+
+                # Prompt-signal flag: cluster is prompt AmBe gamma, muon light, etc.
+                # Tagged by timing (early arrival) OR composition (class-5 dominant
+                # with only stray neutron contamination ≤ PROMPT_SIGNAL_MAX_NEUTRON_HITS).
+                cluster_offset = (feats["t_mean"] - neu_ref_t
+                                  if not (neu_ref_t != neu_ref_t) else float("nan"))
+                timing_prompt = (cluster_offset < PROMPT_SIGNAL_THRESHOLD_NS
+                                 if cluster_offset == cluster_offset else False)
+                comp_prompt   = (comp["frac_nonneutron"] > 0.5 and
+                                 comp["n_neutron"] <= PROMPT_SIGNAL_MAX_NEUTRON_HITS)
+                is_prompt = int(timing_prompt or comp_prompt)
+
+                row = {
+                    "eventID":                 int(evid),
+                    "method":                  method,
+                    "cluster_id":              int(cid),
+                    "is_truth_neutron":        is_n,
+                    "dominant_trackID":        dom_tid,
+                    "cluster_time_offset_ns":  round(cluster_offset, 1)
+                                               if cluster_offset == cluster_offset
+                                               else float("nan"),
+                    "is_prompt_cluster":       is_prompt,
+                    "cc_pass":                 int(ev_cc_pass),
+                }
+                # Emitted ONLY when the upstream hits carry it. Writing a
+                # placeholder instead would create the column on a tank-only
+                # sample and hand the downstream label rule a value it would
+                # act on -- silently reclassifying every signal cluster.
+                if has_origin:
+                    row["origin_in_tank"] = ev_origin_in_tank
+                if has_origin_fv:
+                    row["origin_in_fv"] = ev_origin_in_fv
+                row.update(feats)
+                row.update(comp)
+                rows.append(row)
+
+    return rows
+
+
 def extract_all_features(ctx: RunContext,
                          geo: ANNIEGeometry,
                          min_samples:      int   = 8,
@@ -1028,7 +1203,10 @@ def extract_all_features(ctx: RunContext,
                          hit_prefilter_ns: float = 0.0,
                          truth_window_ns:  float = DEFAULT_WINDOW,
                          source_pos_m:     "Optional[np.ndarray]" = None,
-                         min_pulses_per_event: int = 3) -> pd.DataFrame:
+                         min_pulses_per_event: int = 3,
+                         methods: tuple = ("optics", "clusterfinder"),
+                         jobs: int = 1,
+                         max_groups: Optional[int] = None) -> pd.DataFrame:
     """
     Re-run OPTICS with a single config and compute cluster features per event.
 
@@ -1042,10 +1220,16 @@ def extract_all_features(ctx: RunContext,
     source_pos_m         : AmBe source in metres for source ToF correction and d_source.
                            None disables both.
     min_pulses_per_event : skip events with fewer hits than this (0 = keep all)
+    methods              : any of "optics", "clusterfinder", "peak" (the NTag time-peak
+                           finder, ambe.clustering.peak_finder, with the same parameters
+                           `ambe mc capture` uses, so its cluster_ids join onto the
+                           capture-truth table)
+    jobs                 : worker processes over row groups. Results are collected in
+                           row-group order, so the table is identical to jobs=1.
 
     Returns
     -------
-    DataFrame with one row per cluster (both OPTICS and ClusterFinder methods).
+    DataFrame with one row per cluster per requested method.
     """
     pulses_path   = ctx.parquet_path(f"{ctx.run_name}__pulses")
     clusters_path = ctx.parquet_path(f"{ctx.run_name}__clusterfinder")
@@ -1096,128 +1280,44 @@ def extract_all_features(ctx: RunContext,
     rows = []
     t_start = time.time()
     n_groups = pf.num_row_groups
+    if max_groups:
+        n_groups = min(max_groups, n_groups)
+        print(f"[cluster_features] *** PARTIAL: first {n_groups}/{pf.num_row_groups} row "
+              "groups only — pilot, not quotable ***")
+    unknown = [m for m in methods if m not in ("optics", "clusterfinder", "peak")]
+    if unknown:
+        raise ValueError(f"extract_all_features: unknown methods {unknown}")
+    _FEAT_STATE.update(ctx=ctx, geo=geo, clusters=clusters, read_cols=read_cols,
+                       methods=tuple(methods), min_samples=min_samples, xi=xi,
+                       t_unit_ns=t_unit_ns, hit_prefilter_ns=hit_prefilter_ns,
+                       truth_window_ns=truth_window_ns, source_pos_m=source_pos_m,
+                       min_pulses_per_event=min_pulses_per_event,
+                       pulses_path=str(pulses_path))
+    print(f"[cluster_features] methods={list(methods)}  jobs={jobs}")
 
-    # Iterate row groups (one per source file in productionv2 output). If a future
-    # writer packs multiple files per group, the per-event loop still works — the
-    # only invariant we need is that all hits of one event sit in the same chunk,
-    # which holds because mc.processor writes each file's events contiguously.
-    for i_grp in range(n_groups):
-        chunk = pf.read_row_group(i_grp, columns=read_cols).to_pandas()
-        if "pe" not in chunk.columns:
-            chunk["pe"] = 1.0
-
-        # Reduce to the delayed residual (CC-passing, prompt window removed) for
-        # THIS chunk — same per-hit cut as the whole-table path.
-        chunk = cc_selection.apply_residual_filter(chunk, ctx, verbose=False)
-        if not len(chunk):
-            continue
-
-        event_ids = chunk["eventID"].unique()
-        has_cc = "cc_pass" in chunk.columns
-        has_origin = "origin_in_tank" in chunk.columns
-        has_origin_fv = "origin_in_fv" in chunk.columns
-        for evid in event_ids:
-            df_ev = chunk[chunk["eventID"] == evid].reset_index(drop=True)
-            if len(df_ev) < min_pulses_per_event:
-                continue
-            # cc_pass is constant within an event (merged per-event by mc.processor)
-            ev_cc_pass = bool(df_ev["cc_pass"].iloc[0]) if has_cc and len(df_ev) else True
-            # Likewise origin_in_tank — a property of the neutrino interaction, so
-            # constant within the event.  -1 = unknown (event absent from the CC table);
-            # when the column is missing entirely the label rule downstream degrades to
-            # the tank-only behaviour rather than guessing.
-            ev_origin_in_tank = (int(df_ev["origin_in_tank"].iloc[0])
-                                 if has_origin and len(df_ev) else -1)
-            ev_origin_in_fv = (int(df_ev["origin_in_fv"].iloc[0])
-                               if has_origin_fv and len(df_ev) else -1)
-
-            df_cl = (clusters[clusters["eventID"] == evid].reset_index(drop=True)
-                     if clusters is not None else None)
-
-            # Pre-filter and truth mask (same logic as optics.py)
-            if hit_prefilter_ns > 0:
-                df_optics = _prefilter_hits(df_ev, df_cl, hit_prefilter_ns)
-            else:
-                df_optics = df_ev
-
-            truth_mask = _apply_truth_window(df_ev, truth_window_ns)
-
-            # Run OPTICS (with source ToF correction if source_pos_m provided)
-            labels_optics = run_optics_on_event(df_optics, min_samples=min_samples,
-                                                xi=xi, t_unit_ns=t_unit_ns,
-                                                source_pos_m=source_pos_m)
-
-            # Re-align to full event
-            if len(df_optics) < len(df_ev):
-                labels_full = np.full(len(df_ev), -1, dtype=int)
-                labels_full[df_optics.index] = labels_optics
-            else:
-                labels_full = labels_optics
-
-            # Also get CF labels for comparison
-            cf_labels = (assign_clusterfinder_labels(df_ev, df_cl)
-                         if df_cl is not None else np.full(len(df_ev), -1, dtype=int))
-
-            # Per-event neutron capture reference time (for gamma-cluster tagging)
-            neu_hits_t = df_ev.loc[df_ev["truth_class"].isin(NEUTRON_CLASSES), "t"]
-            neu_ref_t  = float(neu_hits_t.median()) if len(neu_hits_t) >= 1 else float("nan")
-
-            # Extract features per cluster — both OPTICS and CF
-            for method, lbls in [("optics", labels_full), ("clusterfinder", cf_labels)]:
-                unique_clusters = [c for c in np.unique(lbls) if c >= 0]
-                for cid in unique_clusters:
-                    mask = (lbls == cid)
-                    df_clust = df_ev[mask].reset_index(drop=True)
-                    feats = compute_cluster_features(df_clust, geo,
-                                                    source_pos_m=source_pos_m)
-                    if not feats:
-                        continue
-                    is_n, dom_tid = _truth_label_cluster(mask, df_ev, truth_mask)
-                    comp = _hit_composition(mask, df_ev)
-
-                    # Prompt-signal flag: cluster is prompt AmBe gamma, muon light, etc.
-                    # Tagged by timing (early arrival) OR composition (class-5 dominant
-                    # with only stray neutron contamination ≤ PROMPT_SIGNAL_MAX_NEUTRON_HITS).
-                    cluster_offset = (feats["t_mean"] - neu_ref_t
-                                      if not (neu_ref_t != neu_ref_t) else float("nan"))
-                    timing_prompt = (cluster_offset < PROMPT_SIGNAL_THRESHOLD_NS
-                                     if cluster_offset == cluster_offset else False)
-                    comp_prompt   = (comp["frac_nonneutron"] > 0.5 and
-                                     comp["n_neutron"] <= PROMPT_SIGNAL_MAX_NEUTRON_HITS)
-                    is_prompt = int(timing_prompt or comp_prompt)
-
-                    row = {
-                        "eventID":                 int(evid),
-                        "method":                  method,
-                        "cluster_id":              int(cid),
-                        "is_truth_neutron":        is_n,
-                        "dominant_trackID":        dom_tid,
-                        "cluster_time_offset_ns":  round(cluster_offset, 1)
-                                                   if cluster_offset == cluster_offset
-                                                   else float("nan"),
-                        "is_prompt_cluster":       is_prompt,
-                        "cc_pass":                 int(ev_cc_pass),
-                    }
-                    # Emitted ONLY when the upstream hits carry it. Writing a
-                    # placeholder instead would create the column on a tank-only
-                    # sample and hand the downstream label rule a value it would
-                    # act on -- silently reclassifying every signal cluster.
-                    if has_origin:
-                        row["origin_in_tank"] = ev_origin_in_tank
-                    if has_origin_fv:
-                        row["origin_in_fv"] = ev_origin_in_fv
-                    row.update(feats)
-                    row.update(comp)
-                    rows.append(row)
-
-        # Per-chunk progress (one line per source file / row group).
+    def _progress(i_done):
         elapsed = time.time() - t_start
-        rate    = (i_grp + 1) / elapsed if elapsed > 0 else 0
-        eta     = (n_groups - i_grp - 1) / rate if rate > 0 else 0
-        print(f"[cluster_features]  chunk {i_grp+1:4d}/{n_groups}  "
-              f"({100*(i_grp+1)/n_groups:.0f}%)  "
+        rate    = i_done / elapsed if elapsed > 0 else 0
+        eta     = (n_groups - i_done) / rate if rate > 0 else 0
+        print(f"[cluster_features]  chunk {i_done:4d}/{n_groups}  "
+              f"({100*i_done/n_groups:.0f}%)  "
               f"elapsed={elapsed:.0f}s  ETA={eta:.0f}s  "
               f"clusters={len(rows)}", flush=True)
+
+    # Iterate row groups (one per source file). All hits of one event sit in the same
+    # chunk because mc.processor writes each file's events contiguously, so groups are
+    # independent and can go to separate processes. imap (not imap_unordered) keeps
+    # the output in row-group order: jobs>1 gives the same table as jobs=1.
+    if jobs > 1:
+        from multiprocessing import Pool
+        with Pool(jobs) as pool:
+            for k, r in enumerate(pool.imap(_features_for_group, range(n_groups))):
+                rows.extend(r)
+                _progress(k + 1)
+    else:
+        for i_grp in range(n_groups):
+            rows.extend(_features_for_group(i_grp))
+            _progress(i_grp + 1)
 
     df = pd.DataFrame(rows)
     print(f"[cluster_features] extracted {len(df)} cluster records  "
@@ -1838,6 +1938,13 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None) -> Path:
     p.add_argument("--xi", type=float)
     p.add_argument("--t-unit-ns", type=float)
     p.add_argument("--output", type=Path)
+    p.add_argument("--methods", default=None,
+                   help="comma list from optics,clusterfinder,peak (default: features.methods "
+                        "in the config, else optics,clusterfinder)")
+    p.add_argument("--max-files", type=int, default=None,
+                   help="only the first N row groups (one per ROOT file); pilots only")
+    p.add_argument("--jobs", type=int, default=1,
+                   help="worker processes over row groups (EAF: pin OMP/OPENBLAS to 1)")
     args = p.parse_args(list(argv) if argv else [])
 
     ms, xi, t_unit, prefilter, truth_win, geo_path, off_path, src_pos = _config_from_ctx(ctx)
@@ -1851,7 +1958,9 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None) -> Path:
             "    timing_offsets: /path/to/TankPMTTimingOffsets.csv"
         )
 
-    geo = load_geometry(geo_path, off_path)
+    _gb = ctx.extra.get("geometry", {}) or {}
+    geo = load_geometry(geo_path, off_path, frame=_gb.get("frame", "tank"),
+                        apply_offsets=bool(_gb.get("apply_timing_offsets", True)))
 
     # Beamoff mode: hits parquet already has OPTICS cluster assignments —
     # skip OPTICS re-run and truth labelling, just compute features.
@@ -1877,12 +1986,16 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None) -> Path:
     if args.output or args.min_samples is not None or args.xi is not None or args.t_unit_ns is not None:
         p.error("background feature overrides require --background-hits")
 
+    feat_methods = tuple(args.methods.split(",") if args.methods else
+                         (ctx.extra.get("features", {}) or {}).get(
+                             "methods", ["optics", "clusterfinder"]))
     df = extract_all_features(
         ctx, geo,
         min_samples=ms, xi=xi, t_unit_ns=t_unit,
         hit_prefilter_ns=prefilter, truth_window_ns=truth_win,
         source_pos_m=src_pos,
         min_pulses_per_event=args.min_pulses,
+        methods=feat_methods, jobs=args.jobs, max_groups=args.max_files,
     )
 
     # Save parquet
