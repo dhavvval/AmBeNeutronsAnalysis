@@ -40,6 +40,8 @@ COMMANDS: dict[tuple[str, str], str] = {
     ("mc", "timespread"):       "ambe.mc.time_spread:cli",
     ("mc", "hitcomp"):          "ambe.mc.hit_accounting:cli",
     ("mc", "timewindows"):      "ambe.mc.hit_time_windows:cli",
+    ("mc", "capture"):          "ambe.mc.capture_truth:cli",
+    ("mc", "displays"):         "ambe.diagnostics.plot_cluster_event_displays:cli",
     ("data", "process"):        "ambe.data.processor:cli",
     # Same Stage 2 as `data process`, with no Stage 1. MC has no waveforms, so every
     # cluster is treated as having passed the good-waveform selection. Separate command

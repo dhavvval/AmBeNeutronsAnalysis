@@ -66,6 +66,7 @@ DP_BRANCHES = [
     # productionv1/v2 ntuples still process.
     "DirectParent_LineagePDG", "DirectParent_LineageDepth",
     "DirectParent_LineageStatus", "DirectParent_RootAncestorPDG",
+    "DirectParent_LineageTrackID",
 ]
 
 # LineageStatus codes (BackTracker): 1 reached a generator primary ·
@@ -225,12 +226,13 @@ def _compute_offset(hit_ck, hit_t, dp_ck, dp_t) -> float:
 
 def _build_dp_lookup(dp_ck, dp_t, dp_class, dp_dn, dp_tid, dp_pdg,
                       dp_bg_cls, dp_bg_pdg, dp_bg_tid,
-                      dp_root_pdg=None, dp_lin_status=None, dp_lin_chain=None) -> dict:
+                      dp_root_pdg=None, dp_lin_status=None, dp_lin_chain=None,
+                      dp_lin_tids=None) -> dict:
     """
     Index DirectParent entries by chankey for O(1) per-hit lookup.
     Returns dict: chankey -> list of
         (dp_time, class, is_darknoise, trackID, pdg, bg_class, bg_pdg, bg_trackID,
-         root_pdg, lineage_status, lineage_chain)
+         root_pdg, lineage_status, lineage_chain, lineage_tids)
     bg_class/bg_pdg/bg_trackID come from DirectParent_ImmediateAncestor* — the
     species-general one-step-skip ancestor (any particle, not just neutrons).
 
@@ -246,17 +248,19 @@ def _build_dp_lookup(dp_ck, dp_t, dp_class, dp_dn, dp_tid, dp_pdg,
         dp_lin_status = np.full(n, -5, dtype=int)
     if dp_lin_chain is None:
         dp_lin_chain = [()] * n
+    if dp_lin_tids is None:
+        dp_lin_tids = [()] * n
 
     lookup: dict[int, list] = {}
-    for ck, t, cls, dn, tid, pdg, bg_cls, bg_pdg, bg_tid, rpdg, lstat, lchain in zip(
+    for ck, t, cls, dn, tid, pdg, bg_cls, bg_pdg, bg_tid, rpdg, lstat, lchain, ltids in zip(
         dp_ck, dp_t, dp_class, dp_dn, dp_tid, dp_pdg, dp_bg_cls, dp_bg_pdg, dp_bg_tid,
-        dp_root_pdg, dp_lin_status, dp_lin_chain
+        dp_root_pdg, dp_lin_status, dp_lin_chain, dp_lin_tids
     ):
         ck_i = int(ck)
         lookup.setdefault(ck_i, []).append(
             (float(t), int(cls), int(dn), int(tid), int(pdg),
              int(bg_cls), int(bg_pdg), int(bg_tid),
-             int(rpdg), int(lstat), lchain)
+             int(rpdg), int(lstat), lchain, ltids)
         )
     return lookup
 
@@ -288,7 +292,7 @@ def _match_hit(ck: int, t: float, dp_lookup: dict, offset: float,
 
     Returns (truth_class, is_darknoise, ancestor_trackID, ancestor_pdg,
              is_untraced, match_failure_reason, bg_class, bg_pdg, bg_trackID,
-             root_pdg, lineage_status, lineage_chain).
+             root_pdg, lineage_status, lineage_chain, lineage_tids).
 
     match_failure_reason values:
       None            – successful match
@@ -306,7 +310,7 @@ def _match_hit(ck: int, t: float, dp_lookup: dict, offset: float,
     """
     entries = dp_lookup.get(ck)
     if not entries:
-        return 0, 1, -1, -1, True, "no_entry", -5, -5, -5, -5, -5, ()
+        return 0, 1, -1, -1, True, "no_entry", -5, -5, -5, -5, -5, (), ()
 
     t_shifted = t + offset
     best_dt, best = min(
@@ -316,12 +320,12 @@ def _match_hit(ck: int, t: float, dp_lookup: dict, offset: float,
     if best_dt > tol:
         # Carry is_darknoise from the nearest DP entry instead of assuming 1
         nearest_dn = best[2]
-        return 0, nearest_dn, -1, -1, True, "time_mismatch", -5, -5, -5, -5, -5, ()
+        return 0, nearest_dn, -1, -1, True, "time_mismatch", -5, -5, -5, -5, -5, (), ()
 
     (_, cls, dn, tid, pdg, bg_cls, bg_pdg, bg_tid,
-     root_pdg, lin_status, lin_chain) = best
+     root_pdg, lin_status, lin_chain, lin_tids) = best
     return (cls, dn, tid, pdg, False, None, bg_cls, bg_pdg, bg_tid,
-            root_pdg, lin_status, lin_chain)
+            root_pdg, lin_status, lin_chain, lin_tids)
 
 
 # --------------------------------------------------------------------------- #
@@ -406,11 +410,14 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
             dp_lin_dep  = np.array(ak.to_list(dp_arr["DirectParent_LineageDepth"][i]), dtype=int) \
                      if "DirectParent_LineageDepth" in wanted_dp else None
             dp_chains   = _decode_lineage_chains(dp_lin_pdg, dp_lin_dep, len(dp_ck))
+            dp_lin_tid  = np.array(ak.to_list(dp_arr["DirectParent_LineageTrackID"][i]), dtype=int) \
+                     if "DirectParent_LineageTrackID" in wanted_dp else None
+            dp_tchains  = _decode_lineage_chains(dp_lin_tid, dp_lin_dep, len(dp_ck))
 
             offset    = _compute_offset(hit_ck, hit_t, dp_ck, dp_t)
             dp_lookup = _build_dp_lookup(dp_ck, dp_t, dp_cls, dp_dn, dp_tid, dp_pdg,
                                           dp_bg_cls, dp_bg_pdg, dp_bg_tid,
-                                          dp_root_pdg, dp_lin_stat, dp_chains)
+                                          dp_root_pdg, dp_lin_stat, dp_chains, dp_tchains)
         else:
             offset    = 0.0
             dp_lookup = {}
@@ -421,7 +428,7 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
             t_hit = float(hit_t[j])
 
             (cls, dn, tid, pdg, untraced, fail_reason, bg_cls, bg_pdg, bg_tid,
-             root_pdg, lin_status, lin_chain) = _match_hit(
+             root_pdg, lin_status, lin_chain, lin_tids) = _match_hit(
                 ck, t_hit, dp_lookup, offset
             )
 
@@ -429,6 +436,11 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
             # degeneracy of bg_class without over-shooting to the generator
             # primary the way root_pdg does.
             origin_pdg, n_em_skipped = first_non_em_pdg(lin_chain)
+            has_tids = len(lin_tids) == len(lin_chain) and len(lin_tids) > 0
+            origin_tid = (int(lin_tids[n_em_skipped])
+                          if has_tids and n_em_skipped < len(lin_tids) else -5)
+            origin_child_tid = (int(lin_tids[n_em_skipped - 1])
+                                if has_tids and 0 < n_em_skipped <= len(lin_tids) else -5)
 
             pulse_rows.append({
                 "eventID":              event_id,
@@ -470,6 +482,14 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
                 "origin_pdg":           origin_pdg,
                 "origin_class":         classify_pdg(origin_pdg),
                 "n_em_steps_skipped":   n_em_skipped,
+                # Track IDs along the same chain (DirectParent_LineageTrackID).
+                # origin_child_trackID is the particle directly below the origin,
+                # e.g. the e+- of a muon decay; -5 when the photon came from the
+                # origin itself or the chain has no track IDs.
+                "direct_parent_trackID": int(lin_tids[0]) if has_tids else -5,
+                "origin_trackID":       origin_tid,
+                "origin_child_trackID": origin_child_tid,
+                "lineage_tids":         ",".join(str(int(x)) for x in lin_tids),
             })
 
         # ClusterFinder sidecar

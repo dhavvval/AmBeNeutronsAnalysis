@@ -1,0 +1,44 @@
+import numpy as np
+import pandas as pd
+
+from ambe.mc.capture_truth import DEFAULTS, build_truth_objects, match_clusters_to_objects
+
+
+def _event():
+    rows = []
+    def add(t, **kw):
+        base = dict(t=t, pe=1.0, truth_class=5, is_untraced=0, ancestor_trackID=-5,
+                    ancestor_pdg=-5, origin_pdg=-5, origin_trackID=-5, origin_child_trackID=-5)
+        base.update(kw)
+        rows.append(base)
+    for t in np.linspace(40, 60, 12):                       # muon Cherenkov
+        add(t, origin_pdg=13, origin_trackID=2)
+    for t in np.linspace(2500, 2520, 10):                   # its Michel electron
+        add(t, origin_pdg=13, origin_trackID=2, origin_child_trackID=900)
+    for t in np.linspace(10010, 10030, 8):                  # capture of neutron 7
+        add(t, truth_class=1, ancestor_trackID=7, ancestor_pdg=2112, origin_pdg=2112, origin_trackID=7)
+    for t in np.linspace(30010, 30030, 6):                  # capture of neutron 9
+        add(t, truth_class=1, ancestor_trackID=9, ancestor_pdg=2112, origin_pdg=2112, origin_trackID=9)
+    for t in (5000.0, 20000.0):                             # dark noise
+        add(t, truth_class=0)
+    return pd.DataFrame(rows)
+
+
+def test_objects_and_ownership():
+    df = _event()
+    cfg = dict(DEFAULTS)
+    cap_t = np.array([10000.0, 30000.0])
+    obj, objs = build_truth_objects(df, cap_t, 10.0, cfg)
+    assert (obj >= 0).sum() == len(df) - 2
+    assert sorted(objs.obj_class) == ["michel", "muon", "n_capture", "n_capture"]
+    caps = objs[objs.obj_class == "n_capture"].sort_values("t_med")
+    assert list(caps.cap_j) == [0, 1]
+
+    lbl = {"truth": obj.copy(), "merged": np.where(df.t > 9000, 0, -1)}
+    rows, per_obj = match_clusters_to_objects(lbl, obj, objs, df, cfg, "plurality")
+    merged = [r for r in rows if r["method"] == "merged"][0]
+    assert merged["n_objects_contrib"] == 2 and merged["comp_darknoise"] == 1
+    assert merged["tag"] == "n_capture"
+    maj = match_clusters_to_objects(lbl, obj, objs, df, cfg, "majority50")[0]
+    assert [r for r in maj if r["method"] == "merged"][0]["tag"] == "n_capture"
+    assert per_obj["truth"]["owned"].tolist() == [1, 1, 1, 1]
