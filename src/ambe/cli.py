@@ -114,6 +114,9 @@ def main(argv=None):
     if key not in COMMANDS:
         parser.error(f"unknown command: {key}")
 
+    from .provenance import record_ambe_run
+    record_ambe_run(ctx, *key, argv if argv is not None else sys.argv[1:])
+
     func = _load(COMMANDS[key])
     return func(ctx=ctx, argv=extra)
 

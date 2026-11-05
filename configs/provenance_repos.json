@@ -1,0 +1,53 @@
+{
+  "repos": {
+    "WCSim": "/exp/annie/app/users/dajana/WCSim/WCSim",
+    "EB_BC_TA": "/exp/annie/app/users/dajana/EB_BC_TA",
+    "EventBuild": "/exp/annie/app/users/dajana/EventBuild",
+    "AmBeNeutronsAnalysis": "/exp/annie/app/users/dajana/AmBeNeutronsAnalysis",
+    "grid_wcsim": "/exp/annie/app/users/dajana/grid_wcsim"
+  },
+  "images": {
+    "wcsim": "/cvmfs/singularity.opensciencegrid.org/anniesoft/wcsim:latest",
+    "toolanalysis": "/cvmfs/singularity.opensciencegrid.org/anniesoft/toolanalysis:latest"
+  },
+  "wcsim_lib_dir": "/exp/annie/app/users/dajana/WCSim/WCSim",
+  "doc_roots": [
+    "/exp/annie/app/users/dajana",
+    "/exp/annie/data/users/dajana"
+  ],
+  "doc_skip": [
+    ".git",
+    "node_modules",
+    "site-packages",
+    "myboy",
+    "myboy_grid",
+    "ambe_output",
+    "UserTools",
+    "Dependencies",
+    ".nvm",
+    ".vscode-server",
+    ".cache",
+    ".pytest_cache",
+    "ToolDAQ",
+    "build",
+    "build_pr",
+    "lib",
+    "include",
+    ".snakemake",
+    "__pycache__",
+    ".claude",
+    "_archive",
+    "configfiles",
+    "DataModel",
+    "doc",
+    "sample-root-scripts",
+    "verification-test-scripts",
+    "pr_clean",
+    "AmBe_v4_BC_recovery",
+    "wcsim_gridenv_test",
+    "Global_WCSim",
+    "claude-memory",
+    "EventBuildforAmBe",
+    "generated"
+  ]
+}
