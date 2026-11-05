@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from ..context import RunContext
-from ..plotting import save_plot, set_style
+from ..plotting import save_plot, set_style, two_titles
 
 # The five centre-port (Port 5) v4 positions, from processor.py source_positions.
 # Asserted rather than assumed: this scan is only defined for the centre port, and a
@@ -803,6 +803,95 @@ def _report(df: pd.DataFrame, mode: str):
 # --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
+def load_clusterindex(ctx: RunContext, method: str, feat_glob: str, bkg_run: int) -> pd.DataFrame:
+    """Every trigger of the re-clustered data (eventindex_none_<method>, all positions) with its
+    IC_adjusted; candidates of vetoed triggers are not counted, so `efficiency` is the non-cosmic one."""
+    ei = pd.read_parquet(ctx.parquet_path(f"{ctx.run_name}__eventindex_none_{method}"))
+    ei = ei[ei.run != bkg_run]
+    feat_by_run = {_run_from_path(p): p for p in _expand([feat_glob])}
+    frames = []
+    for run, idx in ei.groupby("run"):
+        if run not in feat_by_run:
+            raise SystemExit(f"icscan: run {run} has no waveform feature table in {feat_glob}")
+        feat = _read_table(feat_by_run[run])[["timestamp", "IC_adjusted", "second_pulse"]]
+        m = idx.merge(feat, left_on="eventTankTime", right_on="timestamp", how="left", validate="one_to_one")
+        miss = int(m.IC_adjusted.isna().sum())
+        if miss:
+            print(f"icscan: run {run}: {miss:,} of {len(m):,} triggers have no waveform (no IC) and are left out")
+        m = m.dropna(subset=["IC_adjusted"])
+        frames.append(m[~m.second_pulse.astype(bool)])
+    s = pd.concat(frames, ignore_index=True)
+    n = s.n_accepted_clusters.where(~s.is_cosmic.astype(bool), 0)
+    s = s.assign(n_accepted_clusters=n, n_accepted_single=(n == 1).astype(int),
+                 n_accepted_multiple=(n > 1).astype(int))
+    print(f"icscan: {method}: {len(s):,} triggers (second-pulse removed) over {s.run.nunique()} runs")
+    return s
+
+
+def poisson_by_window(sample: pd.DataFrame, wins, fp: dict) -> pd.DataFrame:
+    """Per window and position: the Poisson multiplicity fit (efficiency_fit.fit_poisson) on the
+    non-cosmic triggers, n_bins and grids from fit_params."""
+    from ..efficiency_extraction import efficiency_fit as ef
+    nb = int(fp["n_bins"])
+    eg, lg = ef.make_grid(fp["eff_grid"]), ef.make_grid(fp["lambda_grid"])
+    rows = []
+    for lo, hi, *_ in wins:
+        w = sample[(sample.IC_adjusted > lo) & (sample.IC_adjusted < hi) & ~sample.is_cosmic.astype(bool)]
+        for (x, y, z), g in w.groupby(["sourceX", "sourceY", "sourceZ"]):
+            k = np.minimum(g.n_accepted_clusters.to_numpy(int), nb - 1)
+            nz = {int(i): int(c) for i, c in enumerate(np.bincount(k, minlength=nb)) if i > 0}
+            if len(g) < 50:
+                continue
+            h = ef.multiplicity_from_counts(int(g.run.iloc[0]), nz, len(g), n_bins=nb, overflow_policy="clip")
+            r = ef.fit_poisson(h, eg, lg, likelihood=fp["likelihood"])
+            rows.append(dict(ic_min=lo, ic_max=hi, x_pos=x, y_pos=y, z_pos=z, n_fit=len(g),
+                             p0=float(h.counts[0] / len(g)), poisson_eff=r.best_eff,
+                             poisson_eff_lo=r.eff_lo, poisson_eff_hi=r.eff_hi, poisson_lambda=r.best_lambda))
+    return pd.DataFrame(rows)
+
+
+def compare_windows(ctx: RunContext, sample: pd.DataFrame, diff: pd.DataFrame, spec: str, fp: dict, method: str):
+    """Per candidate window and position: AmBe triggers, Poisson efficiency, and the flatness of the
+    differential slices inside the window (weighted mean, chi2/dof against a constant)."""
+    wins = [tuple(float(v) for v in w.split("-")) for w in spec.split(",")]
+    pf = poisson_by_window(sample, [(lo, hi) for lo, hi in wins], fp)
+    d = diff.dropna(subset=["x_pos", "poisson_eff"])
+    rows = []
+    for (lo, hi), g in pf.groupby(["ic_min", "ic_max"]):
+        for _, r in g.iterrows():
+            sl = d[(d.ic_min >= lo) & (d.ic_max <= hi) & (d.x_pos == r.x_pos) & (d.y_pos == r.y_pos) & (d.z_pos == r.z_pos)]
+            err = 0.5 * (sl.poisson_eff_hi - sl.poisson_eff_lo).to_numpy()
+            mu, chi2, dof = flatness(sl.poisson_eff.to_numpy(), sl.n_fit.to_numpy(), err)
+            rows.append({**r.to_dict(), "slices": len(sl), "flat_mean": mu, "flat_chi2": chi2, "flat_dof": dof})
+    out = pd.DataFrame(rows)
+    path = ctx.csv_path(f"ic_window_compare_{method}")
+    out.to_csv(path, index=False)
+    print(f"✓ wrote {len(out)} rows -> {path}")
+    return out
+
+
+def _plot_clusterindex(ctx: RunContext, df: pd.DataFrame, method: str, mode: str):
+    from .heatmap import PORT_INFO, PORT_ORDER
+    d = df.dropna(subset=["x_pos"]).copy()
+    d["port"] = [PORT_INFO.get((x, y, z), "Unknown") for x, y, z in zip(d.x_pos, d.y_pos, d.z_pos)]
+    d["ic_mid"] = 0.5 * (d.ic_min + d.ic_max)
+    fig, ax = plt.subplots(2, len(PORT_ORDER), figsize=(20, 8), sharex=True, sharey="row")
+    for k, port in enumerate(PORT_ORDER):
+        for c, (yv, g) in enumerate(sorted(d[d.port == port].groupby("y_pos"), key=lambda t: -t[0])):
+            g = g.sort_values("ic_mid")
+            ax[0, k].errorbar(g.ic_mid, g.poisson_eff, yerr=[g.poisson_eff - g.poisson_eff_lo, g.poisson_eff_hi - g.poisson_eff],
+                              fmt="o-", ms=3, color=f"C{c}", label=f"y = {yv:+.0f}")
+            ax[1, k].plot(g.ic_mid, g.ambe_triggers / g.ambe_triggers.sum(), "o-", ms=3, color=f"C{c}")
+        ax[0, k].set_title(port)
+        ax[1, k].set_xlabel("IC_adjusted")
+    ax[0, 0].set_ylabel("Poisson efficiency")
+    ax[1, 0].set_ylabel("fraction of AmBe triggers")
+    ax[0, 0].legend(fontsize=8, frameon=False)
+    two_titles(fig, "Efficiency versus the gamma-tag charge (IC), by source position",
+               ctx.title(f"{method}: efficiency per IC slice ({mode}) by port and height; Poisson fit per 100-wide slice"))
+    save_plot(fig, ctx, f"ic_window_scan_{mode}_{method}")
+
+
 def run(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     p = argparse.ArgumentParser(prog="ambe data icscan")
     # No default. Each mode answers a different question and they are not
@@ -822,9 +911,37 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None):
                         "slice is averaged away.")
     p.add_argument("--no-plots", action="store_true",
                    help="write the CSV only")
+    p.add_argument("--clusterindex", metavar="METHOD",
+                   help="scan the re-clustered data instead of the Stage-2 box index: every trigger of "
+                        "eventindex_none_<METHOD>, all positions, with a Poisson fit per window and position")
+    p.add_argument("--waveform-features", help="--clusterindex: glob of WaveformFeatures_<tag>_<run> tables")
+    p.add_argument("--ic-range", help="--clusterindex: lo,hi,step of the scan (every trigger was processed, "
+                                      "so any range is allowed)")
+    p.add_argument("--compare-windows", help="--clusterindex, differential: windows lo-hi,lo-hi,... to compare "
+                                             "(trigger count, Poisson fit, flatness of the slices inside)")
     args = p.parse_args(list(argv) if argv else [])
 
     set_style()
+
+    if args.clusterindex:
+        if not (args.waveform_features and args.ic_range) or args.mode not in ("left", "right", "differential"):
+            p.error("--clusterindex needs --waveform-features, --ic-range and mode left/right/differential")
+        lo0, hi0, step = (float(v) for v in args.ic_range.split(","))
+        fp = dict(ctx.fit_params or {})
+        wins = windows(args.mode, lo0, hi0, step, (700.0, 1200.0), args.width)
+        sample = load_clusterindex(ctx, args.clusterindex, args.waveform_features, int(fp["background_run"]))
+        feats = sample[["IC_adjusted", "second_pulse"]]
+        df = scan(sample, feats, wins)
+        pf = poisson_by_window(sample, wins, fp)
+        df = df.merge(pf, on=["ic_min", "ic_max", "x_pos", "y_pos", "z_pos"], how="left")
+        out = ctx.csv_path(f"ic_window_scan_{args.mode}_{args.clusterindex}")
+        df.to_csv(out, index=False)
+        print(f"✓ wrote {len(df)} rows -> {out}")
+        if args.compare_windows and args.mode == "differential":
+            compare_windows(ctx, sample, df, args.compare_windows, fp, args.clusterindex)
+        if not args.no_plots:
+            _plot_clusterindex(ctx, df, args.clusterindex, args.mode)
+        return df
 
     cfg = ctx.extra.get("icscan") or {}
     lo0 = float(cfg.get("ic_lo_start", 500))
