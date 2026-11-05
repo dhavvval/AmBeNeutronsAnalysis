@@ -1,0 +1,47 @@
+run_name: AmBe2.0v4_reclust_july_p5
+display_label: "AmBe v4 data, July Port 5 centre pair 6265 (source) + 6264 (no source), re-clustered (no box)"
+campaign: "AmBe 2.0v4"
+description: >
+  The July 2026 Port 5 centre pair, re-clustered with the MC clusterers exactly as AmBe2.0v4_reclust
+  (ambe data randoms --cluster, MC config mc_ambe_v3fix_reclust). 6265 = source in, 6264 = housing empty, both
+  LAPPD 151/58 HV off, run 17-19 July, same housing (8 sleeves); shift-log facts in configs/run_db. Replaces the
+  March 6046 (LAPPD on) for the Port 5 centre Data/MC so source and background share LAPPD state and epoch.
+  IC gate lists from the effpair_box Stage-1 tag (identical to all28_box_veto for 6046).
+output_root: ambe_output
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6265.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6264.root
+
+cuts:
+  time_min_ns: 2000
+  time_max_ns: 67000
+
+clusterindex:
+  window_ns: [2000, 67000]
+  extra_source_positions:
+    6264: [0.0, 0.0, -999.0]
+    6265: [0.0, 0.0, 0.0]
+  gate_event_index:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/EventIndex_AmBe2.0v4_effpair_box_6265.parquet
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/EventIndex_AmBe2.0v4_effpair_box_6264.parquet
+  reference_efficiency: ambe_output/ambe_data/AmBe2.0v4_all28_box_veto/csv/efficiency_fit_by_position.csv
+  reference_label: v4 box cuts
+
+fit_params:
+  source_runs: all
+  background_run: 6264
+  denominator: ambe_triggers
+  nominal_model: poisson
+  likelihood: multinomial
+  background_uncertainty: profile
+  n_bins: 4
+  overflow_policy: clip
+  n_gof_toys: 2000
+  acquisition_window_ns: 67000
+  signal_window_start_ns: 2000
+  bkg_window_start_ns: 2000
+  eff_grid:    {min: 0.10, max: 0.95, step: 0.001}
+  lambda_grid: {min: 0.00, max: 0.60, step: 0.002}
+  s_grid:      {min: 0.00, max: 1.50, step: 0.005}
+  seed: 20260922

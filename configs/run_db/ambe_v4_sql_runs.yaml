@@ -1,0 +1,22 @@
+# ANNIE run database rows (start, stop, numevents, runconfig) for the AmBe v4 runs used by
+# `ambe plots livetime`. Copied by hand from the ANNIE_SQL_RUNS.txt dump the user supplied on
+# 2026-10-20 (columns id | runnum | subrunnum | start | stop | runconfig | notes | numevents).
+# start/stop are the local-time columns of that dump; only their difference is used.
+# numevents is NOT a readout count: it is ~3.2x the number of tank readouts in every run.
+runs:
+  6046: {id: 8059, start: "2026-03-04 23:40:23.671528", stop: "2026-03-06 17:00:02.938346", runconfig: 43, numevents: 230222}
+  6251: {id: 8264, start: "2026-07-11 22:23:05.003411", stop: "2026-07-12 23:12:46.267258", runconfig: 43, numevents: 135699}
+  6252: {id: 8265, start: "2026-07-12 23:59:54.713963", stop: "2026-07-13 22:05:00.115464", runconfig: 43, numevents: 121037}
+  6254: {id: 8267, start: "2026-07-13 23:52:11.370684", stop: "2026-07-14 05:38:54.353712", runconfig: 43, numevents: 33017}
+  6256: {id: 8269, start: "2026-07-14 06:06:18.19973", stop: "2026-07-14 21:15:05.057905", runconfig: 43, numevents: 86661}
+  6264: {id: 8277, start: "2026-07-17 00:24:12.899537", stop: "2026-07-17 20:21:34.014407", runconfig: 43, numevents: 66445}
+  6265: {id: 8278, start: "2026-07-17 23:36:28.434015", stop: "2026-07-19 00:33:41.700016", runconfig: 43, numevents: 137037}
+# Start_of_Run shift forms and their comments, pasted by the user on 2026-10-26. Not read by code.
+# Trigger PMT: 9 dB attenuation, -90 mV threshold, -1375 V (small CAEN supply), VME 1 slot 15 ch 1.
+# Housing: 8 sleeves, 13.7 cm flange top to sleeve 9 (corrected from 11 sleeves / 15.2 cm). Depth uses a 0.5 cm PVC
+# lid as in the rest of the campaign, but the lid is 0.5 in: about 7 mm systematic offset in source depth.
+shift_log:
+  6264: {source_in_housing: false, port: 5, z: 0, lappd: "LAPPD 151 and 58 HV off, LV on",
+         scaler_triggers: 158, scaler_s: 300, scaler_note: "2.0 us discriminator veto against double pulsing; the first 644/300 s (2.1 Hz) was double-pulse inflated"}
+  6265: {source_in_housing: true, port: 5, z: 0, lappd: "HV off",
+         scaler_triggers: 968953, scaler_s: 86880, scaler_note: "rack 7 trigger counter; a first 300 s count gave 2910 (9.7 Hz)"}
