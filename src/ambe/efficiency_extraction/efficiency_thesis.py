@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..plotting import save_plot, set_style
+from ..plotting import save_plot, set_style, two_titles
 from .efficiency_fit import (assert_interior, background_scale_factor,
                                     build_multiplicity, fit_datadriven,
                                     fit_datadriven_scaled, fit_poisson,
@@ -180,6 +180,10 @@ def _group(arrays, i, key):
     return arrays[f"g{i}__{key}"]
 
 
+def _tmpl(df) -> str:
+    return df.attrs.get("template", "6264")
+
+
 def _position_label(r):
     return f"{r.port}, y = {r.y_pos:g} cm (run {r.runs})"
 
@@ -207,11 +211,10 @@ def plot_bypos_fits(ctx, df, arrays):
             ax.set_xticklabels([str(k) for k in x[:-1]] + [f"≥{x[-1]}"])
             ax.set_xlabel("Neutron candidate multiplicity")
             ax.set_ylabel("Fraction of AmBe triggers")
-            ax.set_title(f"{_position_label(r)}: {int(n):,} triggers, "
-                         f"deviance {r.poisson_stat:.1f} (Poisson) vs "
-                         f"{r.dds_stat:.2f} (data-driven)", fontsize=10)
             ax.legend(fontsize=9, frameon=False)
-            fig.tight_layout()
+            two_titles(fig, f"Neutron candidates per trigger, {r.port}, y = {r.y_pos:g} cm",
+                       ctx.title(f"{_position_label(r)}: {int(n):,} triggers, deviance {r.poisson_stat:.1f} (Poisson) "
+                                 f"vs {r.dds_stat:.2f} (data-driven), template {_tmpl(df)}"), simple_size=12)
             pdf.savefig(fig)
             plt.close(fig)
     print(f"[plots.efficiency] wrote {out}")
@@ -258,12 +261,12 @@ def plot_bypos_profiles(ctx, df, arrays):
             sg, cs = _group(arrays, i, "s_grid"), _group(arrays, i, "dds_chi2_s")
             axes[2].plot(sg, cs - cs.min(), color="C1", lw=2)
             axes[2].set_ylim(0, 10)
-            axes[2].set_xlabel("Template rate scale s (6264 shape)")
+            axes[2].set_xlabel(f"Template rate scale s ({_tmpl(df)} shape)")
             axes[2].set_title(f"s = {r.dds_s:.2f} [{r.dds_s_lo:.2f}, {r.dds_s_hi:.2f}], "
                               f"λ_eff = {r.dds_lambda_eff:.3f}", fontsize=9)
-            fig.suptitle(f"Profiled likelihood, {_position_label(r)}; "
-                         f"68 % interval at Δ(−2 ln L) = 1", fontsize=11)
-            fig.tight_layout()
+            two_titles(fig, f"How well each value fits the data, {r.port}, y = {r.y_pos:g} cm",
+                       ctx.title(f"Profiled likelihood, {_position_label(r)}; 68 % interval at Δ(−2 ln L) = 1; "
+                                 f"template {_tmpl(df)}"))
             pdf.savefig(fig)
             plt.close(fig)
     print(f"[plots.efficiency] wrote {out}")
@@ -294,8 +297,8 @@ def plot_bypos_vs_y(ctx, df):
         ax.set_xlabel("y position (cm)")
     axes[0].set_ylabel("Efficiency (%)")
     axes[0].legend(fontsize=9, frameon=False)
-    fig.suptitle(ctx.title("Neutron detection efficiency by port and height"))
-    fig.tight_layout()
+    two_titles(fig, "Neutron detection efficiency by source position",
+               ctx.title(f"Neutron detection efficiency by port and height; template {_tmpl(df)}"))
     save_plot(fig, ctx, "eff_bypos_vs_y")
 
 
@@ -314,11 +317,10 @@ def plot_bypos_gof(ctx, df):
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=70, fontsize=8)
     ax.set_ylabel("Deviance at best fit")
-    ax.set_title(ctx.title(
-        f"Goodness of fit by position: data-driven p = {d.dds_p.min():.2f}–"
-        f"{d.dds_p.max():.2f}, Poisson p < 0.001 everywhere"), fontsize=11)
     ax.legend(fontsize=9, frameon=False)
-    fig.tight_layout()
+    two_titles(fig, "How well the fits describe the data, by source position", ctx.title(
+        f"Goodness of fit by position: data-driven p = {d.dds_p.min():.2f}–"
+        f"{d.dds_p.max():.2f}, Poisson p < 0.001 everywhere; template {_tmpl(df)}"))
     save_plot(fig, ctx, "eff_bypos_goodness_of_fit")
 
 
@@ -334,17 +336,16 @@ def plot_bypos_background(ctx, df):
                       d.poisson_lambda_hi - d.poisson_lambda],
                 fmt="o", color="C0", ms=6, capsize=2, label="Poisson λ")
     ax.plot(x + 0.15, d.dds_lambda_eff, "D", color="C1", ms=6,
-            label="data-driven λ_eff (6264 shape × s^k)")
+            label=f"data-driven λ_eff ({_tmpl(df)} shape × s^k)")
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=70, fontsize=8)
     ax.set_ylabel("Background candidates per trigger")
     bkg_mean = float(np.sum(np.arange(len(d.background_hist.iloc[0].split()))
                             * np.array(d.background_hist.iloc[0].split(), float))
                      / np.sum(np.array(d.background_hist.iloc[0].split(), float)))
-    ax.set_title(ctx.title(f"Background rate by position (6264 as measured: "
-                           f"{bkg_mean:.2f} per trigger)"), fontsize=11)
     ax.legend(fontsize=9, frameon=False)
-    fig.tight_layout()
+    two_titles(fig, "Background candidates per trigger, by source position",
+               ctx.title(f"Background rate by position ({_tmpl(df)} as measured: {bkg_mean:.2f} per trigger)"))
     save_plot(fig, ctx, "eff_bypos_background_rate")
 
 
@@ -361,10 +362,9 @@ def plot_bypos_model_difference(ctx, df):
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=70, fontsize=8)
     ax.set_ylabel("Δε (percentage points)")
-    ax.set_title(ctx.title(f"Background-model difference: mean "
-                           f"{100 * d.delta_model_signed.mean():+.2f} pp"), fontsize=11)
     ax.legend(fontsize=9, frameon=False)
-    fig.tight_layout()
+    two_titles(fig, "Data-driven minus Poisson efficiency, by source position",
+               ctx.title(f"Background-model difference: mean {100 * d.delta_model_signed.mean():+.2f} pp; template {_tmpl(df)}"))
     save_plot(fig, ctx, "eff_bypos_model_difference")
 
 
@@ -386,11 +386,10 @@ def plot_bypos_counting_residual(ctx, df):
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=70, fontsize=8)
     ax.set_ylabel("Δε (percentage points)")
-    ax.set_title(ctx.title(
-        f"Counting minus fitted efficiency: mean {means['poisson']:.2f} pp (Poisson), "
-        f"{means['dds']:.2f} pp (data-driven)"), fontsize=11)
     ax.legend(fontsize=9, frameon=False)
-    fig.tight_layout()
+    two_titles(fig, "Counting minus fitted efficiency, by source position", ctx.title(
+        f"Counting minus fitted efficiency: mean {means['poisson']:.2f} pp (Poisson), "
+        f"{means['dds']:.2f} pp (data-driven); template {_tmpl(df)}"))
     save_plot(fig, ctx, "eff_bypos_counting_residual")
 
 
@@ -421,15 +420,18 @@ def plot_bypos_binning(ctx, df):
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=70, fontsize=8)
     ax.set_ylabel("Δε (percentage points)")
-    ax.set_title(ctx.title("Binning sensitivity of the data-driven efficiency"),
-                 fontsize=11)
     ax.legend(fontsize=9, frameon=False)
-    fig.tight_layout()
+    two_titles(fig, "Efficiency change with the number of bins",
+               ctx.title("Binning sensitivity of the data-driven efficiency"))
     save_plot(fig, ctx, "eff_bypos_binning_sensitivity")
 
 
-def run_by_position(ctx):
-    df, arrays = _load_by_position(ctx)
+def run_by_position(ctx, fits=""):
+    if fits:
+        import dataclasses
+        ctx = dataclasses.replace(ctx, campaign=f"{ctx.campaign} {fits.strip('_')}".strip())
+    df, arrays = _load_by_position(ctx, fits)
+    df.attrs["template"] = f"{int(df.background_run.iloc[0])}+6256" if "plus6256" in fits else str(int(df.background_run.iloc[0]))
     plot_bypos_vs_y(ctx, df)
     plot_bypos_gof(ctx, df)
     plot_bypos_background(ctx, df)
@@ -446,7 +448,16 @@ def run_by_position(ctx):
 
 
 def run(ctx, argv=None):
+    import argparse
+    p = argparse.ArgumentParser(prog="ambe plots efficiency")
+    p.add_argument("--fits", default="",
+                   help="suffix of a per-position fit table (efficiency_fit_by_position<fits>.csv, "
+                        "e.g. _ic_clusterfinder_nms from `ambe stats clustereff`); its pages carry the "
+                        "suffix in the title and file name")
+    a = p.parse_args(list(argv) if argv else [])
     set_style()
+    if a.fits:
+        return run_by_position(ctx, a.fits)
     fp = dict(ctx.fit_params or {})
     if not fp:
         raise SystemExit("[plots.efficiency] config has no fit_params block")
