@@ -1,0 +1,31 @@
+run_name: clock_offset_ambe_source
+display_label: "AmBe data vs MC clock offset (source triggers)"
+campaign: "AmBe 2.0v4"
+description: >
+  Prompt tank light in AmBe source-trigger data (12 runs, March-July 2026, all ports) vs waveform MC pass 1
+  (wf_nosmear_dead15, emission clock, 5 positions). The offset is mc_clock analysis_time_shift_ns for source triggers.
+output_root: ambe_output
+clock_offset:
+  data_files:
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6046.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6060.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6165.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6186.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6231.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6241.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6246.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6249.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6252.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6265.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6266.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6270.root
+  mc_files:
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix_wf_nosmear_dead15/QE_1.50/port1_z0QE_1.50/ANNIEEvent_MC_AmBe_port1_z0QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix_wf_nosmear_dead15/QE_1.50/port3_z0QE_1.50/ANNIEEvent_MC_AmBe_port3_z0QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix_wf_nosmear_dead15/QE_1.50/port5_z0QE_1.50/ANNIEEvent_MC_AmBe_port5_z0QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix_wf_nosmear_dead15/QE_1.50/port5_z100QE_1.50/ANNIEEvent_MC_AmBe_port5_z100QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix_wf_nosmear_dead15/QE_1.50/port4_z50QE_1.50/ANNIEEvent_MC_AmBe_port4_z50QE_1.50_0_999.root
+  max_entries: 8000
+  search_ns: [0, 3000]
+  bin_ns: 10
+  halfwidth_ns: 60
