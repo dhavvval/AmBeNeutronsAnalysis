@@ -26,6 +26,8 @@ from .context import RunContext
 
 
 DEFAULT_FORMATS: tuple[str, ...] = ("pdf", "png")
+METHOD_COLORS = {"clusterfinder": "#2a78d6", "clusterfinder_nms": "#4a3aa7", "optics": "#eda100",
+                 "optics_nms": "#eb6834", "peak": "#1baf7a", "peak_tof": "#008300"}
 
 
 def set_style():
