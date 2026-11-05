@@ -1221,7 +1221,9 @@ class AmBeNeutronProcessing:
             prompt_df.to_csv(prompt_file, index=False)
             print(f"✓ Saved prompt neutron candidates to {prompt_file}")
 
-            if event_rows is not None:
+            if event_rows is not None and len(event_rows) == 0:
+                print(f"✓ No trigger passed the Stage-1 gate in run {run_int}; no event index written")
+            elif event_rows is not None:
                 index_df = pd.DataFrame(event_rows)
                 index_df['n_accepted_clusters'] = (index_df['n_accepted_single']
                                                    + index_df['n_accepted_multiple'])
