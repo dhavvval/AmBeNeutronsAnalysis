@@ -42,6 +42,7 @@ import uproot
 
 from ..context import RunContext
 from ..io import resolve_inputs, filter_files_with_tree
+from . import clock as mc_clock
 
 
 # Branches needed from the full-hit list
@@ -363,7 +364,7 @@ def _mchit_truth(chain, tids, status: int, noise: int):
 
 def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
                           max_events: Optional[int] = None, hit_source: Optional[str] = None,
-                          dp_offset_ns: Optional[float] = None):
+                          dp_offset_ns: Optional[float] = None, reco_shift_ns: float = 0.0):
     """Read one ROOT file; return (pulse_df, cluster_df)."""
     with uproot.open(str(root_path)) as f:
         if tree_name not in f:
@@ -407,7 +408,7 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
         event_id = int(hit_arr["eventNumber"][i])
 
         hit_ck = np.array(ak.to_list(hit_arr["hitChankey"][i]), dtype=int)
-        hit_t  = np.array(ak.to_list(hit_arr["hitT"][i]),       dtype=float)
+        hit_t  = np.array(ak.to_list(hit_arr["hitT"][i]),       dtype=float) + reco_shift_ns
         hit_x  = np.array(ak.to_list(hit_arr["hitX"][i]),       dtype=float)
         hit_y  = np.array(ak.to_list(hit_arr["hitY"][i]),       dtype=float)
         hit_z  = np.array(ak.to_list(hit_arr["hitZ"][i]),       dtype=float)
@@ -417,7 +418,7 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
         # Build truth lookup for this event
         if has_dp and "DirectParent_PMTID" in wanted_dp:
             dp_ck  = np.array(ak.to_list(dp_arr["DirectParent_PMTID"][i]),               dtype=int)
-            dp_t   = np.array(ak.to_list(dp_arr["DirectParent_HitTime"][i]),             dtype=float)
+            dp_t   = np.array(ak.to_list(dp_arr["DirectParent_HitTime"][i]),             dtype=float) + reco_shift_ns
             dp_cls = np.array(ak.to_list(dp_arr["DirectParent_NeutronAncestorClass"][i]),dtype=int) \
                      if "DirectParent_NeutronAncestorClass" in wanted_dp \
                      else np.zeros(len(dp_ck), dtype=int)
@@ -570,7 +571,7 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
                 cluster_rows.append({
                     "eventID":     event_id,
                     "cluster_idx": cidx,
-                    "clusterTime": float(ct),
+                    "clusterTime": float(ct) + reco_shift_ns,
                     "clusterPE":   float(cpe),
                     "clusterHits": int(ch),
                 })
@@ -664,9 +665,14 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
     dp_offset_ns = (ctx.extra.get("truth") or {}).get("dp_offset_ns")
     if dp_offset_ns is not None:
         dp_offset_ns = float(dp_offset_ns)
+    reco_shift_ns, clock_ns = mc_clock.shifts(ctx.extra)
+    if reco_shift_ns or clock_ns:
+        print(f"[mc.processor] mc_clock: analysis clock emission + {clock_ns:g} ns, "
+              f"MC hit/cluster times shifted by {reco_shift_ns:+g} ns")
     for k, rp in enumerate(root_files):
         pf, cf, ev = _process_single_file(rp, tree_name, verbose, max_events=max_events,
-                                          hit_source=hit_source, dp_offset_ns=dp_offset_ns)
+                                          hit_source=hit_source, dp_offset_ns=dp_offset_ns,
+                                          reco_shift_ns=reco_shift_ns)
         pf["_source_file"] = rp.name
         cf["_source_file"] = rp.name
         ev["_source_file"] = rp.name

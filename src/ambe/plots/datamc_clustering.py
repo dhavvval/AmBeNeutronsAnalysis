@@ -1087,7 +1087,7 @@ def build_hitcorr(mc: RunContext, tag: str, methods: list, qmap, dead: list, val
         ct._G.update(ctx=mc, cfg=cfg, feat=mc.extra.get("features", {}) or {}, methods=methods,
                      pulses_path=str(pulses), caps={kk: gg for kk, gg in c.groupby(["_source_file", "eventNumber"])},
                      clusters={kk: gg.reset_index(drop=True) for kk, gg in cl.groupby("eventID")},
-                     window=win, offset_ns=float(cfg["offset_ns"]),
+                     window=win, offset_ns=ct.mc_clock.truth_offset_ns(cfg["offset_ns"], mc.extra),
                      hit_cleaning="unmatched_lowpe",
                      hit_window="delayed", overlay=overlay, group_file=gfile,
                      events={f: g_[["eventNumber", "_source_file"]] for f, g_ in ev.groupby("_source_file")

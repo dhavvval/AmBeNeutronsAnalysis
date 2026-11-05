@@ -482,12 +482,13 @@ def draw_membership(df_ev, obj, objs, lbl, methods, t_lo, t_hi, title):
 
 def run_membership(ctx: RunContext, args) -> None:
     from ..mc.capture_truth import DEFAULTS, build_truth_objects, label_event, load_overlay
+    from ..mc.clock import truth_offset_ns
     cfg = {**DEFAULTS, **(ctx.extra.get("capture_truth", {}) or {})}
     cfg["peak"] = {**DEFAULTS["peak"], **(cfg.get("peak") or {})}
     cfg["_full_window"] = True
     feat = dict(ctx.extra.get("features", {}) or {})
     feat["_source_pos_m"] = None
-    off = float(cfg["offset_ns"])
+    off = truth_offset_ns(cfg["offset_ns"], ctx.extra)
     methods = args.methods.split(",")
     overlay = None if args.overlay == "none" else load_overlay(args.overlay)
     caps = pd.read_parquet(ctx.parquet_path(f"{ctx.run_name}__true_captures"))

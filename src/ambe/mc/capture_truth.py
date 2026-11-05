@@ -52,6 +52,7 @@ import pandas as pd
 
 from ..clustering.peak_finder import SOL_WATER
 from ..context import RunContext
+from . import clock as mc_clock
 
 NEUTRON_PDG = 2112
 CAP_WORLD_OFFSET_CM = np.array([0.0, -14.46, 168.1])   # world - tank-centred frame
@@ -836,6 +837,7 @@ def calibrate_offset(pulses_path: Path, caps_by_key: dict, ctx: RunContext,
     import pyarrow.parquet as pq
     from . import cc_selection
     pf = pq.ParquetFile(str(pulses_path))
+    clock = mc_clock.shifts(ctx.extra)[1]
     dts = []
     for i in range(min(n_groups, pf.num_row_groups)):
         ch = pf.read_row_group(i, columns=["eventID", "eventNumber", "_source_file", "t",
@@ -851,14 +853,14 @@ def calibrate_offset(pulses_path: Path, caps_by_key: dict, ctx: RunContext,
             caps = caps_by_key.get((src, int(evn)))
             if caps is None or not len(caps):
                 continue
-            d = float(h.t.median()) - caps.cap_t.to_numpy(float)
+            d = float(h.t.median()) - clock - caps.cap_t.to_numpy(float)
             dts.append(d[np.argmin(np.abs(d))])
     dts = np.array(dts)
     core = dts[np.abs(dts) < 50]
     if len(core) < 20:
         raise SystemExit(f"[capture] offset calibration failed: {len(core)} matched trackIDs")
     q = np.percentile(core, [25, 50, 75])
-    return dict(offset_ns=float(q[1]), iqr_ns=float(q[2] - q[0]), n_trackids=int(len(dts)),
+    return dict(offset_ns=float(q[1]) + clock, iqr_ns=float(q[2] - q[0]), n_trackids=int(len(dts)),
                 frac_within_50ns=float(len(core) / max(len(dts), 1)))
 
 
@@ -1233,7 +1235,7 @@ def run(ctx: RunContext, args) -> None:
         nuv = {(f, int(e)): (x, y, z) for f, e, x, y, z in
                zip(nv._source_file, nv.eventNumber, nv.nu_x, nv.nu_y, nv.nu_z)}
 
-    off = (dict(offset_ns=float(cfg["offset_ns"]), iqr_ns=np.nan, n_trackids=0,
+    off = (dict(offset_ns=mc_clock.truth_offset_ns(cfg["offset_ns"], ctx.extra), iqr_ns=np.nan, n_trackids=0,
                 frac_within_50ns=np.nan, source="config")
            if cfg.get("offset_ns") is not None
            else calibrate_offset(pulses_path, caps_by_key, ctx))
