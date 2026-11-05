@@ -1,0 +1,12 @@
+run_name: pr_validation
+campaign: upstream PRs (WCSim #27, ToolAnalysis #392, ClusterFinder fix, ClusterFinder time merge)
+description: >
+  Figures and tables for docs/presentations/pr_validation.tex, read from the local PR test runs:
+  #392 split tests and Application BackTracker runs (pr_review), ClusterFinder time-merge tests on the
+  parametric and waveform MC pulse models (nms_port), WCSim #27 benchmark (wcsim_bench).
+output_root: ambe_output
+pr_inputs:
+  pr_review: /exp/annie/app/users/dajana/EB_BC_TA_work/pr_review
+  nms_port: /exp/annie/app/users/dajana/EB_BC_TA_work/nms_port
+  wcsim_bench: /exp/annie/data/users/dajana/v3fix_local/wcsim_bench
+  pilot_wf_tree: /exp/annie/data/users/dajana/v3fix_local/today_samples/pilot_wf_port5z0/out/ANNIETree_MC_pilot_AmBe_wf.root
