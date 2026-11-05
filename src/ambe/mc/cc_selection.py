@@ -1157,7 +1157,8 @@ def run(ctx: RunContext, tree_name: str = "Event",
 
 
 def apply_residual_filter(pulses: pd.DataFrame, ctx: RunContext,
-                          verbose: bool = True) -> pd.DataFrame:
+                          verbose: bool = True,
+                          prompt_window_ns: Optional[float] = None) -> pd.DataFrame:
     """
     Reduce the per-hit pulses DataFrame to the *delayed residual* used for the
     neutron search: the hits left after the CC event selection and after the
@@ -1179,7 +1180,8 @@ def apply_residual_filter(pulses: pd.DataFrame, ctx: RunContext,
     """
     block = (ctx.extra.get("residual", {}) if hasattr(ctx, "extra") else {}) or {}
     cc_only       = bool(block.get("cc_only", False))
-    prompt_win_ns = float(block.get("prompt_window_ns", 0.0))
+    prompt_win_ns = float(block.get("prompt_window_ns", 0.0) if prompt_window_ns is None
+                          else prompt_window_ns)
 
     n0 = len(pulses)
     out = pulses

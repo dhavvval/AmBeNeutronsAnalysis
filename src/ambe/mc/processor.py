@@ -573,7 +573,9 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
                     "clusterHits": int(ch),
                 })
 
-    return pd.DataFrame(pulse_rows), pd.DataFrame(cluster_rows)
+    events = pd.DataFrame({"eventNumber": np.asarray(hit_arr["eventNumber"][:n], dtype=int),
+                           "n_hits": np.asarray(ak.num(hit_arr["hitT"][:n]), dtype=int)})
+    return pd.DataFrame(pulse_rows), pd.DataFrame(cluster_rows), events
 
 
 # --------------------------------------------------------------------------- #
@@ -584,9 +586,10 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
         max_events: Optional[int] = None) -> tuple[Path, Path]:
     """
     Process all ROOT files in ctx.inputs['root_files'].
-    Writes two Parquet files:
+    Writes three Parquet files:
         <parquet_dir>/<run_name>__pulses.parquet
         <parquet_dir>/<run_name>__clusterfinder.parquet
+        <parquet_dir>/<run_name>__events.parquet     every tree entry, hits or not
 
     Streaming write: each file's hits are merged with its CC-pass flags and
     appended to the output parquet immediately, so peak RAM is bounded to one
@@ -638,6 +641,7 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
 
     pulse_writer   = None
     cluster_writer = None
+    event_parts = []
     event_id_offset = 0
     total_hits = 0
     total_clusters = 0
@@ -655,10 +659,13 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
     if hit_source is not None and hit_source not in HIT_SOURCES:
         raise SystemExit(f"[mc.processor] truth.hit_source must be one of {HIT_SOURCES}, got {hit_source!r}")
     for k, rp in enumerate(root_files):
-        pf, cf = _process_single_file(rp, tree_name, verbose, max_events=max_events,
-                                      hit_source=hit_source)
+        pf, cf, ev = _process_single_file(rp, tree_name, verbose, max_events=max_events,
+                                          hit_source=hit_source)
         pf["_source_file"] = rp.name
         cf["_source_file"] = rp.name
+        ev["_source_file"] = rp.name
+        ev["eventID"] = ev["eventNumber"] + event_id_offset
+        event_parts.append(ev)
 
         if event_id_offset > 0:
             pf["eventID"] = pf["eventID"] + event_id_offset
@@ -727,6 +734,9 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
         pulse_writer.close()
     if cluster_writer:
         cluster_writer.close()
+    if event_parts:
+        pd.concat(event_parts, ignore_index=True).to_parquet(
+            ctx.parquet_path(f"{ctx.run_name}__events"), index=False)
     # Ensure empty output files exist even when no data was written.
     if not pulses_path.exists():
         pd.DataFrame().to_parquet(pulses_path, index=False)

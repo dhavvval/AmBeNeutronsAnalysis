@@ -233,7 +233,7 @@ PARTICLE_STYLE = {   # class -> (legend label, colour, stem-top marker)
     "other": ("other background", "#d97a00", "s"),
     "darknoise": ("dark noise", "#b8b8b8", ""),
 }
-_TO_STYLE = {"n_other": "other", "pion": "other", "proton": "other", "em": "other",
+_TO_STYLE = {"n_other": "other", "pion": "other", "pion_charged": "other", "pi0": "other", "proton": "other", "em": "other",
              "mixed": "other", "noise": "darknoise"}
 PARTICLE_CATEGORIES = {
     "1cap": "CCinc-selected, 1 neutron capture",
@@ -356,6 +356,7 @@ def run_particles(ctx: RunContext, args) -> None:
                      .with_suffix(".json").read_text())["offset_ns"]
     caps = pd.read_parquet(ctx.parquet_path(f"{ctx.run_name}__true_captures"))
     cfg = {**DEFAULTS, **(ctx.extra.get("capture_truth", {}) or {})}
+    cfg["_full_window"] = True
     prompt_ns = float((ctx.extra.get("residual", {}) or {}).get("prompt_window_ns", 2000.0))
     methods = [m for m in args.methods.split(",") if m in set(cl.method)]
     picks = (_events_from_index(ob, args.events_from) if args.events_from

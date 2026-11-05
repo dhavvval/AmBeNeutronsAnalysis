@@ -83,6 +83,7 @@ DEFAULTS = dict(
     nu_smear_m=0.30,         # per-axis smear of the true neutrino vertex (INIT stand-in)
     window_ns=None,          # [t_lo, t_hi] for captures; None -> from the residual filter
     lowpe_cut=1.0,           # unmatched hits below this PE are counted in comp_untraced_lowpe
+    michel_min_delay_ns=100.0,  # --hit-window full: muon-child light this long after the muon is a Michel
     optics_scan=dict(min_samples=[4, 5, 6, 8, 10, 12], xi=[0.01, 0.02, 0.05, 0.1],
                      t_unit_ns=[10, 25, 50, 100], nms=[False, True]),
 )
@@ -227,8 +228,9 @@ def hit_categories(df_ev: pd.DataFrame, hit_cap: np.ndarray) -> np.ndarray:
 # Truth objects: every physics hit belongs to exactly one, keyed by the particle that
 # seeded its light (nearest neutron, else the first non-e/gamma ancestor) and split in
 # time where that particle's light has a gap longer than object_gap_ns.
-OBJ_CLASSES = ("n_capture", "n_other", "muon", "michel", "pion", "proton", "em", "other")
-_KIND = {1: "neutron", 2: "muon", 3: "pion", 4: "proton", 5: "em", 6: "other"}
+OBJ_CLASSES = ("n_capture", "n_other", "muon", "michel", "pion_charged", "pi0", "proton", "em",
+               "other")
+_KIND = {1: "neutron", 2: "muon", 3: "pion_charged", 4: "proton", 5: "em", 6: "other", 7: "pi0"}
 
 
 def _source_keys(df_ev: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -243,7 +245,8 @@ def _source_keys(df_ev: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarra
     is_n = (apdg == NEUTRON_PDG) & (tid >= 0)
     kind = np.full(n, 6, dtype=int)
     kind[np.abs(opdg) == 13] = 2
-    kind[np.isin(np.abs(opdg), (211, 111))] = 3
+    kind[np.abs(opdg) == 211] = 3
+    kind[opdg == 111] = 7
     kind[opdg == 2212] = 4
     kind[opdg == -5] = 5
     kind[is_n] = 1
@@ -279,7 +282,9 @@ def build_truth_objects(df_ev: pd.DataFrame, cap_t: np.ndarray, offset_ns: float
                     cap_j = int(np.argmin(d))
                 cls = "n_capture" if cap_j >= 0 else "n_other"
             elif k == 2:
-                cls = "muon" if np.mean(child[part] < 0) >= 0.5 else "michel"
+                late = (not cfg.get("_full_window")
+                        or t[part[0]] - t[idx[0]] >= cfg["michel_min_delay_ns"])
+                cls = "michel" if np.mean(child[part] < 0) < 0.5 and late else "muon"
             else:
                 cls = _KIND[k] if _KIND[k] in OBJ_CLASSES else "other"
             oid = len(rows)
@@ -325,6 +330,9 @@ def match_clusters_to_objects(lbl: dict, obj: np.ndarray, objs: pd.DataFrame,
     unm = (df_ev["is_untraced"].to_numpy(int) == 1) if "is_untraced" in df_ev.columns \
         else np.zeros(len(df_ev), bool)
     pe = df_ev["pe"].to_numpy(float) if "pe" in df_ev.columns else np.ones(len(df_ev))
+    nowf = _no_waveform(df_ev)
+    ovl = (df_ev["is_overlay"].to_numpy(int) == 1) if "is_overlay" in df_ev.columns \
+        else np.zeros(len(df_ev), bool)
     is_nobj = (objs.source_kind.to_numpy() == "neutron") if n_obj else np.array([], bool)
     tid_of = objs.source_trackID.to_numpy(int) if n_obj else np.array([], int)
     capj_of = objs.cap_j.to_numpy(int) if n_obj else np.array([], int)
@@ -334,10 +342,17 @@ def match_clusters_to_objects(lbl: dict, obj: np.ndarray, objs: pd.DataFrame,
     per_obj = {}
     rows = []
     mh = cfg["min_cap_hits"]
+    obj_ok = obj >= 0
     for method, lb in lbl.items():
         owned = np.zeros(n_obj, int)
         best = np.zeros(n_obj, int)
         merged = np.zeros(n_obj, int)
+        in_cl = obj_ok & (lb >= 0)
+        # Where each object's hits and PE went: clusters it owns, any cluster, (rest) none.
+        hits_clustered = np.bincount(obj[in_cl], minlength=n_obj)
+        pe_clustered = np.bincount(obj[in_cl], weights=pe[in_cl], minlength=n_obj)
+        hits_own = np.zeros(n_obj, int)
+        pe_own = np.zeros(n_obj, float)
         for cid in [c for c in np.unique(lb) if c >= 0]:
             mask = lb == cid
             nh = int(mask.sum())
@@ -363,18 +378,32 @@ def match_clusters_to_objects(lbl: dict, obj: np.ndarray, objs: pd.DataFrame,
                 tag = "mixed"
             if owner >= 0 and n_own >= mh:
                 owned[owner] += 1
+            own_mask = mask & (obj == owner) if owner >= 0 else np.zeros_like(mask)
+            if owner >= 0:
+                hits_own[owner] += n_own
+                pe_own[owner] += float(pe[own_mask].sum())
             comp["comp_darknoise"] = int((mask & is_dn & ~unm).sum())
             comp["comp_untraced"] = int((mask & unm).sum())
             assert sum(comp.values()) == nh
             nq = neutron_content(u, c, owner, is_nobj, tid_of, capj_of, cls_of, tmed_of, mh)
-            nq["comp_untraced_lowpe"] = int((mask & unm & (pe < cfg["lowpe_cut"])).sum())
+            low = mask & nowf & (pe < cfg["lowpe_cut"])
+            nq["comp_untraced_lowpe"] = int(low.sum())
+            nq["nowf_lowpe_owner"] = int((low & (obj == owner) & (obj >= 0)).sum())
+            nq["nowf_lowpe_other_obj"] = int((low & (obj >= 0) & (obj != owner)).sum())
+            nq["nowf_lowpe_darknoise"] = int((low & is_dn & ~unm).sum())
+            nq["nowf_lowpe_untraced"] = int((low & unm).sum())
+            nq["comp_overlay"] = int((mask & ovl).sum())
+            pe_cl = float(pe[mask].sum())
+            nq["pe_cluster"] = pe_cl
+            nq["owner_pe_frac"] = float(pe[own_mask].sum()) / pe_cl if pe_cl > 0 else np.nan
             rows.append(dict(method=method, cluster_id=int(cid), n_hits=nh,
                              t_med=float(np.median(t[mask])), owner_obj=owner,
                              owner_class=cls_of[owner] if owner >= 0 else "noise",
                              tag=tag, owner_frac=frac, n_owner_hits=n_own,
                              owner_completeness=n_own / nh_of[owner] if owner >= 0 else np.nan,
                              n_objects_contrib=n_contrib, **comp, **nq))
-        per_obj[method] = dict(owned=owned, best=best, merged=merged)
+        per_obj[method] = dict(owned=owned, best=best, merged=merged, hits_own=hits_own,
+                               hits_clustered=hits_clustered, pe_own=pe_own, pe_clustered=pe_clustered)
     return rows, per_obj
 
 
@@ -523,7 +552,57 @@ _G: dict = {}      # per-process state, filled before the Pool forks
 PULSE_COLS = ["eventID", "eventNumber", "_source_file", "pmtID", "t", "x", "y", "z", "pe",
               "truth_class", "is_neutron", "is_untraced", "ancestor_trackID", "ancestor_pdg",
               "origin_pdg", "cc_pass", "origin_in_tank", "origin_trackID",
-              "origin_child_trackID"]
+              "origin_child_trackID", "wf_matched"]
+
+
+def _no_waveform(df: pd.DataFrame) -> np.ndarray:
+    """MCHit pulses with no waveform pulse (data would not record them)."""
+    if "wf_matched" in df.columns:
+        return df["wf_matched"].to_numpy(int) == 0
+    if "is_untraced" in df.columns:          # pre-wf_matched pulses: the two coincide
+        return df["is_untraced"].to_numpy(int) == 1
+    return np.zeros(len(df), bool)
+
+
+def load_overlay(path: str) -> dict:
+    """Random-trigger hits (ambe data randoms) as {trigger index: DataFrame}."""
+    ov = pd.read_parquet(path)
+    return {i: g[["pmtID", "t", "x", "y", "z", "pe"]].reset_index(drop=True)
+            for i, (_, g) in enumerate(ov.groupby("trigger", sort=True))}
+
+
+def overlay_pick(seed: int, source_file: str, event_number: int, n_trig: int) -> int:
+    """Index (into load_overlay's sorted triggers) of the trigger overlaid on one MC event."""
+    import zlib
+    rng = np.random.default_rng([seed, zlib.crc32(str(source_file).encode()), int(event_number)])
+    return int(rng.integers(n_trig))
+
+
+def add_overlay(chunk: pd.DataFrame, overlay: dict, t_min: float, seed: int,
+                empty_events: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """Drop MC dark noise and add one random trigger's hits to every event (seeded per event).
+    empty_events (eventID, eventNumber, _source_file) are events with no MC hits left; they
+    get the overlay too."""
+    mc_dn = (chunk.truth_class == 0) & (chunk.is_untraced == 0)
+    chunk = chunk[~mc_dn].assign(is_overlay=0)
+    ev_cols = [c for c in ("eventID", "eventNumber", "_source_file", "cc_pass", "origin_in_tank")
+               if c in chunk.columns]
+    parts = [chunk]
+    n_trig = len(overlay)
+    firsts = chunk.groupby("eventID", sort=False).head(1)
+    if empty_events is not None and len(empty_events):
+        firsts = pd.concat([firsts, empty_events.reindex(columns=firsts.columns)], ignore_index=True)
+    for e in firsts.to_dict("records"):
+        h = overlay[overlay_pick(seed, e["_source_file"], e["eventNumber"], n_trig)]
+        h = h[h.t > t_min]
+        if not len(h):
+            continue
+        parts.append(h.assign(**{c: e[c] for c in ev_cols}, truth_class=0, is_neutron=0,
+                              is_untraced=0, ancestor_trackID=-5, ancestor_pdg=-5,
+                              origin_pdg=-999, origin_trackID=-5, origin_child_trackID=-5,
+                              wf_matched=1, is_overlay=1))
+    out = pd.concat(parts, ignore_index=True)
+    return out.sort_values(["eventID", "t"], kind="stable").reset_index(drop=True)
 
 
 def _load_chunk(i_grp: int) -> pd.DataFrame:
@@ -535,9 +614,20 @@ def _load_chunk(i_grp: int) -> pd.DataFrame:
     chunk = pf.read_row_group(i_grp, columns=[c for c in PULSE_COLS if c in avail]).to_pandas()
     if "pe" not in chunk.columns:
         chunk["pe"] = 1.0
-    chunk = cc_selection.apply_residual_filter(chunk, ctx, verbose=False)
-    if _G["hit_cleaning"] == "unmatched_lowpe" and "is_untraced" in chunk.columns:
-        chunk = chunk[~((chunk.is_untraced == 1) & (chunk.pe < cfg["lowpe_cut"]))]
+    full = _G.get("hit_window") == "full"
+    chunk = cc_selection.apply_residual_filter(chunk, ctx, verbose=False,
+                                               prompt_window_ns=0.0 if full else None)
+    if _G["hit_cleaning"] == "unmatched_lowpe":
+        chunk = chunk[~(_no_waveform(chunk) & (chunk.pe.to_numpy() < cfg["lowpe_cut"]))]
+    if _G.get("overlay") is not None:
+        t_min = -np.inf if full else float((ctx.extra.get("residual") or {}).get("prompt_window_ns", 0.0))
+        empty = None
+        if _G.get("events") is not None:
+            ev = _G["events"].get(_G["group_file"][i_grp])
+            have = set(chunk.eventNumber.unique())
+            empty = ev[~ev.eventNumber.isin(have)].assign(
+                eventID=lambda d: -(i_grp * 100000 + d.eventNumber + 1))
+        chunk = add_overlay(chunk, _G["overlay"], t_min, int(cfg.get("overlay_seed", 6256)), empty)
     if cfg.get("hit_t_min_ns") is not None:
         chunk = chunk[chunk.t >= float(cfg["hit_t_min_ns"])]
     chunk["_source_file"] = chunk["_source_file"].map(lambda s: Path(str(s)).name)
@@ -591,6 +681,10 @@ def _process_group_particle(i_grp: int):
                 r[f"n_owned_{m}"] = int(d["owned"][j])
                 r[f"best_hits_{m}"] = int(d["best"][j])
                 r[f"n_merged_into_{m}"] = int(d["merged"][j])
+                r[f"hits_own_{m}"] = int(d["hits_own"][j])
+                r[f"hits_clustered_{m}"] = int(d["hits_clustered"][j])
+                r[f"pe_own_{m}"] = float(d["pe_own"][j])
+                r[f"pe_clustered_{m}"] = float(d["pe_clustered"][j])
             obj_rows.append(r)
     return cl_rows, obj_rows, []
 
@@ -673,6 +767,9 @@ def _process_group(i_grp: int):
                 row = dict(row_group=i_grp, eventID=int(evid), _source_file=src,
                            eventNumber=evn, method=method, cluster_id=int(cid),
                            t_med=t_med, t_span=float(np.ptp(t[mask])),
+                           pe_cluster=float(df_ev["pe"].to_numpy(float)[mask].sum()),
+                           n_overlay=int(df_ev["is_overlay"].to_numpy(int)[mask].sum())
+                           if "is_overlay" in df_ev.columns else 0,
                            is_truth_neutron=int(is_n), n_caps_in_window=len(cap_t),
                            n_cap_hits=int(len(hc)), cap_dom=dom, n_cap_dom=n_dom,
                            cap_dom_frac=n_dom / max(n, 1), n_caps_contrib=n_contrib,
@@ -717,7 +814,8 @@ def _process_group(i_grp: int):
             else np.array([], int)
         for j in range(len(cap_t)):
             cr = in_win.iloc[j]
-            r = dict(eventID=int(evid), cap_idx=int(cr.cap_idx), cap_t=float(cr.cap_t),
+            r = dict(eventID=int(evid), _source_file=src, eventNumber=evn,
+                     cap_idx=int(cr.cap_idx), cap_t=float(cr.cap_t),
                      cap_medium=cr.cap_medium, n_light_hits=int(n_light[j]),
                      visible=int(n_light[j] >= cfg["min_visible_hits"]))
             for method in lbl:
@@ -821,8 +919,8 @@ def summarise_objects(cl: pd.DataFrame, ob: pd.DataFrame, cfg: dict
 def object_physics_checks(ob: pd.DataFrame, cfg: dict, window) -> dict:
     """Michel lifetime and how many neutron objects each true capture's light forms."""
     out = {}
-    mi = ob[(ob.obj_class == "michel") & (ob.n_hits >= cfg["min_visible_hits"])]
     lo = float(window[0])
+    mi = ob[(ob.obj_class == "michel") & (ob.n_hits >= cfg["min_visible_hits"]) & (ob.t_first >= lo)]
     if len(mi) >= 20:
         out["michel_n"] = int(len(mi))
         out["michel_tau_ns"] = float((mi.t_first - lo).mean())
@@ -1063,6 +1161,7 @@ def run(ctx: RunContext, args) -> None:
 
     cfg = {**DEFAULTS, **(ctx.extra.get("capture_truth", {}) or {})}
     cfg["peak"] = {**DEFAULTS["peak"], **(cfg.get("peak") or {})}
+    cfg["_full_window"] = args.hit_window == "full"
     feat = ctx.extra.get("features", {}) or {}
     methods = args.methods.split(",")
     residual = ctx.extra.get("residual", {}) or {}
@@ -1078,15 +1177,22 @@ def run(ctx: RunContext, args) -> None:
     pf = pq.ParquetFile(str(pulses_path))
     n_groups = pf.num_row_groups
     groups = list(range(min(args.max_files, n_groups) if args.max_files else n_groups))
+    if args.merge_shards:
+        merge_shards(ctx, groups, cfg, win, args)
+        return
+    if args.groups:
+        groups = [int(g) for g in args.groups.split(",")]
+        if max(groups) >= n_groups:
+            raise SystemExit(f"[capture] --groups {args.groups}: {pulses_path.name} has {n_groups} row groups")
     print(f"[capture] {pulses_path.name}: {n_groups} row groups, processing {len(groups)}"
           f"{'  *** PARTIAL — pilot only ***' if len(groups) < n_groups else ''}")
 
     # True captures: cached, and only for the files actually processed.
     cap_path = ctx.parquet_path(f"{ctx.run_name}__true_captures")
     files = sorted({f for pat in ctx.inputs.get("root_files", []) for f in glob.glob(pat)})
-    want = set(pf.read_row_group(i, columns=["_source_file"]).column(0)[0].as_py()
-               for i in groups)
-    want = {Path(str(w)).name for w in want}
+    group_file = {i: Path(str(pf.read_row_group(i, columns=["_source_file"]).column(0)[0].as_py())).name
+                  for i in groups}
+    want = set(group_file.values())
     if cap_path.exists():
         caps = pd.read_parquet(cap_path)
         missing = want - set(caps._source_file.unique())
@@ -1160,30 +1266,44 @@ def run(ctx: RunContext, args) -> None:
               offset_ns=off["offset_ns"], geo=geo, vertex=args.vertex,
               vertex_methods=set(args.vertex_methods.split(",")),
               owner_rule=args.owner_rule, hit_cleaning=args.hit_cleaning,
-              cluster_features=args.cluster_features)
+              cluster_features=args.cluster_features, hit_window=args.hit_window,
+              overlay=load_overlay(args.overlay) if args.overlay else None,
+              events=None, group_file=group_file)
+    if args.overlay and args.truth_unit == "capture":
+        ev_path = ctx.parquet_path(f"{ctx.run_name}__events")
+        if not ev_path.exists():
+            raise SystemExit(f"[capture] --overlay in capture mode needs {ev_path.name} "
+                             "(rerun `ambe mc process`): events with no MC hits get the overlay too")
+        ev = pd.read_parquet(ev_path)
+        _G["events"] = {f: g[["eventNumber", "_source_file"]] for f, g in ev.groupby("_source_file")
+                        if f in want}
+    if args.overlay:
+        print(f"[capture] overlay: {len(_G['overlay']):,} random triggers from {args.overlay}")
     worker = _process_group_particle if args.truth_unit == "particle" else _process_group
 
     t0 = time.time()
-    cl_rows, cap_rows, tid_rows = [], [], []
+    cl_parts, cap_parts, tid_parts = [], [], []
+    def collect(k, a, b, c):
+        cl_parts.append(pd.DataFrame(a)); cap_parts.append(pd.DataFrame(b)); tid_parts.append(pd.DataFrame(c))
+        if (k + 1) % 10 == 0:
+            print(f"[capture] {k + 1}/{len(groups)} groups ({time.time() - t0:.0f}s)")
     if args.jobs > 1:
         with Pool(args.jobs) as pool:
             for k, (a, b, c) in enumerate(pool.imap_unordered(worker, groups)):
-                cl_rows += a; cap_rows += b; tid_rows += c
-                if (k + 1) % 10 == 0:
-                    print(f"[capture] {k + 1}/{len(groups)} groups ({time.time() - t0:.0f}s)")
+                collect(k, a, b, c)
     else:
         for k, i in enumerate(groups):
-            a, b, c = worker(i)
-            cl_rows += a; cap_rows += b; tid_rows += c
-            if (k + 1) % 10 == 0:
-                print(f"[capture] {k + 1}/{len(groups)} groups ({time.time() - t0:.0f}s)")
-    cl = pd.DataFrame(cl_rows)
-    cp = pd.DataFrame(cap_rows)
-    tp = pd.DataFrame(tid_rows)
+            collect(k, *worker(i))
+    cl, cp, tp = (pd.concat(p, ignore_index=True) for p in (cl_parts, cap_parts, tid_parts))
+    del cl_parts, cap_parts, tid_parts
     if cl.empty:
         raise SystemExit("[capture] no clusters")
     if args.truth_unit == "particle":
         write_particle_outputs(ctx, cl, cp, cfg, win, args, time.time() - t0)
+        mult = event_multiplicity(ctx, cl, cp, caps, want, win, off["offset_ns"], cfg)
+        tag = f"{args.tag}_{args.owner_rule}" if args.tag else args.owner_rule
+        mult.to_parquet(_out(ctx, "truth_event_multiplicity", tag, "parquet"), index=False)
+        print(f"[capture] per-event neutron multiplicity: {len(mult):,} events")
         return
     cl.to_parquet(_out(ctx, "capture_truth_clusters", args.tag, "parquet"), index=False)
     cp.to_parquet(_out(ctx, "capture_truth_captures", args.tag, "parquet"), index=False)
@@ -1211,6 +1331,63 @@ def run(ctx: RunContext, args) -> None:
     write_composition_report(ctx, cl, cp, cfg, args.tag)
 
 
+def event_multiplicity(ctx: RunContext, cl: pd.DataFrame, ob: pd.DataFrame, caps: pd.DataFrame,
+                       files: set, win, offset_ns: float, cfg: dict) -> pd.DataFrame:
+    """One row per event (zero-capture events included): true neutron counts and, per base
+    method, reco counts of tagged capture clusters, delayed clusters and box-accepted clusters."""
+    from ..data.selection import BoxSelection
+    stream = (ctx.cuts or {}).get("cc_stream", "cc0pi_legacy")
+    ev = pd.read_parquet(ctx.parquet_path(f"{ctx.run_name}__cc_{stream}_events"),
+                         columns=["_source_file", "eventNumber", "cc_pass", "trueNeutrons",
+                                  "origin_in_tank"])
+    ev["_source_file"] = ev["_source_file"].map(lambda s: Path(str(s)).name)
+    ev = ev[ev._source_file.isin(files)].reset_index(drop=True)
+    key = ["_source_file", "eventNumber"]
+    lo, hi = win
+    ci = caps[(caps.cap_t + offset_ns >= lo) & (caps.cap_t + offset_ns <= hi)]
+    ev = ev.merge(ci.groupby(key).size().rename("n_true_captures").reset_index(), on=key, how="left")
+    nc = ob[(ob.obj_class == "n_capture") & (ob.cap_j >= 0)]
+    for k in (1, cfg["min_visible_hits"]):
+        v = nc[nc.n_hits >= k].groupby(key).cap_j.nunique().rename(f"n_visible_captures_{k}")
+        ev = ev.merge(v.reset_index(), on=key, how="left")
+    box = BoxSelection()
+    base = [m for m in cl.method.unique() if parse_scan_method(m) is None and parse_optics_scan(m) is None]
+    for m in base:
+        g = cl[cl.method == m]
+        tm, nh = g.t_med.to_numpy(float), g.n_hits.to_numpy(int)
+        sel = {"tagged": (g.tag == "n_capture").to_numpy(),
+               "delayed": (tm >= box.cuts.ct_min) & (tm <= box.cuts.ct_max) & (nh >= box.cuts.chits_min)}
+        if "f_pe_total" in g.columns:
+            sel["box"] = np.logical_and.reduce(box.cut_masks(g.f_pe_total.to_numpy(float),
+                                                             g.f_charge_bal_legacy.to_numpy(float), tm, nh))
+        for name, s in sel.items():
+            cnt = g[s].groupby(key).size().rename(f"n_reco_{name}_{m}")
+            ev = ev.merge(cnt.reset_index(), on=key, how="left")
+    cnt_cols = [c for c in ev.columns if c.startswith("n_")]
+    ev[cnt_cols] = ev[cnt_cols].fillna(0).astype(int)
+    return ev
+
+
+def merge_shards(ctx: RunContext, groups: list, cfg: dict, win, args) -> None:
+    """Join the `--groups <i> --tag <tag>_g<i>` runs of every row group into the outputs one
+    run over all of them writes."""
+    parts = {b: [] for b in ("truth_object_clusters", "truth_objects", "truth_event_multiplicity")}
+    for i in groups:
+        tag = f"{args.tag}_g{i}_{args.owner_rule}"
+        paths = {b: _out(ctx, b, tag, "parquet") for b in parts}
+        miss = [p.name for p in paths.values() if not p.exists()]
+        if miss:
+            raise SystemExit(f"[capture] --merge-shards: row group {i} missing {miss}")
+        for b, p in paths.items():
+            parts[b].append(pd.read_parquet(p))
+    cl, ob, mult = (pd.concat(parts[b], ignore_index=True) for b in parts)
+    write_particle_outputs(ctx, cl, ob, cfg, win, args, 0.0)
+    tag = f"{args.tag}_{args.owner_rule}"
+    mult.to_parquet(_out(ctx, "truth_event_multiplicity", tag, "parquet"), index=False)
+    print(f"[capture] merged {len(groups)} row groups: {len(cl):,} clusters, {len(ob):,} objects, "
+          f"{len(mult):,} events")
+
+
 def write_particle_outputs(ctx: RunContext, cl: pd.DataFrame, ob: pd.DataFrame, cfg: dict,
                            win, args, dt: float) -> None:
     tag = f"{args.tag}_{args.owner_rule}" if args.tag else args.owner_rule
@@ -1232,7 +1409,7 @@ def write_particle_outputs(ctx: RunContext, cl: pd.DataFrame, ob: pd.DataFrame, 
           f"{per_tag[per_tag.method.isin(base)].round(3).to_string(index=False)}")
     print(f"\n== physics checks ==\n{json.dumps(chk, indent=2)}")
     if args.scan_optics:
-        om = [m for m in cl.method.unique() if parse_optics_scan(m)]
+        om = [m for m in cl.method.unique() if parse_optics_scan(m) or m in base]
         so = scan_table(cl, per_obj, om)
         so["score"] = (so.found * (1 - so.split) * (1 - so.merged_into_other)
                        * so.one_neutron * so.purity_labelled)
@@ -1257,6 +1434,10 @@ def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     p.add_argument("--max-files", type=int, default=None,
                    help="process only the first N row groups (one per ROOT file)")
     p.add_argument("--jobs", type=int, default=1)
+    p.add_argument("--groups", default=None,
+                   help="process only these row groups (comma list); grid shards use --tag <tag>_g<i>")
+    p.add_argument("--merge-shards", action="store_true",
+                   help="join the <tag>_g<i> shards of every row group (first --max-files) into <tag>")
     p.add_argument("--vertex", action="store_true",
                    help="also run the production feature/vertex fit on single-capture clusters")
     p.add_argument("--vertex-methods", default="optics,clusterfinder,peak_tof",
@@ -1280,6 +1461,12 @@ def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     p.add_argument("--hit-cleaning", choices=["none", "unmatched_lowpe"], required=True,
                    help="none = all MCHit pulses; unmatched_lowpe = drop MCHit pulses with no waveform "
                         "pulse and PE < capture_truth.lowpe_cut before clustering")
+    p.add_argument("--hit-window", choices=["delayed", "full"], required=True,
+                   help="delayed = hits after residual.prompt_window_ns only; full = every hit, "
+                        "so prompt muon/pion/proton/pi0 light is clustered and truth-tagged too")
+    p.add_argument("--overlay", default=None, metavar="RANDOM_HITS_PARQUET",
+                   help="add one random data trigger (ambe data randoms) to each MC event and "
+                        "drop MC dark noise; needs --hit-cleaning unmatched_lowpe")
     p.add_argument("--cluster-features", action="store_true",
                    help="particle mode: add f_<feature> columns (compute_cluster_features) per cluster")
     p.add_argument("--scan-optics", action="store_true",
@@ -1289,6 +1476,12 @@ def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     a = p.parse_args(list(argv) if argv else [])
     if a.truth_unit == "particle" and a.owner_rule is None:
         p.error("--truth-unit particle needs --owner-rule")
+    if a.overlay and a.hit_cleaning != "unmatched_lowpe":
+        p.error("--overlay adds recorded data hits, so the MC side needs --hit-cleaning unmatched_lowpe")
     if a.truth_unit == "capture" and (a.owner_rule or a.scan_peak or a.scan_optics or a.cluster_features):
         p.error("--owner-rule/--scan-peak/--scan-optics/--cluster-features only apply to --truth-unit particle")
+    if a.groups and (a.max_files or a.merge_shards):
+        p.error("--groups cannot be combined with --max-files or --merge-shards")
+    if a.merge_shards and (a.truth_unit != "particle" or not a.tag or a.scan_optics or a.scan_peak):
+        p.error("--merge-shards needs --truth-unit particle and --tag, without --scan-optics/--scan-peak")
     run(ctx, a)
