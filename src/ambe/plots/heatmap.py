@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import textwrap
+from pathlib import Path
 from typing import Iterable, Optional
 
 import matplotlib.pyplot as plt
@@ -260,6 +261,18 @@ def _fit_heatmap(ctx: RunContext, name: str, short: str) -> None:
     save_plot(fig, ctx, f"efficiency_heatmap_{name}")
 
 
+def _reference_from_summary(path) -> pd.DataFrame:
+    """Reference efficiency (%) as y x port, from a TriggerSummary CSV of another campaign."""
+    ref = load_csvs([path] if isinstance(path, (str, Path)) else list(path))
+    ref = ref.groupby(["x_pos", "y_pos", "z_pos"], as_index=False)[
+        ["unique_neutron_triggers", "ambe_triggers"]].sum()
+    ref["port"] = [PORT_INFO.get(pos, "Unknown") for pos in
+                   zip(ref["x_pos"], ref["y_pos"], ref["z_pos"])]
+    ref = ref[ref["port"] != "Unknown"]
+    ref["efficiency"] = 100 * ref["unique_neutron_triggers"] / ref["ambe_triggers"]
+    return ref.pivot(index="y_pos", columns="port", values="efficiency")
+
+
 def run(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     p = argparse.ArgumentParser(prog="ambe plots heatmap")
     p.parse_args(list(argv) if argv else [])
@@ -386,14 +399,21 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None):
         return
 
     # 3. Residuals heatmap -- compare against configured reference campaign
-    ref_name = ctx.extra.get("reference", {}).get("comparison_campaign", "AmBe 1.0")
-    if ref_name not in REFERENCE_DATA:
+    ref_cfg = ctx.extra.get("reference", {}) or {}
+    ref_name = ref_cfg.get("comparison_campaign", "AmBe 1.0")
+    if ref_cfg.get("trigger_summary"):
+        ref_df = _reference_from_summary(ref_cfg["trigger_summary"])
+        ref_df = ref_df.loc[[y for y in ref_df.index if y in pivot_eff.index]]
+    elif ref_name in REFERENCE_DATA:
+        ref = REFERENCE_DATA[ref_name]
+        ref_df = pd.DataFrame(ref["by_port"], index=ref["y_positions"])
+    else:
         print(f"[plots.heatmap] reference '{ref_name}' unknown; "
               f"available: {list(REFERENCE_DATA)}; skipping residuals")
         return
-    ref = REFERENCE_DATA[ref_name]
-    ref_df = pd.DataFrame(ref["by_port"], index=ref["y_positions"])
-    residuals = pivot_eff.reindex(index=ref_df.index, columns=PORT_ORDER) - ref_df
+    visited = pivot_n.reindex(index=ref_df.index, columns=PORT_ORDER) > 0
+    residuals = (pivot_eff.reindex(index=ref_df.index, columns=PORT_ORDER)
+                 - ref_df.reindex(columns=PORT_ORDER)).where(visited)
 
     fig, ax = plt.subplots(figsize=_figsize(residuals))
     sns.heatmap(residuals, annot=True, fmt=".1f", cmap="coolwarm", center=0,

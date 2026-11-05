@@ -1,0 +1,50 @@
+run_name: AmBe2.0v5sandi_icscan
+display_label: "AmBe v5sandi, Port 5, wide IC pass for the window scan"
+campaign: "AmBe 2.0v5sandi"
+description: "AmBe data: ambe2v5sandi_icscan"
+
+output_root: ambe_output/ambe_data
+
+stage1:
+  data_directory: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/stage_v5sandi/source
+  waveform_dir: /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v5sandi
+  file_pattern: 'BeamCluster_(\d+)\.root'
+  campaign: 1
+  which_tree: 1
+  selection_mode: ic
+  ic_min: 400
+  ic_max: 2000
+  plot_ic: true
+  save_waveform_samples: false
+  dump_event_index: true
+  tag: AmBe2.0v5sandi_icwide
+
+inputs:
+  trigger_summary:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_AmBe2.0v5sandi_icwide.csv
+  candidate_csvs:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBe2.0v5sandi_icwide_*.csv
+  waveform_features:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/WaveformFeatures_AmBe2.0v5sandi_icwide_*.parquet
+  event_index:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/EventIndex_AmBe2.0v5sandi_icwide_*.parquet
+  reference_trigger_summary:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_AmBe2.0v5sandi_box_veto.csv
+
+cuts:
+  pe_max: 100
+  charge_balance_max: 0.45
+  time_min_ns: 2000
+  time_max_ns: 67000
+  cluster_hits_min: 5
+  plot_min_cluster_hits: 0
+  selection_label: "box cuts PE ≤ 100, CB < 0.45, t ≥ 2 µs, hits ≥ 5"
+
+icscan:
+  ic_lo_start: 400
+  ic_hi_start: 2000
+  step: 50
+  closure_ic_min: 700
+  closure_ic_max: 1200
+
+fit_params: {}

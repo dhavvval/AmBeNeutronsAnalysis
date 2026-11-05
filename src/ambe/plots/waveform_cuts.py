@@ -21,6 +21,35 @@ from ..data.processor import AmBeNeutronProcessing, WaveformConfig
 
 
 ROLE_COLOUR = {"source": "C0", "no-source": "C3", "cross-check": "C2"}
+SOURCE_COLOURS = ["C0", "C1", "C4", "C5", "C6", "C8", "C9"]
+
+
+def _style(runs):
+    """Per-run (colour, linestyle). The i-th cross-check run shares the i-th source colour, dashed."""
+    out, n_src, n_xc = {}, 0, 0
+    multi = sum(role == "source" for _, role, _ in runs) > 1
+    for run, role, _ in runs:
+        if role == "source":
+            out[run] = (SOURCE_COLOURS[n_src % len(SOURCE_COLOURS)] if multi
+                        else ROLE_COLOUR[role], "-")
+            n_src += 1
+        elif role == "cross-check":
+            out[run] = ((SOURCE_COLOURS[n_xc % len(SOURCE_COLOURS)], "--") if multi
+                        else (ROLE_COLOUR[role], "-"))
+            n_xc += 1
+        else:
+            out[run] = (ROLE_COLOUR[role], "-")
+    return out
+
+
+def _label(run, role):
+    if role == "no-source":
+        return f"{run} ({role})"
+    try:
+        x, y, z = AmBeNeutronProcessing().get_source_location(run)
+    except ValueError:
+        return f"{run} ({role})"
+    return f"{run} ({role}, x={x:g} y={y:g} z={z:g})"
 
 
 def _features_path(ctx, run: int) -> Path:
@@ -48,7 +77,11 @@ def _features_path(ctx, run: int) -> Path:
 
 
 def load_features(ctx, run: int):
-    """One row per recorded waveform, minus the timestamp=0 placeholder row."""
+    """One row per recorded waveform, minus the timestamp=0 placeholder row.
+
+    The saved gate is checked against stage1 ic_min/ic_max only for files of this
+    config's own stage1.tag; reference runs from other tags keep their own gate.
+    """
     import pandas as pd
     path = _features_path(ctx, run)
     df = pd.read_csv(path) if path.suffix == ".csv" else pd.read_parquet(path)
@@ -68,6 +101,10 @@ def load_features(ctx, run: int):
         if not df[column].isin([True, False, 0, 1]).all():
             raise ValueError(f"{path}: {column} must contain booleans")
         df[column] = df[column].astype(bool)
+    tag = (ctx.extra.get("stage1") or {}).get("tag")
+    df.attrs["own_tag"] = bool(tag) and path.name.startswith(f"WaveformFeatures_{tag}_")
+    if not df.attrs["own_tag"]:
+        return df
     expected = df.apply(processor.passes_selection, axis=1).astype(bool)
     if not df["accepted"].equals(expected):
         raise ValueError(f"{path}: saved gate differs from stage1 IC bounds/veto; regenerate with the matching processor config")
@@ -89,10 +126,12 @@ def plot_ic_overlay(ctx, runs, lo, hi, log_x=True):
     edges = (np.logspace(0, np.log10(3e4), 120) if log_x
              else np.linspace(0, 12000, 120))
     ctr = 0.5 * (edges[1:] + edges[:-1])
+    sty = _style(runs)
     for run, role, df in runs:
         h, _ = np.histogram(df["IC_adjusted"], bins=edges)
-        ax.step(ctr, h / len(df), where="mid", color=ROLE_COLOUR[role],
-                label=f"{run} ({role}, {len(df):,} waveforms)")
+        c, ls = sty[run]
+        ax.step(ctr, h / len(df), where="mid", color=c, ls=ls,
+                label=f"{_label(run, role)}, {len(df):,} waveforms")
     if log_x:
         ax.set_xscale("log")
     ax.set_yscale("log")
@@ -100,7 +139,7 @@ def plot_ic_overlay(ctx, runs, lo, hi, log_x=True):
     ax.set_ylabel("Fraction of recorded waveforms per bin")
     ax.set_title(ctx.title(f"AmBe small-PMT integrated charge, "
                            f"Stage-1 window {lo:g}–{hi:g}"))
-    ax.legend()
+    ax.legend(fontsize=8 if len(runs) > 3 else None)
     fig.tight_layout()
     return save_plot(fig, ctx, "wfcut_ic_overlay")
 
@@ -111,12 +150,15 @@ def plot_ic_zoom(ctx, runs, lo, hi):
     fig, ax = plt.subplots()
     edges = np.linspace(0, 2500, 101)
     ctr = 0.5 * (edges[1:] + edges[:-1])
+    sty = _style(runs)
     for run, role, df in runs:
-        c = ROLE_COLOUR[role]
+        c, ls = sty[run]
         h, _ = np.histogram(df["IC_adjusted"], bins=edges)
+        ax.step(ctr, h / len(df), where="mid", color=c, ls=ls,
+                label=f"{_label(run, role)}, all")
+        if not df.attrs.get("own_tag", True):
+            continue
         ha, _ = np.histogram(df.loc[df["accepted"], "IC_adjusted"], bins=edges)
-        ax.step(ctr, h / len(df), where="mid", color=c,
-                label=f"{run} ({role}), all")
         ax.fill_between(ctr, ha / len(df), step="mid", color=c, alpha=.30,
                         label=f"{run} ({role}), Stage-1 accepted")
     ax.set_yscale("log")
@@ -138,11 +180,13 @@ def plot_cutflow(ctx, rows):
     fig, ax = plt.subplots(figsize=(9, 6))
     x = np.arange(len(stages))
     w = 0.8 / max(len(rows), 1)
+    sty = _style([(r["run"], r["role"], None) for r in rows])
     for i, r in enumerate(rows):
         vals = [r[k] if r[k] is not None else 0 for k in keys]
         frac = [100 * v / r["n_waveforms"] for v in vals]
         ax.bar(x + i * w - 0.4 + w / 2, frac, width=w,
-               color=ROLE_COLOUR[r["role"]], label=f"{r['run']} ({r['role']})")
+               color=sty[r["run"]][0], hatch="//" if sty[r["run"]][1] == "--" else None,
+               label=f"{r['run']} ({r['role']})")
         for xi, (f, v) in enumerate(zip(frac, vals)):
             ax.text(xi + i * w - 0.4 + w / 2, f, f"{v:,}", ha="center",
                     va="bottom", fontsize=7, rotation=90)
@@ -150,7 +194,7 @@ def plot_cutflow(ctx, rows):
     ax.set_xticklabels(stages, fontsize=9)
     ax.set_ylabel("Percent of recorded waveforms surviving")
     ax.set_title(ctx.title("Stage-1 and Stage-2 cut flow"))
-    ax.legend()
+    ax.legend(fontsize=8 if len(rows) > 3 else None)
     fig.tight_layout()
     return save_plot(fig, ctx, "wfcut_cutflow")
 
@@ -228,19 +272,25 @@ def run(ctx, argv=None):
     args, _ = p.parse_known_args(argv or [])
 
     set_style()
-    fp = dict(ctx.fit_params or {})
-    if not fp:
-        raise SystemExit("[plots.waveformcuts] config has no fit_params block")
-    src_run = int(fp["source_run"])
-    bkg_run = int(fp["background_run"])
-    xchk_run = fp.get("crosscheck_run")
+    wc = ctx.extra.get("waveform_cuts") or {}
+    if "source_runs" in wc:
+        src_runs = [int(r) for r in wc["source_runs"]]
+        bkg_run = int(wc["background_run"])
+        xchk_runs = [int(r) for r in wc.get("crosscheck_runs") or []]
+    else:
+        fp = dict(ctx.fit_params or {})
+        if not fp:
+            raise SystemExit("[plots.waveformcuts] config has neither "
+                             "waveform_cuts.source_runs nor a fit_params block")
+        src_runs = [int(fp["source_run"])]
+        bkg_run = int(fp["background_run"])
+        xchk_runs = [int(fp["crosscheck_run"])] if fp.get("crosscheck_run") else []
     lo, hi = _ic_window(ctx)
 
-    runs = [(src_run, "source", load_features(ctx, src_run)),
-            (bkg_run, "no-source", load_features(ctx, bkg_run))]
-    if xchk_run:
-        runs.append((int(xchk_run), "cross-check",
-                     load_features(ctx, int(xchk_run))))
+    runs = ([(r, "source", load_features(ctx, r)) for r in src_runs]
+            + [(bkg_run, "no-source", load_features(ctx, bkg_run))]
+            + [(r, "cross-check", load_features(ctx, r)) for r in xchk_runs])
+    bkg = next(x for x in runs if x[1] == "no-source")
 
     ambe_trig = {}
     try:
@@ -270,6 +320,7 @@ def run(ctx, argv=None):
             "second_pulse_frac_in_window": float(
                 df.loc[in_win, "second_pulse"].mean()),
             "ic_median": float(ic.median()),
+            "gate_from_this_config": bool(df.attrs.get("own_tag", True)),
         })
         r = rows[-1]
         print(f"[plots.waveformcuts] run {run_} ({role}): {r['n_waveforms']:,} "
@@ -284,7 +335,6 @@ def run(ctx, argv=None):
     ctx.csv_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(ctx.csv_dir / "waveform_cutflow.csv", index=False)
 
-    wc = ctx.extra.get("waveform_cuts") or {}
     sb = wc.get("sideband_ic")
     if not sb:
         print("[plots.waveformcuts] no waveform_cuts.sideband_ic in the config; "
@@ -297,7 +347,7 @@ def run(ctx, argv=None):
         for run_, role, df in runs:
             if role == "no-source":
                 continue
-            _, info = plot_sideband(ctx, (run_, role, df), runs[1], lo, hi, sb)
+            _, info = plot_sideband(ctx, (run_, role, df), bkg, lo, hi, sb)
             info["role"] = role
             if run_ in ambe_trig and bkg_run in ambe_trig:
                 info["flat_ambe_triggers_predicted"] = info["scale"] * ambe_trig[bkg_run]

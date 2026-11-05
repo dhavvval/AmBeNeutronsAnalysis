@@ -274,8 +274,11 @@ def plot_bypos_vs_y(ctx, df):
     import matplotlib.pyplot as plt
     from ..plots.heatmap import PORT_ORDER
     d = df[df.level == "position"]
-    fig, axes = plt.subplots(1, len(PORT_ORDER), figsize=(18, 4.8), sharey=True)
-    for ax, port in zip(axes, PORT_ORDER):
+    ports = [p for p in PORT_ORDER if (d.port == p).any()]
+    fig, axes = plt.subplots(1, len(ports), figsize=(max(7.0, 3.6 * len(ports)), 4.8),
+                             sharey=True, squeeze=False)
+    axes = axes[0]
+    for ax, port in zip(axes, ports):
         g = d[d.port == port].sort_values("y_pos")
         for k, (tag, off) in enumerate((("counting", -4), ("poisson", 0), ("dds", 4))):
             st = MODEL_STYLE[tag]
