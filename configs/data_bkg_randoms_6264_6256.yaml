@@ -1,0 +1,12 @@
+run_name: data_bkg_randoms_6264_6256
+campaign: AmBe2.0v4 background sample
+description: >
+  No-source run 6264 (all triggers, no IC gate) and dummy-trigger run 6256 (LAPPD off), both
+  after the cosmic veto (production ClusterFinder cluster t < 2 us or PE > 100), pooled as one
+  background sample (`ambe data randoms --pool 6264p6256 --pool-veto cosmic`). Random tank hits
+  for `ambe mc capture --overlay` and noise-only cluster rates.
+output_root: ambe_output
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6264.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6256.root
