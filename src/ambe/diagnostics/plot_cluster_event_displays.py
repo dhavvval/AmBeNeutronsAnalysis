@@ -400,6 +400,128 @@ def run_particles(ctx: RunContext, args) -> None:
                                       in_category=("n_in_category", "first")).to_string())
 
 
+TRUE_STYLE = {"michel": ("Michel e\u00b1", "#1b8a5a"), "muon": ("muon", "#1f5fa8"),
+              "other": ("other true particle", "#d97a00")}
+
+
+def _membership_hits(ctx: RunContext, src: str, evn: int, cfg: dict, cleaning: str, overlay) -> pd.DataFrame:
+    """One event's hits exactly as `ambe mc capture --hit-window full` saw them."""
+    from ..mc import cc_selection
+    from ..mc.capture_truth import PULSE_COLS, _no_waveform, add_overlay
+    import pyarrow.parquet as pq
+    path = ctx.parquet_path(f"{ctx.run_name}__pulses")
+    avail = set(pq.read_schema(path).names)
+    ch = pd.read_parquet(path, columns=[c for c in PULSE_COLS if c in avail],
+                         filters=[("eventNumber", "==", int(evn))])
+    ch = ch[ch._source_file.map(lambda v: Path(str(v)).name) == src]
+    if "pe" not in ch.columns:
+        ch["pe"] = 1.0
+    ch = cc_selection.apply_residual_filter(ch, ctx, verbose=False, prompt_window_ns=0.0)
+    if cleaning == "unmatched_lowpe":
+        ch = ch[~(_no_waveform(ch) & (ch.pe.to_numpy() < cfg["lowpe_cut"]))]
+    if overlay is not None:
+        ch = add_overlay(ch, overlay, -np.inf, int(cfg.get("overlay_seed", 6256)))
+    else:
+        ch = ch.assign(is_overlay=0)
+    if cfg.get("hit_t_min_ns") is not None:
+        ch = ch[ch.t >= float(cfg["hit_t_min_ns"])]
+    ch["_source_file"] = ch["_source_file"].map(lambda v: Path(str(v)).name)
+    return ch.reset_index(drop=True)
+
+
+def draw_membership(df_ev, obj, objs, lbl, methods, t_lo, t_hi, title):
+    t = df_ev["t"].to_numpy(float) / 1e3
+    y = df_ev["y"].to_numpy(float)
+    ov = df_ev["is_overlay"].to_numpy(int) == 1
+    win = (t >= t_lo) & (t <= t_hi)
+    fig, axes = plt.subplots(1 + len(methods), 1, figsize=(13, 2.1 * (1 + len(methods))), sharex=True)
+    ax = axes[0]
+    cls = np.where(obj >= 0, objs.obj_class.to_numpy()[np.maximum(obj, 0)] if len(objs) else "", "")
+    capj = np.where(obj >= 0, objs.cap_j.to_numpy()[np.maximum(obj, 0)] if len(objs) else -1, -1)
+    dn = win & (obj < 0) & ~ov
+    if dn.any():
+        ax.scatter(t[dn], y[dn], s=14, marker="x", c="#bdbdbd", lw=0.8, label="MC dark noise")
+    m = win & ov
+    if m.any():
+        ax.scatter(t[m], y[m], s=16, marker="x", c="#111111", lw=0.9, label="6256 dummy-trigger hit")
+    cjs = set(capj[win & (cls == "n_capture")])
+    for j, cj in enumerate(sorted(cjs, key=lambda c: np.median(t[(cls == "n_capture") & (capj == c)]))):
+        m = win & (cls == "n_capture") & (capj == cj)
+        ax.scatter(t[m], y[m], s=22, c=CAP_COLORS[j % len(CAP_COLORS)], label=f"neutron capture {chr(65 + j)}")
+    for k, (lab, col) in TRUE_STYLE.items():
+        m = win & (obj >= 0) & (cls != "n_capture") & (np.array([_style_key(c) for c in cls]) == k)
+        if m.any():
+            ax.scatter(t[m], y[m], s=18, c=col, label=lab)
+    ax.set_ylabel("PMT y [m]")
+    ax.set_title("hits coloured by the true particle that made them", fontsize=10, loc="left")
+    ax.legend(loc="center left", bbox_to_anchor=(1.0, 0.5), fontsize=8, frameon=False)
+    pal = list(plt.cm.tab10.colors)
+    for r, meth in enumerate(methods):
+        ax = axes[1 + r]
+        lb = lbl[meth]
+        ids = [c for c in np.unique(lb[win]) if c >= 0]
+        un = win & (lb < 0)
+        if un.any():
+            ax.scatter(t[un], y[un], s=10, c="#d9d9d9", label="not in any cluster")
+        for i, c in enumerate(ids):
+            mm = win & (lb == c)
+            ax.scatter(t[mm], y[mm], s=22, c=[pal[i % len(pal)]], marker="ox^sD"[i % 5],
+                       label=f"cluster {i + 1}: {int((lb == c).sum())} hits")
+        ax.set_ylabel("PMT y [m]")
+        ax.set_title(f"{METHOD_NAMES.get(meth, meth)}: {len(ids)} cluster{'s' if len(ids) != 1 else ''} in this window "
+                     f"(colour = cluster)", fontsize=10, loc="left")
+        ax.legend(loc="center left", bbox_to_anchor=(1.0, 0.5), fontsize=8, frameon=False)
+    axes[-1].set_xlim(t_lo, t_hi)
+    axes[-1].set_xlabel("hit time [\u00b5s]")
+    for a in axes:
+        a.grid(False)
+    fig.suptitle(title, fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    return fig
+
+
+def run_membership(ctx: RunContext, args) -> None:
+    from ..mc.capture_truth import DEFAULTS, build_truth_objects, label_event, load_overlay
+    cfg = {**DEFAULTS, **(ctx.extra.get("capture_truth", {}) or {})}
+    cfg["peak"] = {**DEFAULTS["peak"], **(cfg.get("peak") or {})}
+    cfg["_full_window"] = True
+    feat = dict(ctx.extra.get("features", {}) or {})
+    feat["_source_pos_m"] = None
+    off = float(cfg["offset_ns"])
+    methods = args.methods.split(",")
+    overlay = None if args.overlay == "none" else load_overlay(args.overlay)
+    caps = pd.read_parquet(ctx.parquet_path(f"{ctx.run_name}__true_captures"))
+    cf_all = pd.read_parquet(ctx.parquet_path(f"{ctx.run_name}__clusterfinder"))
+    ref = pd.read_parquet(ctx.parquet_path(f"{ctx.run_name}__truth_object_clusters__{args.tag}_plurality"),
+                          columns=["_source_file", "eventNumber", "method", "n_hits", "t_med"])
+    out_dir = ctx.plots_dir / f"displays_membership_{args.tag}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    set_style()
+    for row in pd.read_csv(args.events_from).itertuples():
+        df_ev = _membership_hits(ctx, row.source_file, row.eventNumber, cfg, args.hit_cleaning, overlay)
+        evid = int(df_ev.eventID.iloc[0])
+        c_ev = caps[(caps._source_file == row.source_file) & (caps.eventNumber == row.eventNumber)]
+        obj, objs = build_truth_objects(df_ev, c_ev.cap_t.to_numpy(float), off, cfg)
+        df_cl = cf_all[cf_all.eventID == evid].reset_index(drop=True)
+        lbl = label_event(df_ev, df_cl, methods, feat, cfg, None)
+        r = ref[(ref._source_file == row.source_file) & (ref.eventNumber == row.eventNumber)]
+        t = df_ev.t.to_numpy(float)
+        for meth in methods:
+            mine = sorted((int((lbl[meth] == c).sum()), round(float(np.median(t[lbl[meth] == c])), 1))
+                          for c in np.unique(lbl[meth][lbl[meth] >= 0]))
+            prod = sorted((int(a), round(float(b), 1)) for a, b in r[r.method == meth][["n_hits", "t_med"]].values)
+            if mine != prod:
+                raise SystemExit(f"[displays] {row.source_file} #{row.eventNumber} {meth}: re-clustered "
+                                 f"{len(mine)} clusters differ from the production {len(prod)}")
+        fig = draw_membership(df_ev, obj, objs, lbl, methods, row.t_lo_us, row.t_hi_us,
+                              f"{row.label} ({row.source_file} #{row.eventNumber})")
+        name = f"{row.name}"
+        fig.savefig(out_dir / f"{name}.png", dpi=150)
+        fig.savefig(out_dir / f"{name}.pdf")
+        plt.close(fig)
+        print(f"[displays] {name}: clusters identical to production -> {out_dir / name}.png")
+
+
 def run(ctx: RunContext, args) -> None:
     import pyarrow.parquet as pq
     from ..mc import cc_selection
@@ -488,7 +610,7 @@ def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
                    help="override geometry.apply_timing_offsets (off = correct for MC)")
     p.add_argument("--n-per-category", type=int, default=4)
     p.add_argument("--methods", default="optics,clusterfinder,optics_nms,clusterfinder_nms,peak")
-    p.add_argument("--mode", choices=["categories", "particles"], required=True,
+    p.add_argument("--mode", choices=["categories", "particles", "membership"], required=True,
                    help="categories = A-D capture pages from `ambe mc capture --truth-unit "
                         "capture`; particles = time vs PE coloured by truth object, from "
                         "`--truth-unit particle`")
@@ -497,8 +619,17 @@ def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     p.add_argument("--events-from", default=None, metavar="INDEX_CSV",
                    help="particles mode: draw the events listed in another run's display index "
                         "(matched on file part number + eventNumber) instead of picking new ones")
+    p.add_argument("--hit-cleaning", choices=["none", "unmatched_lowpe"],
+                   help="membership mode: the hit list of the `ambe mc capture` run given by --tag")
+    p.add_argument("--overlay", help="membership mode: random-trigger hits parquet of that run, or 'none'")
     a = p.parse_args(list(argv) if argv else [])
-    if a.mode == "particles":
+    if a.mode == "membership":
+        miss = [f for f, v in (("--events-from", a.events_from), ("--hit-cleaning", a.hit_cleaning),
+                               ("--overlay", a.overlay), ("--tag", a.tag)) if not v]
+        if miss:
+            p.error(f"--mode membership needs {' '.join(miss)}")
+        run_membership(ctx, a)
+    elif a.mode == "particles":
         if a.owner_rule is None:
             p.error("--mode particles needs --owner-rule")
         run_particles(ctx, a)
