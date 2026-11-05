@@ -1,0 +1,48 @@
+run_name: mc_ambe_v3fix_dead15_reclust
+display_label: "AmBe MC productionv3fix, 15 documented dead PMTs masked in LoadWCSim, re-clustered (no box)"
+campaign: "AmBe MC productionv3fix"
+description: >
+  All 1250 productionv3fix AmBe ntuples (25 labels x 50 files x 1000 events) for the Data/MC
+  comparison with re-clustering only: ClusterFinder, CF+NMS, time-peak, OPTICS, OPTICS+NMS
+  (nufull OPTICS setting). No box cut; the production cosmic veto on tree CF clusters.
+output_root: ambe_output
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix_dead15/QE_1.50/*/ANNIEEvent_MC_AmBe_*.root
+cuts:
+  min_pulses_per_event: 0
+  time_min_ns: 2000
+  time_max_ns: 67000
+
+truth:
+  hit_source: mchit
+
+residual:
+  cc_only: false
+  prompt_window_ns: 2000
+
+features:
+  min_samples: 5
+  xi: 0.01
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0
+  truth_window_ns: 75.0
+
+capture_truth:
+  window_ns: [2000, 67000]
+  offset_ns: 7.302734375   # calibrate_offset on mc_ambe_v3fix_reclust_smoke (IQR 2.46 ns)
+
+clusterindex:
+  window_ns: [2000, 67000]
+  label_map: /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix_dead15/QE_1.50/label_map.txt
+  overlay_veto:
+    random_hits: ambe_output/data_dummy_randoms_625x/parquet/data_dummy_randoms_625x__random_hits_6256.parquet
+    cfclusters:  ambe_output/data_dummy_randoms_625x/parquet/data_dummy_randoms_625x__random_cfclusters_6256.parquet
+
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv
+  frame: tank
+  apply_timing_offsets: false
+
+fit_params: {}

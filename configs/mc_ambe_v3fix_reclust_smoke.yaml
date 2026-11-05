@@ -1,0 +1,66 @@
+run_name: mc_ambe_v3fix_reclust_smoke
+display_label: "AmBe MC productionv3fix smoke, file 0 of every label"
+campaign: "AmBe MC productionv3fix"
+description: >
+  First file (events 0-999) of each of the 25 labels; smoke test of mc_ambe_v3fix_reclust.
+output_root: ambe_output
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port1_z0QE_1.50/ANNIEEvent_MC_AmBe_port1_z0QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port1_z100QE_1.50/ANNIEEvent_MC_AmBe_port1_z100QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port1_z50QE_1.50/ANNIEEvent_MC_AmBe_port1_z50QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port1_zminus100QE_1.50/ANNIEEvent_MC_AmBe_port1_zminus100QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port1_zminus50QE_1.50/ANNIEEvent_MC_AmBe_port1_zminus50QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port2_z0QE_1.50/ANNIEEvent_MC_AmBe_port2_z0QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port2_z100QE_1.50/ANNIEEvent_MC_AmBe_port2_z100QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port2_z50QE_1.50/ANNIEEvent_MC_AmBe_port2_z50QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port2_zminus100QE_1.50/ANNIEEvent_MC_AmBe_port2_zminus100QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port2_zminus50QE_1.50/ANNIEEvent_MC_AmBe_port2_zminus50QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port3_z0QE_1.50/ANNIEEvent_MC_AmBe_port3_z0QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port3_z100QE_1.50/ANNIEEvent_MC_AmBe_port3_z100QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port3_z50QE_1.50/ANNIEEvent_MC_AmBe_port3_z50QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port3_zminus100QE_1.50/ANNIEEvent_MC_AmBe_port3_zminus100QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port3_zminus50QE_1.50/ANNIEEvent_MC_AmBe_port3_zminus50QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port4_z0QE_1.50/ANNIEEvent_MC_AmBe_port4_z0QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port4_z100QE_1.50/ANNIEEvent_MC_AmBe_port4_z100QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port4_z50QE_1.50/ANNIEEvent_MC_AmBe_port4_z50QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port4_zminus100QE_1.50/ANNIEEvent_MC_AmBe_port4_zminus100QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port4_zminus50QE_1.50/ANNIEEvent_MC_AmBe_port4_zminus50QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port5_z0QE_1.50/ANNIEEvent_MC_AmBe_port5_z0QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port5_z100QE_1.50/ANNIEEvent_MC_AmBe_port5_z100QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port5_z50QE_1.50/ANNIEEvent_MC_AmBe_port5_z50QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port5_zminus100QE_1.50/ANNIEEvent_MC_AmBe_port5_zminus100QE_1.50_0_999.root
+    - /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/port5_zminus50QE_1.50/ANNIEEvent_MC_AmBe_port5_zminus50QE_1.50_0_999.root
+cuts:
+  min_pulses_per_event: 0
+  time_min_ns: 2000
+  time_max_ns: 67000
+
+truth:
+  hit_source: mchit
+
+residual:
+  cc_only: false
+  prompt_window_ns: 2000
+
+features:
+  min_samples: 5
+  xi: 0.01
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0
+  truth_window_ns: 75.0
+
+capture_truth:
+  window_ns: [2000, 67000]
+
+clusterindex:
+  window_ns: [2000, 67000]
+  label_map: /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix/QE_1.50/label_map.txt
+
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv
+  frame: tank
+  apply_timing_offsets: false
+
+fit_params: {}

@@ -44,6 +44,24 @@ def set_style():
     })
 
 
+def two_titles(fig, simple: str, detail: str, rect=(0, 0, 1, 1), simple_size: float = 14,
+               detail_size: float = 9) -> float:
+    """Detailed context on top, a plain title under it; cropping the top strip leaves a clean figure.
+    Lays the figure out below both and returns the top of the axes area (figure fraction)."""
+    import textwrap
+    from matplotlib.transforms import offset_copy
+    w_in, h_in = fig.get_size_inches()
+    width = max(40, int(w_in * 72 / (0.52 * detail_size)))
+    lines = [x for line in detail.split("\n") for x in (textwrap.wrap(line, width) or [""])]
+    d_pts = len(lines) * detail_size * 1.3
+    tr = lambda dy: offset_copy(fig.transFigure, fig=fig, y=-dy, units="points")  # noqa: E731
+    fig.text(0.5, 1.0, "\n".join(lines), ha="center", va="top", fontsize=detail_size, color="0.3", transform=tr(4))
+    fig.text(0.5, 1.0, simple, ha="center", va="top", fontsize=simple_size, transform=tr(10 + d_pts))
+    top = min(rect[3], 1 - (16 + d_pts + 1.35 * simple_size) / 72 / h_in)
+    fig.tight_layout(rect=(rect[0], rect[1], rect[2], top))
+    return top
+
+
 def save_plot(
     fig,
     ctx: RunContext,
