@@ -13,7 +13,12 @@ output_root: ambe_output
 
 inputs:
   root_files:
-    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_world_*.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_world_1.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_world_2.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_world_3.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_world_4.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_world_5.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_world_6.root
 
 cuts:
   min_pulses_per_event: 0

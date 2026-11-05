@@ -1,0 +1,104 @@
+# OPTICS hyper-parameter scan: ToolAnalysis -> ambe parquets -> `ambe mc capture --scan-optics`;
+# neutrino-cluster decks: ToolAnalysis -> ambe parquets -> `ambe mc capture` per tag -> plots.
+# Run from anywhere; state (.snakemake/, logs/) lives in `work`:
+#   gpvm: snakemake -s workflow/Snakefile -d <work> --cores 4 --resources ta=3 --rerun-triggers mtime --config runset=test
+#   EAF : ... --cores 32 --config runset=full stage=scan geometry_dir=<dir with the two geometry CSVs>
+# Every scan output is keyed by run, grid, variant and files, so adding a grid or a runset never
+# touches existing results. Edit a grid in place only if its old results should be redone.
+
+python: /exp/annie/app/users/dajana/myboy/bin/python
+work: /exp/annie/data/users/dajana/v3fix_local/today_samples
+stage: all            # all = ta + process + scan (gpvm); scan = parquets already exist (EAF)
+geometry_dir: null    # replaces the directory of geometry.pmt_geometry/timing_offsets (EAF)
+
+ta:
+  repo: /exp/annie/app/users/dajana/EB_BC_TA
+  image: /cvmfs/singularity.opensciencegrid.org/anniesoft/toolanalysis:latest
+  wcsim_lib: /exp/annie/app/users/dajana/WCSim/WCSim
+  wcsim_dir:
+    tank: /pnfs/annie/persistent/users/dajana/output/genie_wcsim_tank/productionv3fix/tank
+    world: /pnfs/annie/persistent/users/dajana/output/genie_wcsim_world/productionv3fix/world
+  toolchain:
+    tank: CC_MC_RECO_ntuple_neutrino_FMVMRDTEST
+    world: CC_MC_RECO_ntuple_bt_world
+
+# frozen: parquets are inputs, never rebuilt
+datasets:
+  smear:
+    frozen: true
+    tank: cc_neutrino_v3fixsmear_truthtag
+    world: cc_neutrino_v3fixsmearworld_truthtag
+  smearfull:
+    frozen: false
+    tank: cc_neutrino_v3fixsmearfull_truthtag
+    world: cc_neutrino_v3fixsmearfullworld_truthtag
+  nufull:
+    frozen: false
+    tank: cc_neutrino_v3fixnufull_truthtag
+    world: cc_neutrino_v3fixnufullworld_truthtag
+
+grids:
+  g48: {min_samples: [5, 8, 10, 12], xi: [0.01, 0.05, 0.1], t_unit_ns: [10, 25, 50, 100], nms: [false, true]}
+
+# random data triggers added to every MC event (mc capture --overlay), paths relative to the repo
+overlays:
+  ov6256: ambe_output/data_dummy_randoms_625x/parquet/data_dummy_randoms_625x__random_hits_6256.parquet
+  # 6264 (all triggers, no IC gate) + 6256, both after the cosmic veto: `ambe data randoms --pool 6264p6256 --pool-veto cosmic`
+  ovbkg6264p6256: ambe_output/data_bkg_randoms_6264_6256/parquet/data_bkg_randoms_6264_6256__random_hits_6264p6256.parquet
+
+scan:
+  hit_window: delayed
+  methods: optics,clusterfinder,peak
+  max_jobs: 20
+
+# `mc capture` runs for the decks, output tag <tag>_<files>; overlay names a key of `overlays`
+capture:
+  options: >-
+    --truth-unit particle --owner-rule plurality --hit-window full --cluster-features --timing-offsets off
+    --methods clusterfinder,clusterfinder_nms,optics,optics_nms,peak
+  max_jobs: 3
+  # these samples run one `--groups <i>` job per input file, then `--merge-shards`
+  # (same outputs as one run; bounded memory, and finished files survive a crash)
+  shard_samples: [tank]
+  tags:
+    nu: {hit_cleaning: none}
+    nuclean: {hit_cleaning: unmatched_lowpe}
+    nuover: {hit_cleaning: unmatched_lowpe, overlay: ov6256}
+    nuoverbkg: {hit_cleaning: unmatched_lowpe, overlay: ovbkg6264p6256}
+
+# AmBe MC `mc capture --truth-unit capture` on the grid (grid_wcsim/ambe_analysis), one job per position label
+capture_ambe:
+  options: >-
+    --truth-unit capture --hit-window delayed --timing-offsets off
+    --methods clusterfinder,clusterfinder_nms,peak
+  tags:
+    ov6256: {hit_cleaning: unmatched_lowpe, overlay: ov6256}
+
+# 6254/6256 triggers re-clustered with the dataset's tank config, output tag = dataset name;
+# overlay_run = the random sample of the decks' overlay tag (a runset may replace this block)
+randoms:
+  config: data_dummy_randoms_625x
+  runs: [6256, 6254]
+  overlay_run: "6256"
+  methods: clusterfinder,clusterfinder_nms,optics_nms,peak
+
+decks:
+  plot_methods: clusterfinder,clusterfinder_nms,optics_nms,peak
+  tags: {all: nu, clean: nuclean, overlay: nuover}
+
+# variant = <hit cleaning>[_<overlay>]; max_files: first N input files (tag f<N>), an int or per sample; omitted = all
+runsets:
+  test: {dataset: smear, samples: [tank, world], grids: [g48], variants: [unmatched_lowpe, unmatched_lowpe_ov6256], max_files: 1}
+  full: {dataset: smearfull, samples: [tank, world], grids: [g48], variants: [unmatched_lowpe, unmatched_lowpe_ov6256]}
+  gpvm: {dataset: smearfull, samples: [tank, world], grids: [g48], variants: [unmatched_lowpe, unmatched_lowpe_ov6256],
+         max_files: {tank: 3}}
+# deck runsets: figures go to PRESENTATION_PLOTS/<deck><deck_suffix>
+  nutest: {dataset: nufull, samples: [tank, world], captures: [nu, nuclean, nuover], max_files: 1, deck_suffix: _test}
+  nufull: {dataset: nufull, samples: [tank, world], captures: [nu, nuclean, nuover], deck_suffix: _full}
+# background overlay 6264+6256 (cosmic veto, no IC gate): only the overlay tag and the decks that use it
+  nubkgtest: {dataset: nufull, samples: [tank, world], captures: [nuoverbkg], max_files: 1, deck_suffix: _bkg_test,
+              decks: [clustertruth, neutrino], overlay_tag: nuoverbkg,
+              randoms: {config: data_bkg_randoms_6264_6256, runs: [6264p6256], overlay_run: 6264p6256}}
+  nufullbkg: {dataset: nufull, samples: [tank, world], captures: [nuoverbkg], deck_suffix: _full_bkg,
+              decks: [clustertruth, neutrino], overlay_tag: nuoverbkg,
+              randoms: {config: data_bkg_randoms_6264_6256, runs: [6264p6256], overlay_run: 6264p6256}}

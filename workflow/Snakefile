@@ -1,0 +1,343 @@
+import re
+from pathlib import Path
+
+import yaml
+
+configfile: workflow.source_path("config.yaml")
+
+AMBE = Path(workflow.basedir).parent
+PY = config["python"]
+WORK = Path(config["work"])
+STAGE = config["stage"]
+if "runset" not in config:
+    raise ValueError("pass --config runset=<one of %s>" % sorted(config["runsets"]))
+RS = config["runsets"][config["runset"]]
+DS = config["datasets"][RS["dataset"]]
+
+
+def files_tag(sample):
+    mf = RS.get("max_files")
+    mf = mf.get(sample) if isinstance(mf, dict) else mf
+    return f"f{mf}" if mf else "all"
+
+
+ENV = "PYTHONPATH=src PYTHONUNBUFFERED=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1"
+
+
+def base_config(run):
+    return yaml.safe_load(open(AMBE / "configs" / f"{run}.yaml"))
+
+
+def root_files(run):
+    return base_config(run)["inputs"]["root_files"]
+
+
+def parquet(run, name):
+    return str(AMBE / "ambe_output" / run / "parquet" / f"{run}__{name}.parquet")
+
+
+def process_outputs(run):
+    stream = base_config(run)["cuts"]["cc_stream"]
+    return [parquet(run, n) for n in ("pulses", "clusterfinder", "true_captures", "true_nu_vertices",
+                                      f"cc_{stream}_events")]
+
+
+def scan_csv(run, grid, variant, files):
+    return str(AMBE / "ambe_output" / run / "csv"
+               / f"{run}__truth_object_optics_scan__oscan_{grid}_{variant}_{files}_plurality.csv")
+
+
+def capture_outputs(run, tag, files):
+    return [parquet(run, f"{b}__{tag}_{files}_plurality")
+            for b in ("truth_object_clusters", "truth_objects", "truth_event_multiplicity")]
+
+
+def shard_outputs(run, tag, files, g):
+    return [parquet(run, f"{b}__{tag}_{files}_g{g}_plurality")
+            for b in ("truth_object_clusters", "truth_objects", "truth_event_multiplicity")]
+
+
+def n_groups(run, files):
+    return int(files[1:]) if files != "all" else len(root_files(run))
+
+
+SHARD_RUNS = sorted({d[s] for d in config["datasets"].values() for s in config["capture"]["shard_samples"]})
+
+RAND = RS.get("randoms", config["randoms"])
+RCFG = RAND["config"]
+OVRUN = str(RAND["overlay_run"])
+
+
+def randoms_clusters(run, ds):
+    return str(AMBE / "ambe_output" / RCFG / "parquet" / f"{RCFG}__random_recoclusters_{run}__{ds}.parquet")
+
+
+PLOTS = AMBE / "PRESENTATION_PLOTS"
+DECKS = {"clustertruth": "ccinc_cluster_truth/overlay_multiplicity.csv",
+         "neutrino": "ccinc_neutrino_clusters/neutrino_overlay.csv",
+         "clusterpurity": "ccinc_clusterpurity/clusterpurity_table.csv"}
+
+
+def deck_target(deck):
+    d, f = DECKS[deck].split("/")
+    return str(PLOTS / f"{d}{RS['deck_suffix']}" / f)
+
+
+LIVE = [] if STAGE == "scan" else [r for d in config["datasets"].values() if not d["frozen"]
+                                   for r in (d["tank"], d["world"])]
+
+wildcard_constraints:
+    run="[A-Za-z0-9_]+?",
+    grid="[A-Za-z0-9]+",
+    variant="(unmatched_lowpe|none)(_ov[A-Za-z0-9]+)?",
+    files="all|f[0-9]+",
+    sample="tank|world",
+    part="[0-9]+",
+    tag="|".join(config["capture"]["tags"]),
+    rrun="[0-9p]+",
+    g="[0-9]+",
+    ds="[A-Za-z0-9]+"
+
+
+rule all:
+    input:
+        [scan_csv(DS[s], g, v, files_tag(s)) for s in RS["samples"] for g in RS.get("grids", [])
+         for v in RS["variants"]],
+        [o for s in RS["samples"] for t in RS.get("captures", []) for o in capture_outputs(DS[s], t, files_tag(s))],
+        [deck_target(d) for d in RS.get("decks", DECKS)] if "deck_suffix" in RS else []
+
+
+if STAGE == "all":
+    rule ta:
+        input:
+            lambda w: f"{config['ta']['wcsim_dir'][w.sample]}/wcsim_{w.part}.root"
+        output:
+            str(WORK / "out" / "ANNIEEvent_{sample}_{part}.root")
+        resources:
+            ta=1
+        params:
+            t=config["ta"],
+            wd=lambda w: config["ta"]["wcsim_dir"][w.sample],
+            tc=lambda w: config["ta"]["toolchain"][w.sample]
+        shell:
+            "bash {AMBE}/workflow/scripts/run_ta.sh {wildcards.sample} {wildcards.part} {output} {WORK} "
+            "{params.t[repo]} {params.t[image]} {params.wd} {params.tc} {params.t[wcsim_lib]} {PY}"
+
+
+for _run in LIVE:
+    rule:
+        name: f"process_{_run}"
+        input:
+            root_files(_run)
+        output:
+            process_outputs(_run)
+        log:
+            str(WORK / "logs" / f"process_{_run}.log")
+        params:
+            run=_run
+        shell:
+            "cd {AMBE} && export {ENV} && "
+            "({PY} -m ambe.cli mc process --config configs/{params.run}.yaml && "
+            "{PY} -m ambe.cli mc cc --config configs/{params.run}.yaml && "
+            "{PY} -m ambe.cli mc capture --config configs/{params.run}.yaml --cache-only --truth-unit particle "
+            "--hit-cleaning none --hit-window delayed --owner-rule plurality --timing-offsets off) > {log} 2>&1"
+
+
+rule grid_config:
+    input:
+        str(AMBE / "configs" / "{run}.yaml")
+    output:
+        str(AMBE / "ambe_output" / "{run}" / "configs" / "{run}__oscan_{grid}.yaml")
+    run:
+        c = yaml.safe_load(open(input[0]))
+        c.setdefault("capture_truth", {})["optics_scan"] = config["grids"][wildcards.grid]
+        if config.get("geometry_dir"):
+            for k in ("pmt_geometry", "timing_offsets"):
+                c["geometry"][k] = str(Path(config["geometry_dir"]) / Path(c["geometry"][k]).name)
+        Path(output[0]).write_text(f"# {wildcards.run} + grid {wildcards.grid} (workflow/Snakefile)\n"
+                                   + yaml.safe_dump(c, sort_keys=False))
+
+
+def n_input_files(run):
+    return len(root_files(run))
+
+
+def overlay_key(variant):
+    m = re.fullmatch(r"(unmatched_lowpe|none)(?:_(ov[A-Za-z0-9]+))?", variant)
+    return m.group(1), m.group(2)
+
+
+def overlay_input(w):
+    ov = overlay_key(w.variant)[1]
+    return [str(AMBE / config["overlays"][ov])] if ov else []
+
+
+rule scan:
+    input:
+        cfg=rules.grid_config.output,
+        data=lambda w: process_outputs(w.run),
+        overlay=overlay_input
+    output:
+        csv=scan_csv("{run}", "{grid}", "{variant}", "{files}"),
+        clusters=str(AMBE / "ambe_output" / "{run}" / "parquet"
+                     / "{run}__truth_object_clusters__oscan_{grid}_{variant}_{files}_plurality.parquet")
+    log:
+        str(WORK / "logs" / "scan_{run}_{grid}_{variant}_{files}.log")
+    threads:
+        lambda w: min(config["scan"]["max_jobs"],
+                      int(w.files[1:]) if w.files != "all" else n_input_files(w.run))
+    params:
+        maxf=lambda w: f"--max-files {w.files[1:]}" if w.files != "all" else "",
+        cleaning=lambda w: overlay_key(w.variant)[0],
+        ov=lambda w, input: f"--overlay {input.overlay[0]}" if input.overlay else "",
+        s=config["scan"]
+    shell:
+        "cd {AMBE} && export {ENV} && /usr/bin/time -v {PY} -m ambe.cli mc capture --config {input.cfg} "
+        "--truth-unit particle --hit-cleaning {params.cleaning} --hit-window {params.s[hit_window]} {params.ov} "
+        "--owner-rule plurality --methods {params.s[methods]} --scan-optics --jobs {threads} "
+        "--timing-offsets off --tag oscan_{wildcards.grid}_{wildcards.variant}_{wildcards.files} "
+        "{params.maxf} > {log} 2>&1"
+
+
+def capture_overlay(w):
+    t = config["capture"]["tags"][w.tag]
+    return [str(AMBE / config["overlays"][t["overlay"]])] if "overlay" in t else []
+
+
+ruleorder: capture_merge > capture
+
+
+rule capture_shard:
+    input:
+        cfg=str(AMBE / "configs" / "{run}.yaml"),
+        data=lambda w: process_outputs(w.run),
+        overlay=capture_overlay
+    output:
+        shard_outputs("{run}", "{tag}", "{files}", "{g}")
+    log:
+        str(WORK / "logs" / "capture_{run}_{tag}_{files}_g{g}.log")
+    params:
+        cleaning=lambda w: config["capture"]["tags"][w.tag]["hit_cleaning"],
+        ov=lambda w, input: f"--overlay {input.overlay[0]}" if input.overlay else "",
+        opts=config["capture"]["options"]
+    shell:
+        "cd {AMBE} && export {ENV} && /usr/bin/time -v {PY} -m ambe.cli mc capture --config configs/{wildcards.run}.yaml "
+        "{params.opts} --hit-cleaning {params.cleaning} {params.ov} --groups {wildcards.g} "
+        "--tag {wildcards.tag}_{wildcards.files}_g{wildcards.g} > {log} 2>&1"
+
+
+rule capture_merge:
+    wildcard_constraints:
+        run="|".join(SHARD_RUNS) or "^$"
+    input:
+        cfg=str(AMBE / "configs" / "{run}.yaml"),
+        shards=lambda w: [o for g in range(n_groups(w.run, w.files)) for o in shard_outputs(w.run, w.tag, w.files, g)],
+        overlay=capture_overlay
+    output:
+        capture_outputs("{run}", "{tag}", "{files}")
+    log:
+        str(WORK / "logs" / "capture_{run}_{tag}_{files}_merge.log")
+    params:
+        maxf=lambda w: f"--max-files {w.files[1:]}" if w.files != "all" else "",
+        cleaning=lambda w: config["capture"]["tags"][w.tag]["hit_cleaning"],
+        ov=lambda w, input: f"--overlay {input.overlay[0]}" if input.overlay else "",
+        opts=config["capture"]["options"]
+    shell:
+        "cd {AMBE} && export {ENV} && {PY} -m ambe.cli mc capture --config configs/{wildcards.run}.yaml "
+        "{params.opts} --hit-cleaning {params.cleaning} {params.ov} --merge-shards "
+        "--tag {wildcards.tag}_{wildcards.files} {params.maxf} > {log} 2>&1"
+
+
+rule capture:
+    input:
+        cfg=str(AMBE / "configs" / "{run}.yaml"),
+        data=lambda w: process_outputs(w.run),
+        overlay=capture_overlay
+    output:
+        capture_outputs("{run}", "{tag}", "{files}")
+    log:
+        str(WORK / "logs" / "capture_{run}_{tag}_{files}.log")
+    threads:
+        lambda w: min(config["capture"]["max_jobs"],
+                      int(w.files[1:]) if w.files != "all" else n_input_files(w.run))
+    params:
+        maxf=lambda w: f"--max-files {w.files[1:]}" if w.files != "all" else "",
+        cleaning=lambda w: config["capture"]["tags"][w.tag]["hit_cleaning"],
+        ov=lambda w, input: f"--overlay {input.overlay[0]}" if input.overlay else "",
+        opts=config["capture"]["options"]
+    shell:
+        "cd {AMBE} && export {ENV} && /usr/bin/time -v {PY} -m ambe.cli mc capture --config configs/{wildcards.run}.yaml "
+        "{params.opts} --hit-cleaning {params.cleaning} {params.ov} --jobs {threads} "
+        "--tag {wildcards.tag}_{wildcards.files} {params.maxf} > {log} 2>&1"
+
+
+rule randoms_cluster:
+    input:
+        str(AMBE / "ambe_output" / RCFG / "parquet" / f"{RCFG}__random_hits_{{rrun}}.parquet"),
+        lambda w: str(AMBE / "configs" / f"{config['datasets'][w.ds]['tank']}.yaml")
+    output:
+        randoms_clusters("{rrun}", "{ds}")
+    log:
+        str(WORK / "logs" / "randoms_cluster_{rrun}_{ds}.log")
+    params:
+        mc=lambda w: config["datasets"][w.ds]["tank"],
+        m=config["randoms"]["methods"]
+    shell:
+        "cd {AMBE} && export {ENV} && {PY} -m ambe.cli data randoms --config configs/{RCFG}.yaml --from-parquet "
+        "--cluster --runs {wildcards.rrun} --mc-config configs/{params.mc}.yaml --hit-window full "
+        "--methods {params.m} --tag {wildcards.ds} > {log} 2>&1"
+
+
+if "deck_suffix" in RS:
+    if files_tag("tank") != files_tag("world"):
+        raise ValueError("deck runsets need the same max_files for tank and world")
+    F = files_tag("tank")
+    T = dict(config["decks"]["tags"], **({"overlay": RS["overlay_tag"]} if "overlay_tag" in RS else {}))
+    DECK_ARGS = (f"--config configs/{DS['tank']}.yaml --world-config configs/{DS['world']}.yaml "
+                 f"--plot-methods {config['decks']['plot_methods']}")
+    RANDOMS_ARGS = f"--randoms-config configs/{RCFG}.yaml --randoms-tag {RS['dataset']} --overlay-run {OVRUN}"
+
+    def deck_inputs(*tags):
+        return [o for s in ("tank", "world") for t in tags for o in capture_outputs(DS[s], T[t], F)]
+
+    rule deck_clustertruth:
+        input:
+            deck_inputs("clean", "overlay"),
+            randoms_clusters(OVRUN, RS["dataset"])
+        output:
+            deck_target("clustertruth")
+        log:
+            str(WORK / "logs" / f"deck_clustertruth{RS['deck_suffix']}.log")
+        params:
+            out=lambda w, output: str(Path(output[0]).parent)
+        shell:
+            "cd {AMBE} && export {ENV} && {PY} -m ambe.cli plots clustertruth {DECK_ARGS} "
+            "--tag {T[clean]}_{F} --overlay-tag {T[overlay]}_{F} {RANDOMS_ARGS} --out {params.out} > {log} 2>&1"
+
+    rule deck_neutrino:
+        input:
+            deck_inputs("all", "clean", "overlay"),
+            [randoms_clusters(r, RS["dataset"]) for r in RAND["runs"]]
+        output:
+            deck_target("neutrino")
+        log:
+            str(WORK / "logs" / f"deck_neutrino{RS['deck_suffix']}.log")
+        params:
+            out=lambda w, output: str(Path(output[0]).parent)
+        shell:
+            "cd {AMBE} && export {ENV} && {PY} -m ambe.cli plots provenance --deck neutrino {DECK_ARGS} "
+            "--tag {T[all]}_{F} --clean-tag {T[clean]}_{F} --overlay-tag {T[overlay]}_{F} {RANDOMS_ARGS} "
+            "--out {params.out} > {log} 2>&1"
+
+    rule deck_clusterpurity:
+        input:
+            deck_inputs("all", "clean")
+        output:
+            deck_target("clusterpurity")
+        log:
+            str(WORK / "logs" / f"deck_clusterpurity{RS['deck_suffix']}.log")
+        params:
+            out=lambda w, output: str(Path(output[0]).parent)
+        shell:
+            "cd {AMBE} && export {ENV} && {PY} -m ambe.cli plots provenance --deck clusterpurity {DECK_ARGS} "
+            "--tag {T[all]}_{F} --clean-tag {T[clean]}_{F} --out {params.out} > {log} 2>&1"
