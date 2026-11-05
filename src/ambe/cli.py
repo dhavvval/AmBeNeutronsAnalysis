@@ -79,6 +79,7 @@ COMMANDS: dict[tuple[str, str], str] = {
     ("plots", "datamcwave"):    "ambe.plots.datamc_waveform:cli",
     ("plots", "datamczero"):    "ambe.plots.datamc_zerobin:cli",
     ("plots", "livetime"):      "ambe.plots.livetime_sideband:cli",
+    ("plots", "nosourcenorm"):  "ambe.plots.nosource_norm:cli",
     ("plots", "clustereff"):    "ambe.plots.clustereff:cli",
     ("plots", "prvalidation"):  "ambe.plots.pr_validation:cli",
     ("plots", "pulseshape"):    "ambe.plots.pulse_shape:cli",
