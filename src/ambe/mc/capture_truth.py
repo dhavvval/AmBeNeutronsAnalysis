@@ -550,6 +550,44 @@ def _mad(x: np.ndarray) -> float:
 _G: dict = {}      # per-process state, filled before the Pool forks
 
 
+class _SliceIndex:
+    """Read-only stand-in for {key: group.reset_index(drop=True) for key, group in df.groupby(keys)}:
+    one sorted frame plus row ranges, sliced on .get (--low-memory)."""
+
+    def __init__(self, df: pd.DataFrame, keys: list, extra: Optional[dict] = None):
+        df = df.sort_values(keys, kind="stable").reset_index(drop=True)
+        cols = [df[k].to_numpy() for k in keys]
+        n = len(df)
+        if n:
+            brk = np.zeros(n, bool)
+            brk[0] = True
+            for c in cols:
+                brk[1:] |= c[1:] != c[:-1]
+            starts = np.flatnonzero(brk)
+            stops = np.append(starts[1:], n)
+            if len(keys) == 1:
+                ks = cols[0][starts].tolist()
+            else:
+                ks = list(zip(*(c[starts].tolist() for c in cols)))
+            self._pos = dict(zip(ks, zip(starts.tolist(), stops.tolist())))
+        else:
+            self._pos = {}
+        self._df = df
+        self._extra = dict(extra or {})
+
+    def get(self, key, default=None):
+        if key in self._extra:
+            return self._extra[key]
+        p = self._pos.get(key)
+        return default if p is None else self._df.iloc[p[0]:p[1]].reset_index(drop=True)
+
+    def __getitem__(self, key):
+        v = self.get(key)
+        if v is None:
+            raise KeyError(key)
+        return v
+
+
 PULSE_COLS = ["eventID", "eventNumber", "_source_file", "pmtID", "t", "x", "y", "z", "pe",
               "truth_class", "is_neutron", "is_untraced", "ancestor_trackID", "ancestor_pdg",
               "origin_pdg", "cc_pass", "origin_in_tank", "origin_trackID",
@@ -1218,9 +1256,13 @@ def run(ctx: RunContext, args) -> None:
               f"{len(nv)} neutrino vertices cached. Heavy stage can now run on EAF.")
         return
     caps = caps[caps._source_file.isin(want)]
-    caps_by_key = {k: g.reset_index(drop=True)
-                   for k, g in caps.groupby(["_source_file", "eventNumber"])}
-    caps_by_key[("__empty__", -1)] = caps.iloc[0:0]
+    if args.low_memory:
+        caps_by_key = _SliceIndex(caps, ["_source_file", "eventNumber"],
+                                  extra={("__empty__", -1): caps.iloc[0:0]})
+    else:
+        caps_by_key = {k: g.reset_index(drop=True)
+                       for k, g in caps.groupby(["_source_file", "eventNumber"])}
+        caps_by_key[("__empty__", -1)] = caps.iloc[0:0]
 
     nuv = None
     if "nu_x" in caps.columns and not cfg.get("source_from_filename"):
@@ -1254,7 +1296,8 @@ def run(ctx: RunContext, args) -> None:
     if cf_path.exists():
         cf = pd.read_parquet(cf_path)
         cf = cf[cf._source_file.isin(want)]
-        clusters = {k: g.reset_index(drop=True) for k, g in cf.groupby("eventID")}
+        clusters = (_SliceIndex(cf, ["eventID"]) if args.low_memory
+                    else {k: g.reset_index(drop=True) for k, g in cf.groupby("eventID")})
         del cf
     else:
         clusters = None
@@ -1475,6 +1518,9 @@ def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
                    help="particle mode: add the capture_truth.optics_scan grid of OPTICS methods")
     p.add_argument("--scan-peak", action="store_true",
                    help="particle mode: add the capture_truth.peak_scan grid of time-peak methods")
+    p.add_argument("--low-memory", action="store_true",
+                   help="per-event capture/cluster lookups as slices of one sorted frame instead of "
+                        "one DataFrame per event (same outputs; needed for 1,250 files on an 11 GB gpvm)")
     a = p.parse_args(list(argv) if argv else [])
     if a.truth_unit == "particle" and a.owner_rule is None:
         p.error("--truth-unit particle needs --owner-rule")
