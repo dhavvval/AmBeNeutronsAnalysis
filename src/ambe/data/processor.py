@@ -975,7 +975,8 @@ class AmBeNeutronProcessing:
                                       dump_good_events: bool = False,
                                       dump_event_index: bool = False,
                                       run_manifest: Optional[List[Dict[str, Any]]] = None,
-                                      event_key_branch: str = "eventTimeTank") -> Dict[str, Any]:
+                                      event_key_branch: str = "eventTimeTank",
+                                      check_tree_run: bool = True) -> Dict[str, Any]:
         """
         Complete analysis pipeline that replicates AnalysisRun.py functionality.
         This integrates waveform analysis, event processing, and CSV output generation.
@@ -1143,7 +1144,7 @@ class AmBeNeutronProcessing:
             # Load event data for this specific run
             event_data = self.load_event_data(
                 file_path, which_tree, event_key_branch=event_key_branch,
-                expect_run=int(run) if mc_mode else None)
+                expect_run=int(run) if (mc_mode and check_tree_run) else None)
 
             if mc_mode:
                 # Synthetic Stage-1 row so AmBeWaveformResults_<tag>.csv keeps its
@@ -1593,6 +1594,10 @@ def run_mc(ctx, argv=None):
     positions = sorted(set(extra.values()))
     print(f"[data.processmc] {len(manifest)} files, {len(positions)} source positions")
 
+    check_run = bool(st.get("check_tree_run", True))
+    if not check_run:
+        print("[data.processmc] tree runNumber check OFF (stage1_mc.check_tree_run: false); "
+              "position comes from the folder label only")
     processor = AmBeNeutronProcessing(config=WaveformConfig(), cuts=cuts,
                                       selection=selection, extra_positions=extra,
                                       cosmic_veto=veto_on)
@@ -1608,6 +1613,7 @@ def run_mc(ctx, argv=None):
         dump_event_index=bool(st.get("dump_event_index", False)),
         run_manifest=manifest,
         event_key_branch=str(st.get("event_key_branch", "eventNumber")),
+        check_tree_run=check_run,
     )
 
     if hasattr(selection, "report_coverage"):
