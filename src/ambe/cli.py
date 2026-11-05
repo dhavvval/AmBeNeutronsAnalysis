@@ -50,6 +50,7 @@ COMMANDS: dict[tuple[str, str], str] = {
     ("data", "eff"):            "ambe.data.processor:cli",
     ("data", "icscan"):         "ambe.plots.icscan:cli",
     ("data", "runtable"):       "ambe.diagnostics.runtable:cli",
+    ("data", "randoms"):        "ambe.data.randoms:cli",
     ("leak", "features"):       "ambe.leak.features:cli",
     ("leak", "pmtcharge"):      "ambe.leak.pmtcharge:cli",
     ("plots", "icscan"):        "ambe.plots.icscan:cli",

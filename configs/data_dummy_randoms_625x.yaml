@@ -1,0 +1,11 @@
+run_name: data_dummy_randoms_625x
+campaign: AmBe2.0v4 dummy triggers
+description: >
+  Dummy-trigger runs 6254 (LAPPD on) and 6256 (LAPPD off), 0.5 Hz forced triggers with no
+  source. Random tank hits for `ambe mc capture --overlay` and noise-only cluster rates
+  (ambe data randoms). Not AmBe runs.
+output_root: ambe_output
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6254.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6256.root
