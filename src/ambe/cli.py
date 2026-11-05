@@ -80,6 +80,7 @@ COMMANDS: dict[tuple[str, str], str] = {
     ("plots", "livetime"):      "ambe.plots.livetime_sideband:cli",
     ("plots", "clustereff"):    "ambe.plots.clustereff:cli",
     ("plots", "prvalidation"):  "ambe.plots.pr_validation:cli",
+    ("plots", "pulseshape"):    "ambe.plots.pulse_shape:cli",
     ("pipeline", "mc"):         "ambe.pipeline:run_mc",
     ("pipeline", "data"):       "ambe.pipeline:run_data",
 }
