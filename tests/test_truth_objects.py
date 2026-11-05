@@ -69,3 +69,18 @@ def test_optics_scan_names():
                      "optics_ms8_xi0.02_tu25", "optics_ms8_xi0.02_tu25_nms"]
     assert parse_optics_scan(names[1]) == dict(min_samples=5, xi=0.02, t_unit_ns=25.0, nms=True)
     assert parse_optics_scan("optics") is None and parse_optics_scan("peak_tw20_n6_s50") is None
+
+
+def test_mchit_truth_from_lineage():
+    from ambe.mc.processor import _mchit_truth
+    # e- <- gamma <- n(7) <- p(3), complete chain: secondary neutron from a proton
+    r = _mchit_truth((11, 22, 2112, 2212), (50, 40, 7, 3), 1, 0)
+    assert r[0] == 2 and r[2] == 7 and r[3] == 2112 and r[4] is False
+    assert r[7] == 22 and r[9] == 2212 and r[10] == 1
+    # primary neutron at the top of a complete chain
+    assert _mchit_truth((11, 22, 2112), (5, 4, 2), 1, 0)[0] == 1
+    # muon light: no neutron, immediate ancestor skips the e-
+    r = _mchit_truth((11, 13), (8, 1), 1, 0)
+    assert r[0] == -5 and r[7] == 13 and r[8] == 1
+    assert _mchit_truth((), (), -5, 1)[:2] == (0, 1)             # dark noise
+    assert _mchit_truth((), (), 0, 0)[4] is True                 # unresolved

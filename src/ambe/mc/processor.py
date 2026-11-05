@@ -69,6 +69,14 @@ DP_BRANCHES = [
     "DirectParent_LineageTrackID",
 ]
 
+# Per-MCHit lineage (EB_BC_TA BackTracker::FindMCHitLineages), aligned with hitT.
+# Unlike DirectParent_* it also covers MCHits that produced no waveform pulse.
+HIT_LINEAGE_BRANCHES = [
+    "hitLineagePDG", "hitLineageTrackID", "hitLineageDepth",
+    "hitLineageStatus", "hitIsDarknoise",
+]
+HIT_SOURCES = ("mchit", "dp_match")
+
 # LineageStatus codes (BackTracker): 1 reached a generator primary ·
 # 0 truncated at an unsaved track · -1 cycle or depth cap · -5 dark noise.
 LINEAGE_STATUS_LABELS = {
@@ -328,12 +336,33 @@ def _match_hit(ck: int, t: float, dp_lookup: dict, offset: float,
             root_pdg, lin_status, lin_chain, lin_tids)
 
 
+def _mchit_truth(chain, tids, status: int, noise: int):
+    """Same tuple as _match_hit, derived from one MCHit's own lineage (BackTracker rules)."""
+    if noise == 1:
+        return 0, 1, -5, -5, False, None, 0, -5, -5, -5, -5, (), ()
+    if not chain:
+        return 0, 0, -5, -5, True, None, -5, -5, -5, -5, status, (), ()
+    cls, tid, pdg = -5, -5, -5
+    for k, p in enumerate(chain):
+        if p == 2112:
+            tid, pdg = int(tids[k]), 2112
+            if k + 1 < len(chain):
+                cls = {2212: 2, 2112: 3}.get(int(chain[k + 1]), 4)
+            else:
+                cls = 1 if status == 1 else 4
+            break
+    bg_k = next((k for k, p in enumerate(chain) if int(p) not in CARRIER_PDGS), len(chain) - 1)
+    bg_pdg = int(chain[bg_k])
+    return (cls, 0, tid, pdg, False, None, classify_pdg(bg_pdg), bg_pdg, int(tids[bg_k]),
+            int(chain[-1]), status, tuple(chain), tuple(tids))
+
+
 # --------------------------------------------------------------------------- #
 # Per-file processing
 # --------------------------------------------------------------------------- #
 
 def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
-                          max_events: Optional[int] = None):
+                          max_events: Optional[int] = None, hit_source: Optional[str] = None):
     """Read one ROOT file; return (pulse_df, cluster_df)."""
     with uproot.open(str(root_path)) as f:
         if tree_name not in f:
@@ -344,6 +373,15 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
         wanted_hit     = [b for b in HIT_BRANCHES  if b in available]
         wanted_dp      = [b for b in DP_BRANCHES   if b in available]
         wanted_cluster = [b for b in CLUSTER_BRANCHES if b in available]
+        has_hl = set(HIT_LINEAGE_BRANCHES) <= available
+        if hit_source is None:
+            if has_hl:
+                raise SystemExit(f"[mc.processor] {root_path.name} has per-MCHit lineage: set "
+                                 f"truth.hit_source to one of {HIT_SOURCES} in the config")
+            hit_source = "dp_match"
+        if hit_source == "mchit" and not has_hl:
+            raise SystemExit(f"[mc.processor] truth.hit_source=mchit but {root_path.name} "
+                             "has no hitLineage* branches (rerun ToolAnalysis >= per-MCHit lineage)")
 
         missing_hit = set(HIT_BRANCHES) - available
         if missing_hit and verbose:
@@ -357,6 +395,7 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
         hit_arr     = t.arrays(wanted_hit,     library="ak")
         dp_arr      = t.arrays(wanted_dp,      library="ak") if has_dp else None
         cluster_arr = t.arrays(wanted_cluster, library="ak") if wanted_cluster else None
+        hl_arr      = t.arrays(HIT_LINEAGE_BRANCHES, library="ak") if hit_source == "mchit" else None
 
     n = len(hit_arr)
     if max_events is not None:
@@ -422,15 +461,35 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
             offset    = 0.0
             dp_lookup = {}
 
+        if hl_arr is not None:
+            h_dep = np.asarray(hl_arr["hitLineageDepth"][i], dtype=int)
+            if len(h_dep) != len(hit_ck):
+                raise SystemExit(f"[mc.processor] {root_path.name} event {event_id}: "
+                                 f"{len(h_dep)} hitLineage entries for {len(hit_ck)} hits")
+            h_chain = _decode_lineage_chains(np.asarray(hl_arr["hitLineagePDG"][i], dtype=int), h_dep, len(hit_ck))
+            h_tids  = _decode_lineage_chains(np.asarray(hl_arr["hitLineageTrackID"][i], dtype=int), h_dep, len(hit_ck))
+            if h_chain is None or h_tids is None:
+                raise SystemExit(f"[mc.processor] {root_path.name} event {event_id}: hitLineage arrays do not decode")
+            h_stat  = np.asarray(hl_arr["hitLineageStatus"][i], dtype=int)
+            h_dn    = np.asarray(hl_arr["hitIsDarknoise"][i], dtype=int)
+
         # Emit one row per detector hit
         for j in range(len(hit_ck)):
             ck = int(hit_ck[j])
             t_hit = float(hit_t[j])
 
-            (cls, dn, tid, pdg, untraced, fail_reason, bg_cls, bg_pdg, bg_tid,
-             root_pdg, lin_status, lin_chain, lin_tids) = _match_hit(
-                ck, t_hit, dp_lookup, offset
-            )
+            dp = _match_hit(ck, t_hit, dp_lookup, offset)
+            dp_fail = dp[5]
+            if hl_arr is not None:
+                (cls, dn, tid, pdg, untraced, _, bg_cls, bg_pdg, bg_tid,
+                 root_pdg, lin_status, lin_chain, lin_tids) = _mchit_truth(
+                    h_chain[j], h_tids[j], int(h_stat[j]), int(h_dn[j]))
+            else:
+                (cls, dn, tid, pdg, untraced, _, bg_cls, bg_pdg, bg_tid,
+                 root_pdg, lin_status, lin_chain, lin_tids) = dp
+            fail_reason = dp_fail
+            dp_origin_pdg, dp_k = first_non_em_pdg(dp[11])
+            dp_origin_tid = int(dp[12][dp_k]) if len(dp[12]) == len(dp[11]) and dp_k < len(dp[12]) else -5
 
             # First non-EM ancestor: resolves the "everything is a photon"
             # degeneracy of bg_class without over-shooting to the generator
@@ -456,6 +515,14 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
                 "is_neutron":           int(cls in NEUTRON_CLASSES),
                 "is_untraced":          int(untraced),
                 "match_failure_reason": fail_reason,
+                # Waveform-pulse match, independent of the truth source: 0 means data
+                # would not record this MCHit (hit-cleaning keys on it).
+                "wf_matched":           int(dp_fail is None),
+                "truth_source":         hit_source,
+                "dp_truth_class":       dp[0],
+                "dp_ancestor_trackID":  dp[2],
+                "dp_origin_pdg":        dp_origin_pdg,
+                "dp_origin_trackID":    dp_origin_tid,
                 "ancestor_trackID":     tid,
                 "ancestor_pdg":         pdg,
                 # Species-general immediate-ancestor tag (any particle, not just
@@ -584,8 +651,12 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
     n_bkg_hits = n_gamma_med = n_carrier_med = 0
     n_untraced = n_no_entry = n_time_mm = 0
 
+    hit_source = (ctx.extra.get("truth") or {}).get("hit_source")
+    if hit_source is not None and hit_source not in HIT_SOURCES:
+        raise SystemExit(f"[mc.processor] truth.hit_source must be one of {HIT_SOURCES}, got {hit_source!r}")
     for k, rp in enumerate(root_files):
-        pf, cf = _process_single_file(rp, tree_name, verbose, max_events=max_events)
+        pf, cf = _process_single_file(rp, tree_name, verbose, max_events=max_events,
+                                      hit_source=hit_source)
         pf["_source_file"] = rp.name
         cf["_source_file"] = rp.name
 
