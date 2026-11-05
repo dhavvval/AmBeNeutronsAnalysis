@@ -362,7 +362,8 @@ def _mchit_truth(chain, tids, status: int, noise: int):
 # --------------------------------------------------------------------------- #
 
 def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
-                          max_events: Optional[int] = None, hit_source: Optional[str] = None):
+                          max_events: Optional[int] = None, hit_source: Optional[str] = None,
+                          dp_offset_ns: Optional[float] = None):
     """Read one ROOT file; return (pulse_df, cluster_df)."""
     with uproot.open(str(root_path)) as f:
         if tree_name not in f:
@@ -453,7 +454,8 @@ def _process_single_file(root_path: Path, tree_name: str, verbose: bool,
                      if "DirectParent_LineageTrackID" in wanted_dp else None
             dp_tchains  = _decode_lineage_chains(dp_lin_tid, dp_lin_dep, len(dp_ck))
 
-            offset    = _compute_offset(hit_ck, hit_t, dp_ck, dp_t)
+            offset    = (_compute_offset(hit_ck, hit_t, dp_ck, dp_t) if dp_offset_ns is None
+                         else dp_offset_ns)
             dp_lookup = _build_dp_lookup(dp_ck, dp_t, dp_cls, dp_dn, dp_tid, dp_pdg,
                                           dp_bg_cls, dp_bg_pdg, dp_bg_tid,
                                           dp_root_pdg, dp_lin_stat, dp_chains, dp_tchains)
@@ -658,9 +660,13 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
     hit_source = (ctx.extra.get("truth") or {}).get("hit_source")
     if hit_source is not None and hit_source not in HIT_SOURCES:
         raise SystemExit(f"[mc.processor] truth.hit_source must be one of {HIT_SOURCES}, got {hit_source!r}")
+    # waveform-hit MC: hitT is the DirectParent pulse time itself, so set truth.dp_offset_ns: 0
+    dp_offset_ns = (ctx.extra.get("truth") or {}).get("dp_offset_ns")
+    if dp_offset_ns is not None:
+        dp_offset_ns = float(dp_offset_ns)
     for k, rp in enumerate(root_files):
         pf, cf, ev = _process_single_file(rp, tree_name, verbose, max_events=max_events,
-                                          hit_source=hit_source)
+                                          hit_source=hit_source, dp_offset_ns=dp_offset_ns)
         pf["_source_file"] = rp.name
         cf["_source_file"] = rp.name
         ev["_source_file"] = rp.name
@@ -720,6 +726,10 @@ def run(ctx: RunContext, tree_name: str = "Event", verbose: bool = True,
 
         # Append to parquet — schema inferred from first batch, enforced after.
         pulse_tbl = pa.Table.from_pandas(pf, preserve_index=False)
+        i_mfr = pulse_tbl.schema.get_field_index("match_failure_reason")
+        if i_mfr >= 0 and pa.types.is_null(pulse_tbl.schema.field(i_mfr).type):
+            # every hit matched in this file (waveform hits, dp_match): keep the column a string
+            pulse_tbl = pulse_tbl.set_column(i_mfr, "match_failure_reason", pulse_tbl.column(i_mfr).cast(pa.string()))
         if pulse_writer is None:
             pulse_writer = pq.ParquetWriter(pulses_path, pulse_tbl.schema)
         pulse_writer.write_table(pulse_tbl)

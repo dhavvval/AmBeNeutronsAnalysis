@@ -75,6 +75,7 @@ COMMANDS: dict[tuple[str, str], str] = {
     ("plots", "datamc"):        "ambe.plots.datamc:cli",
     ("plots", "datamcclust"):   "ambe.plots.datamc_clustering:cli",
     ("plots", "datamcneutron"): "ambe.plots.datamc_clustering:cli_neutron",
+    ("plots", "datamcwave"):    "ambe.plots.datamc_waveform:cli",
     ("plots", "datamczero"):    "ambe.plots.datamc_zerobin:cli",
     ("plots", "clustereff"):    "ambe.plots.clustereff:cli",
     ("pipeline", "mc"):         "ambe.pipeline:run_mc",
