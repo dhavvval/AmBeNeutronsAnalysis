@@ -41,6 +41,7 @@ COMMANDS: dict[tuple[str, str], str] = {
     ("mc", "hitcomp"):          "ambe.mc.hit_accounting:cli",
     ("mc", "timewindows"):      "ambe.mc.hit_time_windows:cli",
     ("mc", "capture"):          "ambe.mc.capture_truth:cli",
+    ("mc", "trackwindows"):     "ambe.mc.track_windows:cli",
     ("mc", "displays"):         "ambe.diagnostics.plot_cluster_event_displays:cli",
     ("data", "process"):        "ambe.data.processor:cli",
     # Same Stage 2 as `data process`, with no Stage 1. MC has no waveforms, so every
