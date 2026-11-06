@@ -574,7 +574,7 @@ def _toy_one(args):
     fF = c_obs / N_F
     c_toy = rng.multinomial(int(N_F), fF).astype(float)
     tm = {lab: parents[lab].with_weights(rng.multinomial(W_tmpl[lab], parents[lab].w / parents[lab].W))
-          for lab in parents}
+          for lab in sorted(parents)}
     d = np.empty((len(d_tot), K1))
     for r, (lab, N) in enumerate(zip(pb_kw["labels"], d_tot)):
         M, _ = parents[lab].pmf(s_true, mu_true)
@@ -598,9 +598,9 @@ def closure(ctx: RunContext, su: Setup, n_toys: int, jobs: int) -> None:
     tf, pf = tuple(cb["template_files"]), tuple(cb["pseudo_files"])
     base = problem(su)
     labs = [su.labels[r] for r in base.runs]
-    tA = {lab: template(su.sig, lab, su.K, tf) for lab in set(labs)}
-    tB = {lab: template(su.sig, lab, su.K, pf) for lab in set(labs)}
-    parent = {lab: template(su.sig, lab, su.K) for lab in set(labs)}
+    tA = {lab: template(su.sig, lab, su.K, tf) for lab in sorted(set(labs))}
+    tB = {lab: template(su.sig, lab, su.K, pf) for lab in sorted(set(labs))}
+    parent = {lab: template(su.sig, lab, su.K) for lab in sorted(set(labs))}
     N = base.d.sum(axis=1)
     N_F = base.c.sum()
     rows_a = []

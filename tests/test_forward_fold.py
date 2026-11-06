@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
@@ -163,3 +164,26 @@ def test_neutcapture_lmfit_equals_scipy():
     for k in ("A", "therm_us", "tau_us", "C_per_us", "therm_err", "tau_err", "C_err", "chi2"):
         assert b[k] == pytest.approx(a[k], rel=1e-6), k
     assert b["ndf"] == a["ndf"]
+
+
+
+def test_toy_draws_do_not_depend_on_label_order(monkeypatch):
+    seen = []
+
+    def fake_fit(pb):
+        seen.append((pb.d.copy(), [t.w.copy() for t in pb.tmpl], pb.c.copy()))
+        G = pb.G
+        return SimpleNamespace(x=np.zeros(2 * G), cov=np.eye(2 * G), ok=True)
+    monkeypatch.setattr(ff, "fit", fake_fit)
+
+    def tm(k1, k2):
+        return ff.Template([(), (1,), (1, 1)], np.array([0, k1, 0]), np.array([30.0, 50.0, 20.0 + k2]), 4)
+    parents = {"b": tm(0, 0), "a": tm(1, 5)}
+    W = {"a": 100, "b": 100}
+    kw = dict(runs=[1, 2], groups=["g"], gidx=np.array([0, 0]), labels=["a", "b"], bb_share="template", bb_model="cov")
+    rest = (np.array([500.0, 600.0]), np.array([10.0, 5.0, 2.0, 0.0, 0.0]), np.array([0.3, 0.4]))
+    ff._toy_one((kw, 7, 0.9, 0.01, W, parents, *rest))
+    ff._toy_one((kw, 7, 0.9, 0.01, W, dict(reversed(list(parents.items()))), *rest))
+    (d1, w1, c1), (d2, w2, c2) = seen
+    assert np.array_equal(d1, d2) and np.array_equal(c1, c2)
+    assert all(np.array_equal(a, b) for a, b in zip(w1, w2))
