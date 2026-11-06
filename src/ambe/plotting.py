@@ -62,6 +62,72 @@ def two_titles(fig, simple: str, detail: str, rect=(0, 0, 1, 1), simple_size: fl
     return top
 
 
+def main_resid_axes(nrows: int = 1, ncols: int = 1, figsize=None, ratio=(3, 1), hspace: float = 0.05):
+    """Figure with a main axis and a residual axis under it in every cell (shared x).
+    Returns fig, main, resid; main and resid are (nrows, ncols) object arrays."""
+    import numpy as np
+    fig = plt.figure(figsize=figsize or (6.4 * ncols, 5.0 * nrows))
+    outer = fig.add_gridspec(nrows, ncols)
+    main = np.empty((nrows, ncols), dtype=object)
+    resid = np.empty((nrows, ncols), dtype=object)
+    for i in range(nrows):
+        for j in range(ncols):
+            inner = outer[i, j].subgridspec(2, 1, height_ratios=ratio, hspace=hspace)
+            main[i, j] = fig.add_subplot(inner[0])
+            resid[i, j] = fig.add_subplot(inner[1], sharex=main[i, j])
+            main[i, j].tick_params(labelbottom=False)
+    return fig, main, resid
+
+
+def _sym_ylim(ax, r, floor: float):
+    import numpy as np
+    r = np.asarray(r, float)
+    m = np.nanmax(np.abs(r[np.isfinite(r)])) if np.isfinite(r).any() else floor
+    m = max(floor, 1.15 * m)
+    ax.set_ylim(-m, m)
+
+
+def draw_pull(ax, x, a, sa, b, sb, label: str = "pull", floor: float = 3.0, lim: Optional[float] = None, **kw):
+    """Residual (a - b) / sqrt(sa^2 + sb^2) as points + line; bins with zero error are left out. With lim the axis is
+    fixed to +-lim and points beyond it are drawn at the edge. Returns the (unclipped) pull array."""
+    import numpy as np
+    a, sa, b, sb = (np.asarray(v, float) for v in (a, sa, b, sb))
+    s = np.sqrt(sa ** 2 + sb ** 2)
+    pull = np.where(s > 0, (a - b) / np.where(s > 0, s, 1.0), np.nan)
+    kw.setdefault("color", "k")
+    kw.setdefault("marker", "o")
+    kw.setdefault("ms", 3.5)
+    kw.setdefault("lw", 1.0)
+    ax.plot(x, pull if lim is None else np.clip(pull, -lim, lim), **kw)
+    ax.set_ylabel(label)
+    ax.set_gid("residual")
+    if lim is None:
+        _sym_ylim(ax, pull, floor)
+    else:
+        ax.set_ylim(-1.05 * lim, 1.05 * lim)
+    return pull
+
+
+def draw_diff(ax, x, a, sa, b, sb, label: str = "difference", floor: float = 0.0, center_zero: bool = True, **kw):
+    """Residual a - b with error sqrt(sa^2 + sb^2) as points + line; center_zero=False lets the axis autoscale
+    (for an offset that never crosses zero). Returns (diff, err)."""
+    import numpy as np
+    a, sa, b, sb = (np.asarray(v, float) for v in (a, sa, b, sb))
+    d, e = a - b, np.sqrt(sa ** 2 + sb ** 2)
+    kw.setdefault("color", "k")
+    kw.setdefault("marker", "o")
+    kw.setdefault("ms", 3.5)
+    kw.setdefault("lw", 1.0)
+    kw.setdefault("capsize", 0)
+    ax.errorbar(x, d, yerr=e, **kw)
+    ax.set_ylabel(label)
+    ax.set_gid("residual")
+    if center_zero:
+        lim = np.concatenate([np.abs(d + e), np.abs(d - e)])
+        _sym_ylim(ax, lim / 1.15, floor if floor > 0 else 1e-12)
+    return d, e
+
+
 def save_plot(
     fig,
     ctx: RunContext,
