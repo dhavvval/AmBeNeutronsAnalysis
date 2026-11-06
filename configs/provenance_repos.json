@@ -4,7 +4,8 @@
     "EB_BC_TA": "/exp/annie/app/users/dajana/EB_BC_TA",
     "EventBuild": "/exp/annie/app/users/dajana/EventBuild",
     "AmBeNeutronsAnalysis": "/exp/annie/app/users/dajana/AmBeNeutronsAnalysis",
-    "grid_wcsim": "/exp/annie/app/users/dajana/grid_wcsim"
+    "grid_wcsim": "/exp/annie/app/users/dajana/grid_wcsim",
+    "EB_BC_TA_pr_full": "/exp/annie/app/users/dajana/EB_BC_TA_pr/full"
   },
   "images": {
     "wcsim": "/cvmfs/singularity.opensciencegrid.org/anniesoft/wcsim:latest",
