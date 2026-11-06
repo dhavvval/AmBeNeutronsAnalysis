@@ -55,7 +55,7 @@ def _overlay_veto(ctx: RunContext, spec: dict, ev: pd.DataFrame) -> np.ndarray:
     return v
 
 
-def _data_tables(ctx: RunContext, blk: dict, gate: str, tag: str):
+def _data_tables(ctx: RunContext, blk: dict, gate: str, tag: str, reco: bool = True):
     from ..data.processor import AmBeNeutronProcessing
     pos = AmBeNeutronProcessing().source_positions
     pos.update({int(k): tuple(float(x) for x in v)
@@ -73,10 +73,12 @@ def _data_tables(ctx: RunContext, blk: dict, gate: str, tag: str):
         base = f"{ctx.run_name}__random_%s_{run}"
         tr = pd.read_parquet(ctx.parquet_path(base % "triggers"))
         cf = pd.read_parquet(ctx.parquet_path(base % "cfclusters"))
-        rc = pd.read_parquet(ctx.parquet_path(base % "recoclusters" + f"__{tag}"))
         tr = tr.rename(columns={"event_tank_time": "eventTankTime", "n_clusters": "numberOfClusters"})
         if gate_set is not None:
             gs = gate_set[gate_set.run == run]
+            if gs.empty and blk.get("skip_ungated_runs"):
+                print(f"[clusterindex] run {run}: no rows in the gate EventIndex, skipped (skip_ungated_runs)")
+                continue
             if gs.empty:
                 raise SystemExit(f"[clusterindex] run {run} has no rows in the gate EventIndex")
             n_ref = len(gs)
@@ -87,11 +89,14 @@ def _data_tables(ctx: RunContext, blk: dict, gate: str, tag: str):
         tr = tr.assign(run=run, is_cosmic=tr.trigger.map(v).fillna(False).astype(bool))
         x, y, z = pos[run]
         tr = tr.assign(sourceX=float(x), sourceY=float(y), sourceZ=float(z))
-        rc = rc.rename(columns={"f_pe_total": "pe"})[["trigger", "method", "t_med", "pe", "n_hits"]]
         trig_all.append(tr[["run", "trigger", "eventTankTime", "numberOfClusters", "is_cosmic",
                             "sourceX", "sourceY", "sourceZ"]])
-        cand_all.append(rc.assign(run=run))
-    return pd.concat(trig_all, ignore_index=True), pd.concat(cand_all, ignore_index=True), ["run", "trigger"]
+        if reco:
+            rc = pd.read_parquet(ctx.parquet_path(base % "recoclusters" + f"__{tag}"))
+            rc = rc.rename(columns={"f_pe_total": "pe"})[["trigger", "method", "t_med", "pe", "n_hits"]]
+            cand_all.append(rc.assign(run=run))
+    cand = pd.concat(cand_all, ignore_index=True) if cand_all else None
+    return pd.concat(trig_all, ignore_index=True), cand, ["run", "trigger"]
 
 
 def _mc_tables(ctx: RunContext, blk: dict, tag: str):
@@ -225,7 +230,7 @@ def build_treebox(ctx: RunContext, gate: str, methods: list, tag: str):
     blk = (ctx.extra or {}).get("clusterindex") or {}
     lo, hi = (float(x) for x in blk["window_ns"])
     c = CutCriteria()
-    tr, _, key = _data_tables(ctx, blk, gate, tag)
+    tr, _, key = _data_tables(ctx, blk, gate, tag, reco=False)
     rows, flow = [], []
     for run in tr.run.unique():
         cf = pd.read_parquet(ctx.parquet_path(f"{ctx.run_name}__random_cfclusters_{run}"))

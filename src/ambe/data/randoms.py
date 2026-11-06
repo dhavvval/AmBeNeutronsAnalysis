@@ -181,7 +181,12 @@ def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
                                                  "e.g. 6264p6256; --cluster then clusters the pool only")
     p.add_argument("--pool-veto", choices=["cosmic", "none"], default=None,
                    help="with --pool: cosmic = drop triggers the cosmic veto rejects, none = keep all")
+    p.add_argument("--no-hits", action="store_true",
+                   help="write only random_triggers and random_cfclusters (no hits parquet); "
+                        "for tree-cluster counts (`ambe stats clusterindex --tree-box`)")
     a = p.parse_args(list(argv) if argv else [])
+    if a.no_hits and (a.cluster or a.pool or a.from_parquet):
+        p.error("--no-hits is for the ROOT read alone (no --cluster, --pool or --from-parquet)")
     if a.cluster and (a.mc_config is None or a.hit_window is None):
         p.error("--cluster needs --mc-config and --hit-window")
     if a.from_parquet and not a.cluster and not a.pool:
@@ -212,6 +217,8 @@ def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
         else:
             hits, trig, cfc = extract(rf)
             for base, df in zip(names, (hits, trig, cfc)):
+                if a.no_hits and base == "random_hits":
+                    continue
                 df.to_parquet(ctx.parquet_path(f"{ctx.run_name}__{base}_{run}"), index=False)
         _report(rf.name, hits, trig, cfc)
         if a.pool:
