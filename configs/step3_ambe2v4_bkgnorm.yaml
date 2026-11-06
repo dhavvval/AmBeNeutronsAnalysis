@@ -25,6 +25,7 @@ fold:
   ic_cosmic: 3000
   time_fit_max_us: 66        # last full 1-us bin; the readout ends near 66.5 us (data and MC)
   flat_window_us: 64.5       # 2 to 66.5 us: length that turns the flat rate into mu_ind
+  time_fit_backend: lmfit    # time-spectrum check through lmfit least_squares (same fit as scipy, tested); default scipy
   closure:
     template_files: [0, 24]
     pseudo_files: [25, 49]

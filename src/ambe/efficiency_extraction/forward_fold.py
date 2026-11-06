@@ -835,6 +835,26 @@ def _neutcapture(h: np.ndarray, var: np.ndarray, t: np.ndarray) -> dict:
                 chi2=float((r.fun ** 2).sum()), ndf=int(ok.sum()) - 4)
 
 
+def _neutcapture_lmfit(h: np.ndarray, var: np.ndarray, t: np.ndarray) -> dict:
+    """_neutcapture through lmfit (method least_squares, same start values, bounds and weights)."""
+    import lmfit
+    from ..plots.basic import NeutCapture
+    ok = var > 0
+    m = lmfit.Model(NeutCapture)
+    p = m.make_params(A=2.0 * h.max(), therm=3.0, tau=29.0, B=0.2 * float(np.mean(h[-8:])))
+    for k, lo, hi in (("A", 0, np.inf), ("therm", 0.05, 30), ("tau", 1, 200), ("B", -np.inf, np.inf)):
+        p[k].min, p[k].max = lo, hi
+    r = m.fit(h[ok], p, t=t[ok], weights=1.0 / np.sqrt(var[ok]), method="least_squares", scale_covar=False)
+    e = {k: float(r.params[k].stderr) if r.params[k].stderr is not None else np.nan for k in r.params}
+    v = {k: float(r.params[k].value) for k in r.params}
+    return dict(A=v["A"], therm_us=v["therm"], therm_err=e["therm"], tau_us=v["tau"], tau_err=e["tau"],
+                C_per_us=v["B"], C_err=e["B"], chi2=float(r.chisqr), ndf=int(ok.sum()) - 4)
+
+
+TIME_FITTERS = {"scipy": ("scipy.optimize.least_squares", _neutcapture),
+                "lmfit": ("lmfit least_squares", _neutcapture_lmfit)}
+
+
 def time_spectrum(ctx: RunContext, su: Setup, fit_params: Optional[pd.DataFrame]) -> pd.DataFrame:
     w_us = 1.0
     lo = su.window[0] / 1000.0
@@ -857,6 +877,10 @@ def time_spectrum(ctx: RunContext, su: Setup, fit_params: Optional[pd.DataFrame]
     sl = np.polyfit(t, hd / nd, 1, w=1 / np.sqrt(np.clip(hd, 1, None)) * nd, cov=True)
     rd = dict(slope=sl[0][0], slope_err=float(np.sqrt(sl[1][0, 0])))
     flat_dummy = c_dummy
+    backend = str(su.blk.get("time_fit_backend", "scipy"))
+    if backend not in TIME_FITTERS:
+        raise SystemExit(f"[forwardfold] fold.time_fit_backend must be one of {sorted(TIME_FITTERS)}, got {backend}")
+    fitter_name, fitter = TIME_FITTERS[backend]
     rows, spec = [], []
     fac = su.fac.assign(group=group_of(su.fac, "port"))
     for g, f in fac.groupby("group"):
@@ -868,7 +892,7 @@ def time_spectrum(ctx: RunContext, su: Setup, fit_params: Optional[pd.DataFrame]
         h = hs - Fsum * hb
         var = hs + Fsum ** 2 * hb
         N_A = N - Fsum * nb
-        r = _neutcapture(h, np.clip(var, 1, None), t)
+        r = fitter(h, np.clip(var, 1, None), t)
         c = r["C_per_us"] / N_A
         mu_t = (c - c_dummy) * t_eff
         mu_t_err = np.hypot(r["C_err"] / N_A, c_dummy_err) * t_eff
@@ -878,6 +902,8 @@ def time_spectrum(ctx: RunContext, su: Setup, fit_params: Optional[pd.DataFrame]
                    dummy_flat_per_trig_us=c_dummy, dummy_flat_err=c_dummy_err, dummy_mean_per_trig_us=flat_dummy,
                    dummy_slope_per_us2=rd["slope"], dummy_slope_err=rd["slope_err"], dummy_trig=nd,
                    mu_ind_time=mu_t, mu_ind_time_err=mu_t_err)
+        if backend != "scipy":
+            row["fitter"] = fitter_name
         if fit_params is not None:
             q = fit_params[(fit_params.variant == "nominal") & (fit_params.group == g)]
             if len(q):

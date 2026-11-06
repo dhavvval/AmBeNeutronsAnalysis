@@ -151,3 +151,15 @@ def test_neutcapture_recovers_tau_and_flat_level():
     r = ff._neutcapture(h, np.clip(h, 1, None), t)
     assert r["tau_us"] == pytest.approx(29.0, abs=4 * r["tau_err"])
     assert r["C_per_us"] == pytest.approx(300.0, abs=4 * r["C_err"])
+
+
+def test_neutcapture_lmfit_equals_scipy():
+    rng = np.random.default_rng(5)
+    t = np.arange(2.0, 66.0) + 0.5
+    lam = 3500 * (1 - np.exp(-t / 6.0)) * np.exp(-t / 30.0) + 150.0
+    h = rng.poisson(lam).astype(float) - 0.3
+    a = ff._neutcapture(h, np.clip(h, 1, None), t)
+    b = ff._neutcapture_lmfit(h, np.clip(h, 1, None), t)
+    for k in ("A", "therm_us", "tau_us", "C_per_us", "therm_err", "tau_err", "C_err", "chi2"):
+        assert b[k] == pytest.approx(a[k], rel=1e-6), k
+    assert b["ndf"] == a["ndf"]
