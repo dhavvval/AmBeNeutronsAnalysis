@@ -488,6 +488,15 @@ def foldeff(data_ctx: RunContext, mc: RunContext, methods: list, versions: list,
 
 def cli_foldeff(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     from ..context import load_context
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--fold-model", choices=["pool", "forward"], default="pool",
+                     help="pool: the fold below (default); forward: the step-3 forward fold "
+                          "(efficiency_extraction.forward_fold, config block fold:)")
+    k, rest = pre.parse_known_args(list(argv) if argv else [])
+    if k.fold_model == "forward":
+        from .forward_fold import cli as forward_cli
+        return forward_cli(ctx, rest)
+    argv = rest
     p = argparse.ArgumentParser(prog="ambe stats foldeff")
     p.add_argument("--mc-config", required=True)
     p.add_argument("--methods", required=True)
