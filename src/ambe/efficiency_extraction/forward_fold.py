@@ -1035,14 +1035,18 @@ def plots(ctx: RunContext) -> None:
 # ---------------------------------------------------------------------------------------------- CLI
 def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     p = argparse.ArgumentParser(prog="ambe stats foldeff --fold-model forward")
-    p.add_argument("--stage", choices=["closure", "data", "checks", "plots"], required=True,
+    p.add_argument("--stage", choices=["closure", "data", "checks", "plots", "datamc", "deckplots"], required=True,
                    help="closure: Asimov + toys on MC and the background run only; data: the fit with its refits; "
-                        "checks: time-spectrum mu_ind and the IC > 3000 tank closure")
+                        "checks: time-spectrum mu_ind and the IC > 3000 tank closure; datamc / deckplots: the "
+                        "Data/MC and Data/Data tables and the deck figures with residual panels (forward_fold_datamc)")
     p.add_argument("--toys", type=int, default=None, help="toys per injection point (fold.closure.n_toys otherwise)")
     p.add_argument("--jobs", type=int, default=1)
     a = p.parse_args(list(argv) if argv else [])
     if a.stage == "plots":
         return plots(ctx)
+    if a.stage == "deckplots":
+        from .forward_fold_datamc import deckplots
+        return deckplots(ctx)
     su = setup(ctx)
     print(f"[forwardfold] factors {su.blk['factors_csv']} md5 OK; window {su.window[0]:g}-{su.window[1]:g} ns; "
           f"bins 0..{su.K - 1} + >= {su.K}; {len(su.fac)} source runs; background run {su.bkg_run} "
@@ -1054,6 +1058,9 @@ def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
         closure(ctx, su, a.toys or int(su.blk["closure"]["n_toys"]), a.jobs)
     elif a.stage == "data":
         data_fit(ctx, su)
+    elif a.stage == "datamc":
+        from .forward_fold_datamc import datamc
+        datamc(ctx, su)
     else:
         prm = ctx.csv_path("forwardfold_params")
         fp = pd.read_csv(prm) if Path(prm).exists() else None
