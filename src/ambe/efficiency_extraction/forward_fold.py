@@ -1035,10 +1035,13 @@ def plots(ctx: RunContext) -> None:
 # ---------------------------------------------------------------------------------------------- CLI
 def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     p = argparse.ArgumentParser(prog="ambe stats foldeff --fold-model forward")
-    p.add_argument("--stage", choices=["closure", "data", "checks", "plots", "datamc", "deckplots"], required=True,
+    p.add_argument("--stage", choices=["closure", "data", "checks", "plots", "datamc", "focus", "deckplots"],
+                   required=True,
                    help="closure: Asimov + toys on MC and the background run only; data: the fit with its refits; "
                         "checks: time-spectrum mu_ind and the IC > 3000 tank closure; datamc / deckplots: the "
-                        "Data/MC and Data/Data tables and the deck figures with residual panels (forward_fold_datamc)")
+                        "Data/MC and Data/Data tables and the deck figures with residual panels (forward_fold_datamc); "
+                        "focus: one position in detail (--focus), after data and datamc")
+    p.add_argument("--focus", default="5,0", help="focus stage: source position as 'port,y' (default 5,0)")
     p.add_argument("--toys", type=int, default=None, help="toys per injection point (fold.closure.n_toys otherwise)")
     p.add_argument("--jobs", type=int, default=1)
     a = p.parse_args(list(argv) if argv else [])
@@ -1061,6 +1064,9 @@ def cli(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     elif a.stage == "datamc":
         from .forward_fold_datamc import datamc
         datamc(ctx, su)
+    elif a.stage == "focus":
+        from .forward_fold_datamc import focus
+        focus(ctx, su, a.focus)
     else:
         prm = ctx.csv_path("forwardfold_params")
         fp = pd.read_csv(prm) if Path(prm).exists() else None
