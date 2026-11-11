@@ -1,0 +1,7 @@
+run_name: pr6_pulses
+campaign: upstream PRs (PMTWaveformSim waveform-hit truth, PR 6 slim vs full)
+description: >
+  MC pulses as PhaseIIADCHitFinder finds them in PMTWaveformSim waveforms (EB_BC_TA feature/PMTWaveformHits plus
+  throwaway PUL/MCH/RAW prints), and the comparison of the #392 clock-tick window with the simulated-peak rule.
+  Read by `ambe plots pulseshape`.
+output_root: ambe_output

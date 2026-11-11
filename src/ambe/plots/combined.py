@@ -18,7 +18,7 @@ from scipy.optimize import curve_fit
 from scipy.stats import chi2
 
 from ..context import RunContext
-from ..io import inputs_from_ctx, load_csvs
+from ..io import inputs_from_ctx, load_csvs, event_key_columns as _event_key
 from ..plotting import save_plot, set_style
 
 
@@ -44,24 +44,45 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     ct = df["clusterTime"]
 
     # Cuts -- can override via config
-    pe_max = ctx.cuts.get("pe_max", np.inf)
-    cb_max = ctx.cuts.get("charge_balance_max", np.inf)
-    sel = (pe < pe_max) & (ccb < cb_max)
+    # How to LABEL these figures. It must come from selection_label, not from
+    # pe_max / charge_balance_max: in the MVA config those two keys are the COSMIC
+    # veto thresholds (clusterTime < 2 us or clusterPE > 100 drops the event), not a
+    # neutron box, so building the title from them claimed a box cut that the MVA
+    # analysis does not apply. The clusters arriving here are already selected --
+    # this stage applies no cut of its own.
+    sel_label = ctx.cuts.get("selection_label")
+    if not sel_label:
+        pe_max = ctx.cuts.get("pe_max", np.inf)
+        cb_max = ctx.cuts.get("charge_balance_max", np.inf)
+        sel_label = f"box cuts PE ≤ {pe_max}, CB < {cb_max}, t ≥ 2 µs, hits ≥ 5"
+    # (A `sel = (pe < pe_max) & (ccb < cb_max)` mask used to be computed here and
+    # never used anywhere -- removed rather than left to imply a cut is applied.)
 
-    event_counts = df.groupby("eventTankTime")["clusterTime"].transform("count")
+    # THE EVENT KEY IS (run, eventTankTime), NEVER eventTankTime ALONE.
+    # In data, eventTankTime is a globally unique ns timestamp and the run column is
+    # redundant -- grouping on the pair is a strict refinement that changes nothing.
+    # In MC it is eventNumber (0-999, because the MC's eventTimeTank is identically 0),
+    # so grouping on it alone would merge one event from EVERY run into a single group:
+    # the multiplicity histogram would peak near the number of runs instead of near 1,
+    # and every delta_t would be a difference between clusters in unrelated runs. That
+    # failure produces a plausible-looking plot, not an error, which is why the key is
+    # built here rather than assumed.
+    ekey = _event_key(df, "plots.combined")
+    event_counts = df.groupby(ekey)["clusterTime"].transform("count")
     multi = df[event_counts > 1].copy()
-    multi["first_cluster_time"] = multi.groupby("eventTankTime")["clusterTime"].transform("min")
+    multi["first_cluster_time"] = multi.groupby(_event_key(multi, "plots.combined"))[
+        "clusterTime"].transform("min")
     multi["delta_t"] = multi["clusterTime"] - multi["first_cluster_time"]
     delta_t_values = multi.loc[multi["delta_t"] > 0, "delta_t"]
-    neutron_multiplicity = df["eventTankTime"].value_counts()
+    neutron_multiplicity = df.groupby(ekey).size()
 
     # 1. Delta-t between first and subsequent clusters
     fig, ax = plt.subplots()
     ax.hist(delta_t_values, bins=50, color="coral", edgecolor="black")
-    ax.set_title(ctx.title("Δt Between First and Subsequent Clusters"))
+    ax.set_title(f"{sel_label}\n" + ctx.title("Δt between first and subsequent clusters"))
     ax.set_xlabel("Δt (μs)")
     ax.set_ylabel("Number of Subsequent Clusters")
-    ax.grid(axis="y", linestyle="--", alpha=0.7)
+    ax.grid(False)          # house style: title only, no gridlines
     save_plot(fig, ctx, "delta_t_first_subsequent")
 
     # 2. Neutron multiplicity
@@ -70,15 +91,16 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None):
             color="lightblue", linewidth=0.5, align="left")
     ax.set_xlabel("Neutron multiplicity")
     ax.set_ylabel("Counts")
-    ax.set_title(ctx.title(f"AmBe Neutron Multiplicity (PE < {pe_max}, CCB < {cb_max})"))
+    ax.set_title(f"{sel_label}\n" + ctx.title("Neutron multiplicity per trigger"))
     save_plot(fig, ctx, "neutron_multiplicity")
 
     # 3. Cluster PE vs Charge Balance
     fig, ax = plt.subplots()
     h = ax.hist2d(pe, ccb, bins=200, cmap="viridis",
-                  range=[[-10, 500], [0.1, 1.0]], cmin=1)
+                  range=[[0, float(ctx.cuts.get("pe_max", 100)) + 20],
+                         [0.1, 0.5]], cmin=1)
     fig.colorbar(h[3], ax=ax, label="Counts")
-    ax.set_title(ctx.title("Cluster PE vs Charge Balance"))
+    ax.set_title(f"{sel_label}\n" + ctx.title("Cluster PE vs charge balance"))
     ax.set_xlabel("Cluster PE")
     ax.set_ylabel("Cluster Charge Balance")
     save_plot(fig, ctx, "cluster_pe_vs_cb")
@@ -124,7 +146,7 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     ax.set_xlabel(r"Cluster Time [$\mu s$]")
     ax.set_ylabel("Counts")
     ax.legend()
-    ax.set_title(ctx.title(f"Neutron Capture Time (PE < {pe_max}, CCB < {cb_max})"))
+    ax.set_title(f"{sel_label}\n" + ctx.title("Capture time, pooled over all positions"))
     save_plot(fig, ctx, "neutron_capture_time_fit")
 
     # 5. Fit residuals
@@ -134,7 +156,7 @@ def run(ctx: RunContext, argv: Optional[Iterable[str]] = None):
     ax.axhline(0, color="gray", linestyle="--")
     ax.set_xlabel("Time [μs]")
     ax.set_ylabel("Normalised Residual")
-    ax.set_title(ctx.title("Capture-Time Fit Residuals"))
+    ax.set_title(f"{sel_label}\n" + ctx.title("Capture-time fit residuals"))
     save_plot(fig, ctx, "capture_time_fit_residuals")
 
     print(f"[plots.combined] chi2/ndof = {chi2_ndof:.2f}  p = {p_value:.3f}")

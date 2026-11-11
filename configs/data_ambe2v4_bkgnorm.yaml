@@ -1,0 +1,49 @@
+run_name: AmBe2.0v4_bkgnorm
+display_label: "AmBe v4 data, all 34 runs, rebuilt with EB_BC_TA_pr/full (C++ time merge 50/2000)"
+campaign: "AmBe 2.0v4"
+description: >
+  Background-normalisation campaign (WORKLOG_bkgnorm_reprocess.md). All 34 AmBe 2.0v4 runs (31 source runs
+  + dummy runs 6254, 6256 + no-source run 6264) from the 2026-10-30 rebuild: BeamCluster_prfull_cppnms
+  (ClusterFinder 20 ns / 5 hits + C++ time merge 50/2000) and AmBeWaveforms_prfull, both from the existing
+  ProcessedData with EB_BC_TA_pr/full. Validated 2026-11-03 against the old files. The all28_box_veto tag
+  stays as the reference and is not overwritten.
+
+output_root: ambe_output/ambe_data
+
+stage1:
+  data_directory: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/stage_v4/bkgnorm34
+  waveform_dir: /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/AmBeWaveforms_prfull
+  file_pattern: 'BeamCluster_(\d+)\.root'
+  campaign: 1
+  which_tree: 1
+  selection_mode: ic
+  ic_min: 700
+  ic_max: 1200
+  plot_ic: true
+  save_waveform_samples: false
+  tag: AmBe2.0v4_bkgnorm
+  dump_event_index: true
+  extra_source_positions:
+    6264: [0.0, 0.0, 0.0]
+    6265: [0.0, 0.0, 0.0]
+    6266: [0.0, 100.0, 0.0]
+    6270: [75.0, 0.0, 0.0]
+
+inputs:
+  trigger_summary:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_AmBe2.0v4_bkgnorm.csv
+  candidate_csvs:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBe2.0v4_bkgnorm_*.csv
+  event_index:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/EventIndex_AmBe2.0v4_bkgnorm_*.parquet
+
+cuts:
+  pe_max: 100
+  charge_balance_max: 0.45
+  time_min_ns: 2000
+  time_max_ns: 67000
+  cluster_hits_min: 5
+  plot_min_cluster_hits: 0
+  selection_label: "box cuts PE ≤ 100, CB < 0.45, t ≥ 2 µs, hits ≥ 5"
+
+fit_params: {}

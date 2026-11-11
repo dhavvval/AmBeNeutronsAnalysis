@@ -1,0 +1,29 @@
+run_name: AmBe2.0v4_port5_wfcuts
+display_label: "AmBe v4 Port 5, y = 0 and y = +50 source runs against the no-source run, AmBe small-PMT waveform cuts"
+campaign: "AmBe 2.0v4"
+description: >
+  Waveform-stage figures only (ambe plots waveformcuts): AmBe small-PMT integrated charge of every recorded
+  waveform for the two Port 5 source runs of the live-time / IC-sideband study (6046 y = 0, 6252 y = +50) and the
+  no-source run 6264, on one frame, normalised per recorded waveform. Gate = all28_box_veto (IC 700-1200 +
+  second-pulse veto); 6264 comes from effpair_box, the same gate.
+output_root: ambe_output
+
+stage1:
+  ic_min: 700
+  ic_max: 1200
+  tag: AmBe2.0v4_all28_box_veto
+
+inputs:
+  waveform_features:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/WaveformFeatures_AmBe2.0v4_all28_box_veto_6046.parquet
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/WaveformFeatures_AmBe2.0v4_all28_box_veto_6252.parquet
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/WaveformFeatures_AmBe2.0v4_effpair_box_6264.parquet
+  event_index:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/EventIndex_AmBe2.0v4_all28_box_veto_6046.parquet
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/EventIndex_AmBe2.0v4_all28_box_veto_6252.parquet
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/EventIndex_AmBe2.0v4_effpair_box_6264.parquet
+
+waveform_cuts:
+  source_runs: [6046, 6252]
+  background_run: 6264
+  sideband_ic: [1600, 2500]

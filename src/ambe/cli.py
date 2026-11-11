@@ -4,10 +4,11 @@
 After `pip install -e .`, a user can run:
 
     ambe --help
-    ambe mc process --config configs/mc_trial01.yaml
-    ambe mc optics  --config configs/mc_trial01.yaml
-    ambe plots basic --config configs/data_amb2v4.yaml
-    ambe pipeline mc --config configs/mc_trial01.yaml
+    ambe data process --config configs/data_ambe2v4_bkgnorm.yaml
+    ambe mc process   --config configs/mc_ambe_v3fix_wf_dtho6256.yaml
+    ambe mc capture   --config configs/mc_ambe_v3fix_wf_dtho6256.yaml
+    ambe stats foldeff --config configs/step3_ambe2v4_bkgnorm.yaml --fold-model forward --stage data
+    ambe plots basic  --config configs/data_ambe2v4_all28_box.yaml
 
 Each subcommand dispatches to a function in the corresponding module that
 accepts (ctx: RunContext, args: argparse.Namespace). Subcommands are registered
@@ -31,18 +32,56 @@ from .context import RunContext, load_context
 COMMANDS: dict[tuple[str, str], str] = {
     # group, cmd                 where to find it
     ("mc", "process"):          "ambe.mc.processor:cli",
+    ("mc", "cc"):               "ambe.mc.cc_selection:cli",
     ("mc", "optics"):           "ambe.mc.optics:cli",
+    ("mc", "features"):         "ambe.mc.cluster_features:cli",
     ("mc", "discriminate"):     "ambe.mc.cluster_discrimination:cli",
     ("mc", "match"):            "ambe.mc.cluster_matching:cli",
     ("mc", "timespread"):       "ambe.mc.time_spread:cli",
     ("mc", "hitcomp"):          "ambe.mc.hit_accounting:cli",
+    ("mc", "timewindows"):      "ambe.mc.hit_time_windows:cli",
+    ("mc", "capture"):          "ambe.mc.capture_truth:cli",
+    ("mc", "trackwindows"):     "ambe.mc.track_windows:cli",
+    ("mc", "displays"):         "ambe.diagnostics.plot_cluster_event_displays:cli",
     ("data", "process"):        "ambe.data.processor:cli",
-    ("data", "eff"):            "ambe.data.eff:cli",
+    # Same Stage 2 as `data process`, with no Stage 1. MC has no waveforms, so every
+    # cluster is treated as having passed the good-waveform selection. Separate command
+    # rather than a flag so neither config kind can be run through the wrong path.
+    ("data", "processmc"):      "ambe.data.processor:cli_mc",
+    ("data", "eff"):            "ambe.data.processor:cli",
+    ("data", "icscan"):         "ambe.plots.icscan:cli",
+    ("data", "runtable"):       "ambe.diagnostics.runtable:cli",
+    ("data", "randoms"):        "ambe.data.randoms:cli",
+    ("leak", "features"):       "ambe.leak.features:cli",
+    ("leak", "pmtcharge"):      "ambe.leak.pmtcharge:cli",
+    ("plots", "icscan"):        "ambe.plots.icscan:cli",
+    ("diagnostics", "runtable"): "ambe.diagnostics.runtable:cli",
+    ("mc", "mva"):             "ambe.mc.mva_analysis:cli",
     ("plots", "basic"):         "ambe.plots.basic:cli",
     ("plots", "combined"):      "ambe.plots.combined:cli",
     ("plots", "heatmap"):       "ambe.plots.heatmap:cli",
-    ("plots", "phase2"):        "ambe.plots.phase2:cli",
-    ("stats", "core"):          "ambe.stats.core:cli",
+    ("plots", "provenance"):    "ambe.plots.provenance_deck:cli",
+    ("plots", "clustertruth"):  "ambe.plots.cluster_truth:cli",
+    ("plots", "windowcompare"): "ambe.plots.window_compare:cli",
+    ("plots", "efficiency"):    "ambe.efficiency_extraction.efficiency_thesis:cli",
+    # Waveform-stage companion to `plots efficiency`: the Stage-1 AmBe small-PMT
+    # selection, and whether the no-source run's flat background can be subtracted
+    # there rather than in the multiplicity fit.
+    ("plots", "waveformcuts"):  "ambe.plots.waveform_cuts:cli",
+    ("stats", "efficiency"):    "ambe.efficiency_extraction.efficiency_fit:cli",
+    ("stats", "clusterindex"):  "ambe.efficiency_extraction.recluster_index:cli",
+    ("stats", "clustereff"):    "ambe.efficiency_extraction.recluster_index:cli_fit",
+    ("stats", "foldeff"):       "ambe.efficiency_extraction.recluster_index:cli_foldeff",
+    ("plots", "datamc"):        "ambe.plots.datamc:cli",
+    ("plots", "datamcclust"):   "ambe.plots.datamc_clustering:cli",
+    ("plots", "datamcneutron"): "ambe.plots.datamc_clustering:cli_neutron",
+    ("plots", "datamcwave"):    "ambe.plots.datamc_waveform:cli",
+    ("plots", "datamczero"):    "ambe.plots.datamc_zerobin:cli",
+    ("plots", "livetime"):      "ambe.plots.livetime_sideband:cli",
+    ("plots", "nosourcenorm"):  "ambe.plots.nosource_norm:cli",
+    ("plots", "clustereff"):    "ambe.plots.clustereff:cli",
+    ("plots", "prvalidation"):  "ambe.plots.pr_validation:cli",
+    ("plots", "pulseshape"):    "ambe.plots.pulse_shape:cli",
     ("pipeline", "mc"):         "ambe.pipeline:run_mc",
     ("pipeline", "data"):       "ambe.pipeline:run_data",
 }
@@ -81,6 +120,9 @@ def main(argv=None):
     key = tuple(args._target.split(":"))
     if key not in COMMANDS:
         parser.error(f"unknown command: {key}")
+
+    from .provenance import record_ambe_run
+    record_ambe_run(ctx, *key, argv if argv is not None else sys.argv[1:])
 
     func = _load(COMMANDS[key])
     return func(ctx=ctx, argv=extra)

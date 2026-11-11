@@ -1,6 +1,6 @@
-from cmath import tau
-from itertools import chain
-import os          
+import os
+from pathlib import Path
+from ..paths import REPOSITORY_ROOT
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -10,17 +10,18 @@ import re
 from scipy.optimize import curve_fit
 from matplotlib.backends.backend_pdf import PdfPages
 from scipy.stats import chi2
-import ast
 import lmfit
 from lmfit.models import ExponentialGaussianModel, ConstantModel
-import pymc as pm
-import arviz as az
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 import matplotlib.colors as mcolors
-from scipy.special import erfc
-from scipy.optimize import minimize
-from mpl_toolkits.mplot3d import Axes3D
 
+
+
+BACKENDS = ("scipy", "lmfit")
+FIT_MIN, FIT_MAX = 2.0, 67.0
+EXPFLAT_MIN = 10.0
+USECOLS = ["eventID", "clusterTime", "sourceX", "sourceY", "sourceZ"]
+CAND_DIR = str(REPOSITORY_ROOT / "EventAmBeNeutronCandidatesData")
 
 
 class AmBeNeutronAnalyzer:
@@ -28,22 +29,37 @@ class AmBeNeutronAnalyzer:
     Modular analyzer for AmBe neutron data with separate functions for different analysis tasks.
     """
     
-    def __init__(self, data_directory: str = './EventAmBeNeutronCandidatesData/', 
-                 output_pdf: str = 'AmBevtestv4ch10.pdf'):
+    def __init__(self, data_directory: str = str(REPOSITORY_ROOT / 'EventAmBeNeutronCandidatesData'),
+                 output_pdf: str = str(REPOSITORY_ROOT / 'ambe_output' / 'capture_time.pdf'),
+                 campaign_label: str = 'AmBe 2.0v4',
+                 min_cluster_hits: int = 10,
+                 selection_label: str = ''):
         self.data_directory = data_directory
         self.output_pdf = output_pdf
+        # Plot-only hits cut applied in prepare_data. See the note there: it is not
+        # part of any published selection, so it has to be stated, not assumed.
+        self.min_cluster_hits = min_cluster_hits
+        self.selection_label = selection_label or (
+            'box cuts PE ≤ 100, CB < 0.45, t ≥ 2 µs, hits ≥ 5')
+        self.campaign_label = campaign_label
+        self.campaign_tag = campaign_label.replace(' ', '')
         self.source_groups = {}
         self.time_fit_values = []
         self.pyMC_summary = []
         self.lmfit_summary = []
+        self.capture_fit_rows = []
         
-        # ===== FITTING CONFIGURATION - SINGLE SOURCE OF TRUTH =====
-        # Change parameters here and all fitting methods will use them automatically
+        # Model bounds and histogram settings shared by fits and plot adapters.
         self.fitting_config = {
             'time_bins': 70,
             'time_range': (0, 70),
-            'fit_min_time': 2.0,
-            'fit_max_time': 67.0,
+            'fit_min_time': FIT_MIN,
+            'fit_max_time': FIT_MAX,
+            # Where the fitted curve is DRAWN from. Now equal to fit_min_time, so the
+            # drawn curve and the fitted range coincide and there is no extrapolated
+            # segment to distinguish. Kept as its own key so the two can be separated
+            # again without touching the fit.
+            'plot_min_time': 2.0,
             'initial_amplitude': 200.0,
             'initial_thermal_time': 5.0,
             'initial_capture_time': 25.0,
@@ -57,15 +73,15 @@ class AmBeNeutronAnalyzer:
         
         # Port information mapping
         self.port_info = {
-            (0, 100, 0): 'Port 5', (0, 50, 0): 'Port 5', (0, 0, 0): 'Port 5', 
-            (0, -50, 0): 'Port 5', (0, -100, 0): 'Port 5', (0, 55, 0): 'Port 5',
-            (0, 100, -75): 'Port 1', (0, 50, -75): 'Port 1', (0, 0, -75): 'Port 1', 
+            (0, 100, 0): 'Port 5', (0, 50, 0): 'Port 5', (0, 0, 0): 'Port 5',
+            (0, -50, 0): 'Port 5', (0, -100, 0): 'Port 5', (0, 55.3, 0): 'Port 5',
+            (0, 100, -75): 'Port 1', (0, 50, -75): 'Port 1', (0, 0, -75): 'Port 1',
             (0, -50, -75): 'Port 1', (0, -100, -75): 'Port 1',
-            (75, 100, 0): 'Port 4', (75, 50, 0): 'Port 4', (75, 0, 0): 'Port 4', 
+            (75, 100, 0): 'Port 4', (75, 50, 0): 'Port 4', (75, 0, 0): 'Port 4',
             (75, -50, 0): 'Port 4', (75, -100, 0): 'Port 4',
-            (0, 100, 102): 'Port 3', (0, 50, 102): 'Port 3', (0, 0, 102): 'Port 3', 
-            (0, -50, 102): 'Port 3', (0, -100, 102): 'Port 3', (0, -105, 102): 'Port 3',
-            (0, 100, 75): 'Port 2', (0, 50, 75): 'Port 2', (0, 0, 75): 'Port 2', 
+            (0, 100, 102): 'Port 3', (0, 50, 102): 'Port 3', (0, 0, 102): 'Port 3',
+            (0, -50, 102): 'Port 3', (0, -60, 102): 'Port 3', (0, -100, 102): 'Port 3', (0, -105.5, 102): 'Port 3',
+            (0, 100, 75): 'Port 2', (0, 50, 75): 'Port 2', (0, 0, 75): 'Port 2',
             (0, -50, 75): 'Port 2', (0, -100, 75): 'Port 2'
         }
         self.port_order = ["Port 1", "Port 5", "Port 2", "Port 3", "Port 4"]
@@ -116,17 +132,8 @@ class AmBeNeutronAnalyzer:
                 print(f"No data in file: {filename}")
                 continue
 
-            ###### Correct hitID swap as per johannes' suggestion ########
-            id1, id2 = 453, 455
-            if df['hitID'].astype(str).str.contains(f'{id1}|{id2}').any():
-                original_hitids = df['hitID'].copy()
-                df['hitID'] = (df['hitID'].astype(str)
-                              .str.replace(f'{id1}', 'TEMP', regex=False)
-                              .str.replace(f'{id2}', f'{id1}', regex=False)
-                              .str.replace('TEMP', f'{id2}', regex=False))
-                
-                if (df['hitID'] != original_hitids).any():
-                    print(f"Swapped hitID {id1} and {id2} in file: {filename}")
+            if 'run' not in df.columns:
+                df['run'] = run_number
 
             x, y, z = df["sourceX"].iloc[0], df["sourceY"].iloc[0], df["sourceZ"].iloc[0]
             source_key = (round(x, 3), round(y, 3), round(z, 3))
@@ -141,14 +148,27 @@ class AmBeNeutronAnalyzer:
         # Convert cluster time to microseconds
         combined_df['clusterTime'] = combined_df['clusterTime'] / 1000
 
-        # Extract relevant columns
-        #combined_df = combined_df[(combined_df['clusterHits'] >= 10) & (combined_df['clusterPE'] < ) & (combined_df['clusterChargeBalance'] < 0.5)]
-        # & (combined_df['clusterPE'] < 60) & (combined_df['clusterChargeBalance'] < 0.5)]
-        combined_df = combined_df[(combined_df['clusterHits'] >= 10) ]
-        
+        # Optional plotting cut, applied after the configured candidate selection.
+        if self.min_cluster_hits:
+            n_before = len(combined_df)
+            combined_df = combined_df[combined_df['clusterHits'] >= self.min_cluster_hits]
+            print(f"  plot cut clusterHits >= {self.min_cluster_hits}: "
+                  f"{n_before:,} -> {len(combined_df):,} clusters")
+
+        # Runs reuse event numbers in MC, so pooled event keys must include the run.
+        if 'run' in combined_df.columns:
+            combined_df = combined_df.copy()
+            combined_df['_evkey'] = (combined_df['run'].astype(str) + ':'
+                                     + combined_df['eventTankTime'].astype(str))
+        else:
+            print("[plots.basic] WARNING: no `run` column; keying events on "
+                  "eventTankTime alone. Correct only for real data.")
+            combined_df = combined_df.copy()
+            combined_df['_evkey'] = combined_df['eventTankTime'].astype(str)
+
         EventID = combined_df['eventID'].value_counts()
-        EventTime = combined_df['eventTankTime'].value_counts()
-        event_counts = combined_df.groupby('eventTankTime')['clusterTime'].transform('count')
+        EventTime = combined_df['_evkey'].value_counts()
+        event_counts = combined_df.groupby('_evkey')['clusterTime'].transform('count')
         PE = combined_df['clusterPE']
         CCB = combined_df['clusterChargeBalance']
         CT = combined_df['clusterTime']
@@ -157,8 +177,8 @@ class AmBeNeutronAnalyzer:
         CvY = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[1]))
         CvZ = combined_df['clusterDirection'].apply(lambda v: float(v.strip('[]').split()[2]))
         
-        # Keep one entry per eventTankTime (single or multi-cluster)
-        unique_events_df = combined_df.drop_duplicates(subset='eventTankTime').copy()
+        # Keep one entry per (run, eventTankTime) event
+        unique_events_df = combined_df.drop_duplicates(subset='_evkey').copy()
 
         # Parse neutronTofCorrection into arrays
         if 'neutronTofCorrection' not in unique_events_df.columns:
@@ -192,7 +212,7 @@ class AmBeNeutronAnalyzer:
         hit_delta_t represents the time spread of individual hits within a cluster,
         while delta_t_values represents the time difference between the first cluster and subsequent clusters in multi-cluster events.
         '''
-        single_cluster_events = combined_df[event_counts == 1]['eventTankTime'].unique()
+        single_cluster_events = combined_df[event_counts == 1]['_evkey'].unique()
         multi_cluster_df = combined_df[event_counts > 1].copy()
         '''PE = multi_cluster_df['clusterPE']
         CCB = multi_cluster_df['clusterChargeBalance']
@@ -215,14 +235,14 @@ class AmBeNeutronAnalyzer:
             valid_arrays = [arr for arr in multi_cluster_df["neutronTofCorrection"].values if len(arr) > 0]
             all_neutron_tof = np.concatenate(valid_arrays) if valid_arrays else np.array([])
 
-        multi_cluster_df['first_cluster_time'] = multi_cluster_df.groupby('eventTankTime')['clusterTime'].transform('min')
+        multi_cluster_df['first_cluster_time'] = multi_cluster_df.groupby('_evkey')['clusterTime'].transform('min')
         multi_cluster_df['delta_t'] = multi_cluster_df['clusterTime'] - multi_cluster_df['first_cluster_time']
         multi_cluster_df['is_first_cluster'] = multi_cluster_df['clusterTime'] == multi_cluster_df['first_cluster_time']
         multi_cluster_df['cluster_type'] = np.where(multi_cluster_df['is_first_cluster'], 'first', 'subsequent')
         #subsequent_clusters = multi_cluster_df[(multi_cluster_df['delta_t'] < 1) & (multi_cluster_df['cluster_type'] == 'subsequent')]
         first_clusters = multi_cluster_df[(multi_cluster_df['delta_t'] < 1) &(multi_cluster_df['cluster_type'] == 'first')]
-        valid_event_ids = first_clusters['eventTankTime'].unique()
-        subsequent_clusters = multi_cluster_df[(multi_cluster_df['cluster_type'] == 'subsequent') & (multi_cluster_df['eventTankTime'].isin(valid_event_ids))]
+        valid_event_ids = first_clusters['_evkey'].unique()
+        subsequent_clusters = multi_cluster_df[(multi_cluster_df['cluster_type'] == 'subsequent') & (multi_cluster_df['_evkey'].isin(valid_event_ids))]
 
 
         delta_t_values = multi_cluster_df[multi_cluster_df['delta_t'] > 0]['delta_t']
@@ -340,7 +360,7 @@ class AmBeNeutronAnalyzer:
         axes[2].set_xlabel('Y'); axes[2].set_ylabel('Z'); axes[2].set_title('YZ')
         fig.colorbar(im2[3], ax=axes[2], label='Counts')
 
-        plt.suptitle(f'Cluster vector distributions for AmBe 2.0v1 , run positions:({sx}, {sy}, {sz})')
+        plt.suptitle(f'{self.selection_label}\nCluster vector distributions, {self.campaign_label}, source position ({sx}, {sy}, {sz})')
         plt.tight_layout(rect=[0, 0, 1, 0.95])
         pdf.savefig(fig, bbox_inches='tight')
         #plt.show()
@@ -378,7 +398,7 @@ class AmBeNeutronAnalyzer:
         ax2[2].set_xlabel("Cluster Time (μs)")
         ax2[2].set_ylabel("Cluster Charge Balance")
 
-        plt.suptitle(f'SINGLE - Cluster PE, Charge Balance and Time distributions for AmBe 2.0v1 (CH >= 10), run positions:({sx}, {sy}, {sz})')
+        plt.suptitle(f'{self.selection_label}\nSingle-cluster PE, charge balance and time, {self.campaign_label}, source position ({sx}, {sy}, {sz})')
         plt.tight_layout(rect=[0, 0, 1, 0.95])
         pdf.savefig(fig2, bbox_inches='tight')
         #plt.show()
@@ -417,7 +437,7 @@ class AmBeNeutronAnalyzer:
                 color="lightblue", linewidth=0.5, align='left', density=False)
         plt.xlabel('Neutron multiplicity for Events')
         plt.ylabel('Counts')
-        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v1 (PE < 100 & CCB < 0.45), run positions:({sx}, {sy}, {sz})')
+        plt.title(f'{self.selection_label}\nNeutron multiplicity, {self.campaign_label}, source position ({sx}, {sy}, {sz})')
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         #plt.show()
@@ -428,7 +448,7 @@ class AmBeNeutronAnalyzer:
                 color="lightblue", linewidth=0.5, align='left', density=False, log=True)
         plt.xlabel('Neutron multiplicity for Events')
         plt.ylabel('Counts')
-        plt.title(f'AmBe Neutron multiplicity distribution from AmBe 2.0v4 (PE < 100 & CCB < 0.45), run positions:({sx}, {sy}, {sz})')
+        plt.title(f'{self.selection_label}\nNeutron multiplicity per trigger, {self.campaign_label}, source position ({sx}, {sy}, {sz})')
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         #plt.show()
@@ -441,7 +461,7 @@ class AmBeNeutronAnalyzer:
         plt.hist(PE, bins=70, range=(0, 70), histtype='step', color='blue', label="Data")
         plt.xlabel("Cluster PE")
         plt.ylabel("Counts")
-        plt.title(f"PE Spectrum for AmBe 2.0v4, run positions:({sx}, {sy}, {sz})")
+        plt.title(f"{self.selection_label}\nCluster PE spectrum, {self.campaign_label}, source position ({sx}, {sy}, {sz})")
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         #plt.show()
@@ -451,7 +471,7 @@ class AmBeNeutronAnalyzer:
         plt.hist(hit_delta_t, bins=200, color='coral', edgecolor='black')
         plt.xlabel("hit Δt (ns)")
         plt.ylabel("Counts")
-        plt.title(f"Δt Distribution for cluster collection for AmBe 2.0v4, run positions:({sx}, {sy}, {sz})")
+        plt.title(f"{self.selection_label}\nΔt for cluster collection, {self.campaign_label}, source position ({sx}, {sy}, {sz})")
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         #plt.show()
@@ -483,7 +503,7 @@ class AmBeNeutronAnalyzer:
         plt.hist(Neutron_vertex_tof, bins=300, range=(-20, 50), color='coral', edgecolor='black')
         plt.xlabel("Neutron Vertex Distance from Source (ns)")
         plt.ylabel("Counts")
-        plt.title(f"Multi - Neutron Vertex TOF for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
+        plt.title(f"{self.selection_label}\nMulti-neutron vertex ToF, {self.campaign_label}, source position ({sx}, {sy}, {sz})")
         plt.tight_layout()
         pdf.savefig(bbox_inches='tight')
         #plt.show()
@@ -495,7 +515,7 @@ class AmBeNeutronAnalyzer:
             plt.hist(all_hits_pe, bins=50, range=(0, 20), log=True, color='skyblue', edgecolor='black')
             plt.xlabel("Hit PE Values")
             plt.ylabel("Counts")
-            plt.title(f"All Cluster Hits PE Distribution for AmBe 2.0v4, run positions:({sx}, {sy}, {sz})")
+            plt.title(f"{self.selection_label}\nAll cluster-hit PE, {self.campaign_label}, source position ({sx}, {sy}, {sz})")
             plt.tight_layout()
             pdf.savefig(bbox_inches='tight')
             #plt.show()
@@ -516,7 +536,7 @@ class AmBeNeutronAnalyzer:
         plt.hist(all_delta_t_tof_corrected, bins=300, range=(-20, 70), color='coral', edgecolor='black')
         plt.xlabel("All Hits Δt ToF Corrected (ns)")
         plt.ylabel("Counts")
-        plt.title(f"All Hits Δt ToF Corrected for AmBe 2.0v4 for all ToF, run positions:({sx}, {sy}, {sz})")
+        plt.title(f"{self.selection_label}\nAll hits Δt, ToF corrected, {self.campaign_label}, source position ({sx}, {sy}, {sz})")
         plt.tight_layout()
         #plt.show()
         #pdf.savefig(bbox_inches='tight')
@@ -625,7 +645,7 @@ class AmBeNeutronAnalyzer:
         ydata = counts[fit_mask]
         ydata_errors = np.sqrt(ydata)
         ydata_errors[ydata_errors == 0] = 1e-10
-        
+
         return xdata, ydata, ydata_errors, counts, bin_centers
 
     @staticmethod
@@ -642,29 +662,15 @@ class AmBeNeutronAnalyzer:
         # Use centralized data preparation - guarantees consistency
         xdata, ydata, ydata_errors, counts, bin_centers = self._prepare_fitting_data(CT)
 
-        # Use configuration parameters instead of hardcoded values
-        init = [self.fitting_config['initial_amplitude'], 
-                self.fitting_config['initial_thermal_time'], 
-                self.fitting_config['initial_capture_time'], 
-                self.fitting_config['initial_background']]
-
-        # Perform fit using configuration bounds
         try:
-            bounds = ([self.fitting_config['amplitude_bounds'][0], 
-                      self.fitting_config['thermal_bounds'][0],
-                      self.fitting_config['capture_bounds'][0], 
-                      self.fitting_config['background_bounds'][0]],
-                     [self.fitting_config['amplitude_bounds'][1], 
-                      self.fitting_config['thermal_bounds'][1],
-                      self.fitting_config['capture_bounds'][1], 
-                      self.fitting_config['background_bounds'][1]])
-            
-            popt, pcov = curve_fit(self.NeutCapture, xdata, ydata, p0=init, 
-                                 sigma=ydata_errors, absolute_sigma=True,
-                                 bounds=bounds)
-            perr = np.sqrt(np.diag(pcov))
+            fitted = fit(CT, float_B=True, backend="scipy", analyzer=self,
+                         min_counts=0, initial_background=self.fitting_config['initial_background'])
+            if fitted is None:
+                raise ValueError("capture-time fit failed")
+            popt = np.array([fitted[k] for k in ("A", "therm", "tau", "B")])
+            perr = np.array([fitted[k + "_err"] for k in ("A", "therm", "tau", "B")])
             ydata_expected = self.NeutCapture(xdata, *popt)
-            
+
             # Calculate chi-square statistics
             chi2_value = np.sum(((ydata - ydata_expected) ** 2) / (ydata_errors ** 2))
             ndof = len(ydata) - len(popt)
@@ -698,7 +704,7 @@ class AmBeNeutronAnalyzer:
             plt.xlabel(fr"Cluster Time [$\mu s$]")
             plt.ylabel("Counts")
             plt.legend()
-            plt.title(f"Neutron Capture Time (scipy) for AmBe 2.0v4, run positions:({sx}, {sy}, {sz})")
+            plt.title(f"Neutron Capture Time (scipy) for {self.campaign_label}, run positions:({sx}, {sy}, {sz})")
             plt.tight_layout()
             pdf.savefig(bbox_inches='tight')
             plt.close()
@@ -710,7 +716,7 @@ class AmBeNeutronAnalyzer:
             plt.axhline(0, color='gray', linestyle='--')
             plt.xlabel("Time [μs]")
             plt.ylabel("Normalized Residual")
-            plt.title(f"Fit Residuals (scipy) for AmBe 2.0v4, run positions:({sx}, {sy}, {sz})")
+            plt.title(f"Fit Residuals (scipy) for {self.campaign_label}, run positions:({sx}, {sy}, {sz})")
             plt.tight_layout()
             pdf.savefig(bbox_inches='tight')
             plt.close()
@@ -727,28 +733,21 @@ class AmBeNeutronAnalyzer:
         xdata, ydata, ydata_errors, counts, bin_centers = self._prepare_fitting_data(CT)
 
         try:
-            model = lmfit.Model(self.NeutCapture)
-            # Use configuration parameters - same as scipy method
-            params = model.make_params(
-                A=self.fitting_config['initial_amplitude'], 
-                therm=self.fitting_config['initial_thermal_time'], 
-                tau=self.fitting_config['initial_capture_time'], 
-                B=self.fitting_config['initial_background']
-            )
-            # Apply consistent bounds
-            params['A'].min = self.fitting_config['amplitude_bounds'][0]
-            params['therm'].min = self.fitting_config['thermal_bounds'][0]
-            params['therm'].max = self.fitting_config['thermal_bounds'][1]
-            params['tau'].min = self.fitting_config['capture_bounds'][0]
-            params['tau'].max = self.fitting_config['capture_bounds'][1]
-            params['B'].vary = False
-            
-            result = model.fit(ydata, params, t=xdata, weights=1/ydata_errors, method="basinhopping")
+            fitted = fit(CT, float_B=False, backend="lmfit", analyzer=self, min_counts=0, include_result=True)
+            if fitted is None:
+                raise ValueError("capture-time fit failed or covariance unavailable")
+            result = fitted.pop("_result")
+            self.capture_fit_rows.append({**fitted, "pos": source_key})
             print(f"LMFIT results for position {source_key}:")
             print(result.fit_report())
             
-            best_fit_curve = result.best_fit
-            
+            xplot = np.linspace(self.fitting_config['plot_min_time'],
+                                self.fitting_config['fit_max_time'], 500)
+            best_fit_curve = self.NeutCapture(
+                xplot,
+                result.params['A'].value, result.params['therm'].value,
+                result.params['tau'].value, result.params['B'].value)
+
             lm_run_summary = {
                 "Thermal": result.params['therm'].value,
                 "Thermal_err": result.params['therm'].stderr,
@@ -771,14 +770,22 @@ class AmBeNeutronAnalyzer:
                 fr"$\mathrm{{therm}} = {result.params['therm'].value:.2f} \pm {result.params['therm'].stderr:.2f}\ \mu s$" + "\n"
                 fr"$\tau = {result.params['tau'].value:.2f} \pm {result.params['tau'].stderr:.2f}\ \mu s$" + "\n"
                 fr"$\chi^2 = {result.chisqr:.2f},\ \mathrm{{ndof}} = {result.nfree}$, " + "\n"
-                fr"$\frac{{\chi^2}}{{\mathrm{{ndof}}}} = {result.redchi:.2f}$"
+                fr"$\frac{{\chi^2}}{{\mathrm{{ndof}}}} = {result.redchi:.2f}$" + "\n"
+                + (fr"fit {self.fitting_config['fit_min_time']:.0f}–"
+                   fr"{self.fitting_config['fit_max_time']:.0f} $\mu s$"
+                   if self.fitting_config['plot_min_time']
+                   >= self.fitting_config['fit_min_time'] else
+                   fr"fit {self.fitting_config['fit_min_time']:.0f}–"
+                   fr"{self.fitting_config['fit_max_time']:.0f} $\mu s$, "
+                   fr"drawn {self.fitting_config['plot_min_time']:.0f}–"
+                   fr"{self.fitting_config['fit_max_time']:.0f} $\mu s$")
             )
-            plt.plot(xdata, best_fit_curve, 'g-', linewidth=2, 
+            plt.plot(xplot, best_fit_curve, 'g-', linewidth=2,
                     label=label)
             plt.xlabel("Cluster Time [μs]")
             plt.ylabel("Counts")
             plt.legend()
-            plt.title(f"Neutron Capture Time (LMFIT) for AmBe 2.0v1, run positions:({sx}, {sy}, {sz})")
+            plt.title(f"Neutron Capture Time (LMFIT) for {self.campaign_label}, run positions:({sx}, {sy}, {sz})")
             plt.tight_layout()
             pdf.savefig(bbox_inches='tight')
             plt.close()
@@ -788,6 +795,8 @@ class AmBeNeutronAnalyzer:
 
     def pymc_analysis(self, data_dict: Dict, source_key: Tuple, pdf):
         """Perform Bayesian analysis using PyMC."""
+        import pymc as pm
+        import arviz as az
         CT = data_dict['CT']
         sx, sy, sz = (int(v) for v in source_key)
 
@@ -897,7 +906,7 @@ class AmBeNeutronAnalyzer:
                 except:
                     # Fallback: just count total events directly
                     combined_df = pd.concat(df_list, ignore_index=True)
-                    Info.loc[i, 'LenEvents'] = len(combined_df['eventTankTime'].unique()) if 'eventTankTime' in combined_df.columns else len(combined_df)
+                    Info.loc[i, 'LenEvents'] = len(combined_df['_evkey'].unique()) if '_evkey' in combined_df.columns else len(combined_df)
         
         print("LMFIT Summary")
         print(Info)
@@ -932,19 +941,19 @@ class AmBeNeutronAnalyzer:
         pivot_lenEvents = pivot_lenEvents.reindex(columns=self.port_order)
 
         # Create output directory
-        os.makedirs("OutputPlots", exist_ok=True)
+        Path(self.output_pdf).parent.mkdir(parents=True, exist_ok=True)
 
         # Capture time heatmap
         plt.figure(figsize=(8, 6))
         sns.heatmap(pivot_capturetime, annot=labels_SE_capture, fmt="", cmap="YlOrBr", 
                    cbar=True, annot_kws={"size": 12}, linecolor='black', linewidths=0.2, 
                    cbar_kws={"label": "Capture Time (μs)"})
-        plt.title("Capture Time of AmBe 2.0v4 (LMFIT)")
+        plt.title(f"Capture Time of {self.campaign_label} (LMFIT)")
         plt.xlabel("Port")
         plt.ylabel("Y Position")
         plt.gca().invert_yaxis()
         plt.tight_layout()
-        plt.savefig("OutputPlots/CaptureTime_AmBeNeutrons_AmBe2.0v4_LMFIT.png", dpi=300, bbox_inches='tight')
+        plt.savefig(f"{Path(self.output_pdf).parent}/CaptureTime_AmBeNeutrons_{self.campaign_tag}_LMFIT.png", dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
 
@@ -953,12 +962,12 @@ class AmBeNeutronAnalyzer:
         sns.heatmap(pivot_thermal_time, annot=labels_SE_thermal, fmt="", cmap="YlOrBr", 
                    cbar=True, annot_kws={"size": 12}, linecolor='black', linewidths=0.2, 
                    cbar_kws={"label": "Thermal Time (μs)"})
-        plt.title("Thermal Time of AmBe 2.0v4 (LMFIT)")
+        plt.title(f"Thermal Time of {self.campaign_label} (LMFIT)")
         plt.xlabel("Port")
         plt.ylabel("Y Position")
         plt.gca().invert_yaxis()
         plt.tight_layout()
-        plt.savefig("OutputPlots/ThermalTime_AmBeNeutrons_AmBe2.0v4_LMFIT.png", dpi=300, bbox_inches='tight')
+        plt.savefig(f"{Path(self.output_pdf).parent}/ThermalTime_AmBeNeutrons_{self.campaign_tag}_LMFIT.png", dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
 
@@ -967,12 +976,12 @@ class AmBeNeutronAnalyzer:
         sns.heatmap(pivot_lenEvents, annot=True, fmt="", cmap="YlOrBr", cbar=True, 
                    annot_kws={"size": 12}, linecolor='black', linewidths=0.2, 
                    cbar_kws={"label": "%"})
-        plt.title("Normalized Statistics of all AmBe Neutron-like Events for AmBe 2.0v4")
+        plt.title(f"Normalized Statistics of all AmBe Neutron-like Events for {self.campaign_label}")
         plt.xlabel("Port")
         plt.ylabel("Y Position")
         plt.gca().invert_yaxis()
         plt.tight_layout()
-        plt.savefig("OutputPlots/Statistics_AmBeNeutronEvents_AmBe2.0v4.png", dpi=300, bbox_inches='tight')
+        plt.savefig(f"{Path(self.output_pdf).parent}/Statistics_AmBeNeutronEvents_{self.campaign_tag}.png", dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
 
@@ -1011,7 +1020,7 @@ class AmBeNeutronAnalyzer:
 
         return Info
 
-    def run_analysis(self, file_pattern: str = 'EventAmBeNeutronCandidates_fullwindowtest_*.csv',
+    def run_analysis(self, file_pattern,
                     tasks: List[str] = None):
         """
         Run the complete analysis with specified tasks.
@@ -1027,11 +1036,12 @@ class AmBeNeutronAnalyzer:
         if tasks is None:
             tasks = ['2d_histograms', '1d_histograms', 'lmfit_fit', 'summary']
 
-        # Load and group data
-        self.load_and_group_data(file_pattern)
+        for pat in ([file_pattern] if isinstance(file_pattern, str) else file_pattern):
+            self.load_and_group_data(pat)
+        print(f"[basic] grouped into {len(self.source_groups)} source positions")
 
         # Create output directory
-        os.makedirs("OutputPlots", exist_ok=True)
+        Path(self.output_pdf).parent.mkdir(parents=True, exist_ok=True)
 
         with PdfPages(self.output_pdf) as pdf:
             for source_key, df_list in self.source_groups.items():
@@ -1076,45 +1086,221 @@ class AmBeNeutronAnalyzer:
         return None
 
 
-def main():
-    """Example usage of the AmBeNeutronAnalyzer class."""
-    
-    # Initialize analyzer
-    analyzer = AmBeNeutronAnalyzer()
-    
-    # Example 1: Run analysis with LMFIT-based summary plots
-    print("=== Running analysis with LMFIT-based summary plots ===")
-    analyzer.run_analysis(tasks=['2d_histograms', '1d_histograms'])
-
-    # Example 2: Run full analysis with all tasks (both scipy and lmfit, summary uses lmfit)
-    # print("=== Running full analysis ===")
-    # analyzer.run_analysis(tasks=['2d_histograms', '1d_histograms', 'scipy_fit', 'lmfit_fit', 'pymc_fit', 'summary'])
-    
-    # Example 3: Run only lmfit fitting and summary
-    # print("=== Running only LMFIT fitting and summary ===")
-    # analyzer.run_analysis(tasks=['lmfit_fit', 'summary'])
-
-
-if __name__ == "__main__":
-    main()
-
-
-# ---------------------------------------------------------------------------
-# ambe CLI integration
-# ---------------------------------------------------------------------------
 def run(ctx, argv=None):
-    """Run basic plots using paths and cuts from RunContext."""
+    """Run basic plots using paths and cuts from RunContext.
+
+    This is the per-source-position book: load_and_group_data groups the candidate
+    CSVs by (x, y, z) and the histogram tasks emit one page per position, which is
+    the per-port-position view for whichever selection the config names.
+    """
     from ..io import inputs_from_ctx
+    import glob as _glob
     csv_paths = inputs_from_ctx(ctx, "candidate_csvs")
     data_dir = str(ctx.run_dir / "candidate_csvs") if not csv_paths else str(csv_paths[0].parent)
-    out_pdf = str(ctx.plot_path(ctx.filename("basic_plots", "pdf")))
-    analyzer = AmBeNeutronAnalyzer(data_directory=data_dir, output_pdf=out_pdf)
+    # ctx.plot_path() composes the campaign/run suffix itself, so it takes the BARE
+    # base name. Passing ctx.filename(...) into it applied the suffix twice and wrote
+    # "basic_plots__<c>__<r>.pdf__<c>__<r>.png" -- a .png-suffixed file containing a
+    # PDF, which no downstream stage could find.
+    out_pdf = str(ctx.plot_path("basic_plots", "pdf"))
+
+    # Use only candidate patterns named by this config.
+    patterns = sorted({Path(str(p)).name for p in ctx.inputs.get("candidate_csvs", [])})
+    if not patterns:
+        raise SystemExit("config declares no inputs.candidate_csvs")
+
+    n_found = 0
+    for pat in patterns:
+        n = len(_glob.glob(os.path.join(data_dir, pat)))
+        print(f"[plots.basic] {data_dir}/{pat} -> {n} candidate CSVs")
+        n_found += n
+    if n_found == 0:
+        raise SystemExit(
+            f"no candidate CSVs match {patterns} in {data_dir} -- run "
+            f"`ambe data process --config <cfg> --selection <box|mva>` first")
+
+    # Plot-only hits cut, taken from the config so both decks state it and use the
+    # same value. 0 / null disables it. Legacy default is 10 (see prepare_data).
+    mch = ctx.cuts.get("plot_min_cluster_hits", 10)
+    print(f"[plots.basic] plot-only cut clusterHits >= {mch}"
+          f"{'  (disabled)' if not mch else ''}")
+    analyzer = AmBeNeutronAnalyzer(data_directory=data_dir, output_pdf=out_pdf,
+                                   min_cluster_hits=int(mch or 0),
+                                   campaign_label=ctx.campaign or 'AmBe 2.0v4',
+                                   selection_label=ctx.cuts.get('selection_label', ''))
     fc = ctx.fit_params
     if fc:
         analyzer.update_fitting_config(**{k: v for k, v in fc.items()
                                           if k in analyzer.fitting_config})
-    analyzer.run_analysis(tasks=["2d_histograms", "1d_histograms"])
+    analyzer.run_analysis(file_pattern=patterns,
+                          tasks=["2d_histograms", "1d_histograms", "lmfit_fit"])
+    if analyzer.capture_fit_rows:
+        pd.DataFrame(analyzer.capture_fit_rows).to_csv(ctx.csv_path("capture_time_fits"), index=False)
+    print(f"[plots.basic] wrote {out_pdf}")
 
 
 def cli(ctx, argv=None):
     run(ctx, argv)
+
+# Presentation adapters use the same model and histogram preparation as this analyzer.
+NeutCapture = AmBeNeutronAnalyzer.NeutCapture
+
+
+def prepare(ct_us, fit_min=None):
+    analyzer = AmBeNeutronAnalyzer()
+    if fit_min is not None:
+        analyzer.update_fitting_config(fit_min_time=fit_min)
+    return analyzer._prepare_fitting_data(ct_us)[:3]
+
+
+def fit(ct_us, float_B, backend, *, analyzer=None, min_counts=50,
+        initial_background=1.0, include_result=False):
+    """Fit capture times with the basic analyzer model and configuration."""
+    analyzer = analyzer or AmBeNeutronAnalyzer()
+    cfg = analyzer.fitting_config
+    names = ("A", "therm", "tau", "B")
+    init = dict(zip(names, [cfg[k] for k in ("initial_amplitude", "initial_thermal_time", "initial_capture_time", "initial_background")]))
+    bounds = dict(zip(names, [cfg[k] for k in ("amplitude_bounds", "thermal_bounds", "capture_bounds", "background_bounds")]))
+    if backend not in BACKENDS:
+        raise ValueError(f"backend must be one of {BACKENDS}, got {backend!r}")
+    if backend == "lmfit":
+        result = _fit_lmfit(ct_us, float_B, analyzer, min_counts, initial_background)
+        if result is not None and not include_result:
+            result.pop("_result", None)
+        return result
+    x, y, err, _, _ = analyzer._prepare_fitting_data(ct_us)
+    if y.sum() < min_counts:
+        return None
+    if float_B:
+        p0 = [init["A"], init["therm"], init["tau"], initial_background]
+        lo = [bounds[k][0] for k in ("A", "therm", "tau", "B")]
+        hi = [bounds[k][1] for k in ("A", "therm", "tau", "B")]
+        f = NeutCapture
+    else:
+        p0 = [init["A"], init["therm"], init["tau"]]
+        lo = [bounds[k][0] for k in ("A", "therm", "tau")]
+        hi = [bounds[k][1] for k in ("A", "therm", "tau")]
+        def f(t, A, therm, tau):
+            return NeutCapture(t, A, therm, tau, init["B"])
+    try:
+        popt, pcov = curve_fit(f, x, y, p0=p0, sigma=err,
+                               absolute_sigma=True, bounds=(lo, hi),
+                               maxfev=200000)
+    except Exception as exc:                                # noqa: BLE001
+        print(f"    fit failed: {exc}")
+        return None
+    perr = np.sqrt(np.diag(pcov))
+    resid = (y - f(x, *popt)) / err
+    ndof = len(x) - len(popt)
+    out = dict(A=popt[0], A_err=perr[0], therm=popt[1], therm_err=perr[1],
+               tau=popt[2], tau_err=perr[2],
+               chi2=float((resid ** 2).sum()), ndof=ndof,
+               redchi=float((resid ** 2).sum() / ndof), N=int(y.sum()))
+    out["B"], out["B_err"] = (popt[3], perr[3]) if float_B else (init["B"], 0.0)
+    return out
+
+
+def _fit_lmfit(ct_us, float_B, analyzer, min_counts, initial_background):
+    """Bounded lmfit fit with absolute covariance scaling."""
+    x, y, err, _, _ = analyzer._prepare_fitting_data(ct_us)
+    if y.sum() < min_counts:
+        return None
+    cfg = analyzer.fitting_config
+    names = ("A", "therm", "tau", "B")
+    init = dict(zip(names, [cfg[k] for k in ("initial_amplitude", "initial_thermal_time", "initial_capture_time", "initial_background")]))
+    bounds = dict(zip(names, [cfg[k] for k in ("amplitude_bounds", "thermal_bounds", "capture_bounds", "background_bounds")]))
+    model = lmfit.Model(NeutCapture)
+    params = model.make_params(A=init["A"], therm=init["therm"], tau=init["tau"],
+                               B=initial_background if float_B else init["B"])
+    for k in ("A", "therm", "tau", "B"):
+        params[k].min = bounds[k][0]
+        params[k].max = bounds[k][1]
+    if not float_B:
+        params["B"].value = init["B"]
+        params["B"].vary = False
+    try:
+        res = model.fit(y.astype(float), params, t=x, weights=1.0 / err,
+                        scale_covar=False, nan_policy="omit",
+                        method="least_squares")
+    except Exception as exc:                                # noqa: BLE001
+        print(f"    lmfit fit failed: {exc}")
+        return None
+    if not res.success or res.covar is None:
+        print("    lmfit fit did not converge / no covariance")
+        return None
+
+    def val(name):
+        p = res.params[name]
+        return float(p.value), float(p.stderr) if p.stderr is not None else 0.0
+
+    A, A_err = val("A")
+    therm, therm_err = val("therm")
+    tau, tau_err = val("tau")
+    B, B_err = val("B")
+    ndof = len(x) - int(res.nvarys)
+    chi2 = float(res.chisqr)
+    return dict(A=A, A_err=A_err, therm=therm, therm_err=therm_err,
+                tau=tau, tau_err=tau_err, chi2=chi2, ndof=ndof,
+                redchi=chi2 / ndof, N=int(y.sum()), B=B, B_err=B_err, _result=res)
+
+
+def fit_expflat(ct_us):
+    """Tail-only exponential plus constant fit on 10–67 us for closure diagnostics."""
+    x, y, err = prepare(ct_us, fit_min=EXPFLAT_MIN)
+    if y.sum() < 50:
+        return None
+    f = lambda t, A, tau, B: A * np.exp(-t / tau) + B      # noqa: E731
+    try:
+        popt, pcov = curve_fit(f, x, y, p0=[y[0] * 1.5, 30.0, y[-1] * 0.5],
+                               sigma=err, absolute_sigma=True,
+                               bounds=([0, 5.0, 0], [np.inf, 200.0, np.inf]),
+                               maxfev=200000)
+    except Exception as exc:                                # noqa: BLE001
+        print(f"    expflat fit failed: {exc}")
+        return None
+    perr = np.sqrt(np.diag(pcov))
+    resid = (y - f(x, *popt)) / err
+    ndof = len(x) - 3
+    # pedestal fraction: flat counts / total counts inside the fit window
+    flat_frac = popt[2] * len(x) / max(y.sum(), 1)
+    return dict(A=popt[0], A_err=perr[0], tau=popt[1], tau_err=perr[1],
+                B=popt[2], B_err=perr[2], flat_frac=flat_frac,
+                chi2=float((resid ** 2).sum()), ndof=ndof,
+                redchi=float((resid ** 2).sum() / ndof), N=int(y.sum()))
+
+
+def is_good(t):
+    """Quality mask for weighted means of capture-time fits."""
+    return ((t.tau_err > 0) & (t.therm_err > 0)
+            & (t.tau > 10.0 + 1e-6) & (t.tau < 70.0 - 1e-6)
+            & (t.therm > 0.1 + 1e-6)
+            & (t.redchi < 3.0))
+
+
+def load(tag, run):
+    p = os.path.join(CAND_DIR, f"EventAmBeNeutronCandidates_{tag}_{run}.csv")
+    if not os.path.exists(p):
+        return None
+    d = pd.read_csv(p, usecols=USECOLS)
+    d["clusterTime"] = d["clusterTime"] / 1000.0        # ns -> us, as basic.py:143
+    d["run"] = run
+    return d
+
+
+def load_tag(tag):
+    """Read all candidate CSVs with the given tag; cluster times are returned in us."""
+    pat = os.path.join(CAND_DIR, f"EventAmBeNeutronCandidates_{tag}_*.csv")
+    frames = []
+    for p in sorted(glob.glob(pat)):
+        m = re.search(rf"EventAmBeNeutronCandidates_{re.escape(tag)}_(\d+)\.csv$", p)
+        if not m:
+            continue
+        d = load(tag, int(m.group(1)))
+        if d is not None and len(d):
+            frames.append(d)
+    if not frames:
+        raise SystemExit(f"[tagset] no candidate CSVs matched {pat} — refusing to "
+                         f"fit an empty sample")
+    out = pd.concat(frames, ignore_index=True)
+    print(f"  tag {tag:24s}: {out.run.nunique():3d} runs, {len(out):8,d} clusters, "
+          f"{out.groupby(['sourceX','sourceY','sourceZ']).ngroups:3d} positions")
+    return out

@@ -11,9 +11,12 @@ Answers two questions:
 Time-reference note
 -------------------
 Cluster_HitT and hitT share the same reconstructed time reference (exact match).
-DirectParent_HitTime is offset by +14-16 ns (Cherenkov photon travel time from
-interaction point to PMT).  Per-event offset is computed from hits whose chankey
-appears in both arrays, then used with a ±8 ns tolerance for the truth match.
+DirectParent_HitTime is offset by +14-16 ns relative to hitT.  This offset is
+the PMT SPE waveform peak delay (p1*exp(-p2²) - T0Offset*2ns from the lognormal
+model in PMTWaveformSim, ~15.9 ns for typical ANNIE PMTs).  It is NOT the
+Cherenkov photon travel time, which is already embedded in hitT.  Per-event
+offset is computed from chankeys that appear exactly once in both arrays, then
+used with a ±8 ns tolerance for the truth match.
 
 Unclaimed hit diagnostics
 -------------------------
@@ -56,7 +59,7 @@ BRANCHES = [
     "hitChankey", "hitT",
     "hitPE",        # reconstructed PE per hit
     "hitPMTType",   # PMT subsystem flag (tank/MRD/veto)
-    "Cluster_HitT", "Cluster_HitChankey", "Cluster_HitChankeyMC",
+    "Cluster_HitT", "Cluster_HitChankey",
     "DirectParent_HitTime", "DirectParent_PMTID",
     "DirectParent_NeutronAncestorClass", "DirectParent_IsDarknoise",
     "DirectParent_PDGs",      # PDG code of parent particle
@@ -73,16 +76,24 @@ WIDE_TOL = 25.0  # ns — wide tolerance for Step 5 re-matching
 def _compute_dp_offset(hit_ck, hit_t, dp_pmtid, dp_t):
     """
     Estimate DirectParent_HitTime - hitT offset using chankeys that appear in both.
-    Returns median offset (ns); falls back to 15 ns if insufficient overlap.
+
+    The offset is the PMT SPE waveform peak delay (~15.9 ns for typical ANNIE
+    PMTs), not the Cherenkov photon travel time (which is already in hitT).
+
+    Falls back to 15.0 ns if fewer than 3 unambiguous pairs exist or if the
+    computed median is outside the physically plausible range [10, 25] ns.
     """
-    ck_set = set(np.unique(hit_ck)) & set(np.unique(dp_pmtid))
+    shared = set(hit_ck) & set(dp_pmtid)
     offsets = []
-    for ck in ck_set:
+    for ck in shared:
         ht_vals = hit_t[hit_ck == ck]
         dp_vals = dp_t[dp_pmtid == ck]
         if len(ht_vals) == 1 and len(dp_vals) == 1:
             offsets.append(float(dp_vals[0] - ht_vals[0]))
-    return float(np.median(offsets)) if len(offsets) >= 3 else 15.0
+    if len(offsets) < 3:
+        return 15.0
+    med = float(np.median(offsets))
+    return med if 10.0 <= med <= 25.0 else 15.0
 
 
 def _classify_hits(hit_ck, hit_t, dp_pmtid, dp_t, dp_class, dp_dn, offset, tol=8.0):
@@ -92,17 +103,27 @@ def _classify_hits(hit_ck, hit_t, dp_pmtid, dp_t, dp_class, dp_dn, offset, tol=8
       'neutron'     – ancestor class in {1,2,3,4}
       'background'  – ancestor class == -5
       'darknoise'   – ancestor class == 0 or is_darknoise==1
-      'unclaimed'   – no DirectParent match (dark noise BackTracker didn't trace)
+      'unclaimed'   – no DirectParent match within tol
     Returns array of labels, same length as hit_ck.
+
+    Uses a dict-based O(N+M) lookup instead of an O(N*M) linear scan.
     """
-    labels = np.full(len(hit_ck), "unclaimed", dtype=object)
+    # Build per-chankey index into the DP arrays once — O(M)
+    dp_by_ck: dict[int, list] = {}
+    for idx, ck in enumerate(dp_pmtid):
+        dp_by_ck.setdefault(int(ck), []).append(idx)
+
+    labels          = np.full(len(hit_ck), "unclaimed", dtype=object)
+    failure_reasons = np.full(len(hit_ck), None,        dtype=object)
     for j, (ck, t) in enumerate(zip(hit_ck, hit_t)):
-        idx = np.where(dp_pmtid == ck)[0]
-        if not len(idx):
+        indices = dp_by_ck.get(int(ck))
+        if not indices:
+            failure_reasons[j] = "no_entry"
             continue
-        dt = np.abs(dp_t[idx] - (t + offset))
-        best = idx[np.argmin(dt)]
-        if dt.min() > tol:
+        t_shifted = t + offset
+        best = min(indices, key=lambda i: abs(dp_t[i] - t_shifted))
+        if abs(dp_t[best] - t_shifted) > tol:
+            failure_reasons[j] = "time_mismatch"
             continue
         cls = int(dp_class[best])
         dn  = int(dp_dn[best])
@@ -112,7 +133,7 @@ def _classify_hits(hit_ck, hit_t, dp_pmtid, dp_t, dp_class, dp_dn, offset, tol=8
             labels[j] = "background"
         else:
             labels[j] = "darknoise"
-    return labels
+    return labels, failure_reasons
 
 
 def _dp_label_from_class(cls: int, dn: int) -> str:
@@ -130,6 +151,7 @@ def _diagnose_unclaimed(
     dp_pmtid, dp_t, dp_dn, dp_pdg, dp_class,
     offset: float,
     labels: np.ndarray,
+    failure_reasons: np.ndarray,
     cf_ck_lists, cf_t_lists,
     evid: int,
 ) -> list[dict]:
@@ -150,9 +172,10 @@ def _diagnose_unclaimed(
     def rkey(ck, t):
         return (int(ck), round(float(t), 4))
 
-    hit_label_map = {rkey(ck, t): lbl for ck, t, lbl in zip(hit_ck, hit_t, labels)}
-    hit_pe_map    = {rkey(ck, t): pe  for ck, t, pe  in zip(hit_ck, hit_t, hit_pe)}
-    hit_pmt_map   = {rkey(ck, t): pt  for ck, t, pt  in zip(hit_ck, hit_t, hit_pmt_type)}
+    hit_label_map  = {rkey(ck, t): lbl for ck, t, lbl in zip(hit_ck, hit_t, labels)}
+    hit_fail_map   = {rkey(ck, t): fr  for ck, t, fr  in zip(hit_ck, hit_t, failure_reasons)}
+    hit_pe_map     = {rkey(ck, t): pe  for ck, t, pe  in zip(hit_ck, hit_t, hit_pe)}
+    hit_pmt_map    = {rkey(ck, t): pt  for ck, t, pt  in zip(hit_ck, hit_t, hit_pmt_type)}
 
     for cidx, (ck_list, t_list) in enumerate(zip(cf_ck_lists, cf_t_lists)):
         if not ck_list:
@@ -198,6 +221,7 @@ def _diagnose_unclaimed(
                 "hit_t":                     float(t),
                 "hit_pe":                    pe,
                 "hit_pmt_type":              pmt_type,
+                "failure_reason":            hit_fail_map.get(k),
                 "dt_from_cluster_median_ns": dt_from_cluster_median,
                 "has_dp_entry":              has_dp_entry,
                 "min_dt_to_dp_ns":           min_dt,
@@ -249,7 +273,11 @@ def extract(root_path: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
         dp_cls = np.array(ak.to_list(arr["DirectParent_NeutronAncestorClass"][i]), dtype=int)
         dp_dn  = np.array(ak.to_list(arr["DirectParent_IsDarknoise"][i]),          dtype=int)
 
-        cf_ck_lists = ak.to_list(arr["Cluster_HitChankeyMC"][i])
+        # Cluster_HitChankey uses the same data-chankey space as hitChankey.
+        # Cluster_HitChankeyMC is the detector key from ClusterFinder and is
+        # in a different space — using it here would make every in_cluster
+        # lookup silently fail.
+        cf_ck_lists = ak.to_list(arr["Cluster_HitChankey"][i])
         cf_t_lists  = ak.to_list(arr["Cluster_HitT"][i])
 
         # New branches with sentinel fallbacks
@@ -272,8 +300,22 @@ def extract(root_path: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
         # --- time offset for this event ---
         offset = _compute_dp_offset(hit_ck, hit_t, dp_ck, dp_t)
 
-        # --- classify every detector hit ---
-        hit_labels = _classify_hits(hit_ck, hit_t, dp_ck, dp_t, dp_cls, dp_dn, offset)
+        # --- classify every detector hit (±8 ns tight tolerance) ---
+        hit_labels, failure_reasons = _classify_hits(
+            hit_ck, hit_t, dp_ck, dp_t, dp_cls, dp_dn, offset
+        )
+
+        # --- Step 5: wide-tolerance re-match for ALL untraced hits (±WIDE_TOL ns) ---
+        wide_labels, _ = _classify_hits(
+            hit_ck, hit_t, dp_ck, dp_t, dp_cls, dp_dn, offset, tol=WIDE_TOL
+        )
+        wide_resolved_mask = (hit_labels == "unclaimed") & (wide_labels != "unclaimed")
+
+        # --- per-hit failure reason map (for cluster composition and diagnostics) ---
+        fail_reason_map = {
+            (int(ck), round(float(t), 4)): fr
+            for ck, t, fr in zip(hit_ck, hit_t, failure_reasons)
+        }
 
         # --- which hits are inside any CF cluster? ---
         clustered_keys = set()
@@ -299,15 +341,25 @@ def extract(root_path: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
         cl_counts = {lbl: int((cl_lbl == lbl).sum())
                      for lbl in ("neutron", "background", "darknoise", "unclaimed")}
 
+        # untraced sub-type counts (no_entry + time_mismatch = unclaimed)
+        n_no_entry   = int((failure_reasons == "no_entry").sum())
+        n_time_mm    = int((failure_reasons == "time_mismatch").sum())
+        n_wide_res   = int(wide_resolved_mask.sum())
+        n_wide_tm_res = int((wide_resolved_mask & (failure_reasons == "time_mismatch")).sum())
+
         ev_rows.append({
-            "eventID":           evid,
-            "nhits":             nhits,
-            "n_dp_labeled":      n_dp,
-            "n_clustered":       n_clustered,
-            "n_unclustered":     n_unclustered,
-            "dp_offset_ns":      round(offset, 2),
+            "eventID":                    evid,
+            "nhits":                      nhits,
+            "n_dp_labeled":               n_dp,
+            "n_clustered":                n_clustered,
+            "n_unclustered":              n_unclustered,
+            "dp_offset_ns":               round(offset, 2),
             **{f"total_{k}": v for k, v in lbl_counts.items()},
             **{f"cf_{k}":    v for k, v in cl_counts.items()},
+            "n_no_entry":                 n_no_entry,
+            "n_time_mismatch":            n_time_mm,
+            "n_wide_resolved":            n_wide_res,
+            "n_wide_time_mismatch_resolved": n_wide_tm_res,
         })
 
         # --- per-cluster composition ---
@@ -321,15 +373,25 @@ def extract(root_path: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
         }
         for cidx, (ck_list, t_list) in enumerate(zip(cf_ck_lists, cf_t_lists)):
             comp = {"neutron": 0, "background": 0, "darknoise": 0, "unclaimed": 0}
+            n_no_entry_cl   = 0
+            n_time_mm_cl    = 0
             for ck, t in zip(ck_list, t_list):
-                lbl = hit_label_map.get((int(ck), round(float(t), 4)), "unclaimed")
+                key = (int(ck), round(float(t), 4))
+                lbl = hit_label_map.get(key, "unclaimed")
                 comp[lbl] += 1
+                fr = fail_reason_map.get(key)
+                if fr == "no_entry":
+                    n_no_entry_cl += 1
+                elif fr == "time_mismatch":
+                    n_time_mm_cl += 1
             total = sum(comp.values())
             cl_rows.append({
-                "eventID":     evid,
-                "cluster_idx": cidx,
-                "n_hits":      total,
+                "eventID":         evid,
+                "cluster_idx":     cidx,
+                "n_hits":          total,
                 **comp,
+                "n_no_entry":      n_no_entry_cl,
+                "n_time_mismatch": n_time_mm_cl,
                 **{f"frac_{k}": v / total if total else 0.0 for k, v in comp.items()},
             })
 
@@ -344,7 +406,7 @@ def extract(root_path: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
         unc_rows.extend(_diagnose_unclaimed(
             hit_ck, hit_t, hit_pe, hit_pmt,
             dp_ck, dp_t, dp_dn, dp_pdg, dp_cls,
-            offset, hit_labels, cf_ck_lists, cf_t_lists, evid,
+            offset, hit_labels, failure_reasons, cf_ck_lists, cf_t_lists, evid,
         ))
 
     return (
@@ -564,7 +626,7 @@ def _unclaimed_meta_plots(unc_df: pd.DataFrame, ctx: RunContext):
         ax.set_xticks([])
         ax.set_yticks([])
 
-    # Panel 4 — Summary partition pie
+    # Panel 4 — Summary breakdown (horizontal bars; categories are non-exclusive)
     ax = axes[1, 1]
     c1 = int((
         (unc_df["nearest_dp_is_darknoise"] == 1) &
@@ -576,19 +638,23 @@ def _unclaimed_meta_plots(unc_df: pd.DataFrame, ctx: RunContext):
         ((unc_df["nearest_dp_pdg"] != -999) & (unc_df["nearest_dp_pdg"] != -1))
     ).sum())
     c3 = int((~unc_df["has_dp_entry"] & ~unc_df["matched_wide"]).sum())
-    pie_vals = [c1, c2, c3]
-    pie_labels = [
-        f"Confirmed dark noise\n{c1:,} ({100*c1/n_total:.1f}%)",
-        f"BackTracker issue\n{c2:,} ({100*c2/n_total:.1f}%)",
-        f"Genuinely untraceable\n{c3:,} ({100*c3/n_total:.1f}%)",
+    bar_vals   = [c1, c2, c3]
+    bar_labels = [
+        f"Confirmed dark noise\n(IsDN=1, PE≤1.5, no wide match)",
+        f"BackTracker issue\n(wide-matched or near-miss PDG found)",
+        f"Genuinely untraceable\n(no DP entry, no wide match)",
     ]
-    pie_colors = ["#9E9E9E", "#FF9800", "#607D8B"]
-    if sum(pie_vals) > 0:
-        ax.pie(pie_vals, labels=pie_labels, colors=pie_colors,
-               startangle=90, wedgeprops=dict(edgecolor="white", linewidth=1),
-               textprops={"fontsize": 8})
-    ax.set_title(f"Summary partition of {n_total:,} unclaimed CF hits\n"
-                 "(categories non-exclusive)")
+    bar_colors = ["#9E9E9E", "#FF9800", "#607D8B"]
+    bars = ax.barh(bar_labels, bar_vals, color=bar_colors, edgecolor="white")
+    for bar, val in zip(bars, bar_vals):
+        if val:
+            ax.text(val + 0.3, bar.get_y() + bar.get_height() / 2,
+                    f"{val:,}  ({100*val/n_total:.1f}%)",
+                    va="center", fontsize=8)
+    ax.set_xlabel("Unclaimed CF hits")
+    ax.set_title(f"Summary of {n_total:,} unclaimed CF hits\n"
+                 "(categories non-exclusive — hits may appear in multiple bars)")
+    ax.set_xlim(0, max(bar_vals) * 1.35 if bar_vals else 1)
 
     plt.tight_layout()
     save_plot(fig, ctx, "unclaimed_diag_meta")
@@ -600,14 +666,47 @@ def _unclaimed_meta_plots(unc_df: pd.DataFrame, ctx: RunContext):
 
 def run(ctx: RunContext, verbose: bool = True) -> Path:
     root_files = resolve_inputs(ctx.inputs["root_files"])
-    if len(root_files) != 1:
-        raise ValueError("ambe mc hitcomp expects exactly one root_files entry")
-    root_path = root_files[0]
+    if not root_files:
+        raise ValueError("ambe mc hitcomp: no root_files resolved")
 
     if verbose:
-        print(f"[hitcomp] reading {root_path.name}")
+        print(f"[hitcomp] reading {len(root_files)} file(s)")
 
-    ev_df, cl_df, unc_df, labeled_cf_pe = extract(root_path)
+    # Process each file; tag rows with _source_file (and keep local eventNumber
+    # as eventID) so a CC-pass flag can be joined per (file, event).
+    ev_parts, cl_parts, unc_parts, pe_parts = [], [], [], []
+    for rp in root_files:
+        if verbose and len(root_files) > 1:
+            print(f"[hitcomp]   {rp.name}")
+        e, c, u, pe = extract(rp)
+        for d in (e, c, u):
+            if len(d):
+                d["_source_file"] = rp.name
+        ev_parts.append(e); cl_parts.append(c); unc_parts.append(u)
+        pe_parts.append(pe)
+    ev_df  = pd.concat(ev_parts,  ignore_index=True) if ev_parts  else pd.DataFrame()
+    cl_df  = pd.concat(cl_parts,  ignore_index=True) if cl_parts  else pd.DataFrame()
+    unc_df = pd.concat(unc_parts, ignore_index=True) if unc_parts else pd.DataFrame()
+    labeled_cf_pe = np.concatenate([p for p in pe_parts if len(p)]) if any(len(p) for p in pe_parts) else np.array([])
+
+    # --- CC-pass join: report composition for ALL clusters and the CC subset --- #
+    # eventID in ev_df/cl_df is the per-file local eventNumber, so join the CC
+    # table on (_source_file, eventNumber). Truth-based CC selection lives in
+    # ambe.mc.cc_selection (FV mirrors EventSelector; MRD cuts logged as omitted).
+    try:
+        from . import cc_selection
+        cc_tbl = cc_selection.build_cc_table(ctx, tree_name="Event", verbose=verbose)
+    except Exception as exc:  # noqa: BLE001
+        cc_tbl = pd.DataFrame()
+        if verbose:
+            print(f"[hitcomp] WARN: CC table unavailable ({exc}); reporting all-cluster only")
+    if len(cc_tbl) and "cc_pass" in cc_tbl.columns:
+        cc_map = cc_tbl[["_source_file", "eventNumber", "cc_pass"]].rename(
+            columns={"eventNumber": "eventID"})
+        for d in (ev_df, cl_df):
+            if len(d):
+                d_merged = d.merge(cc_map, on=["_source_file", "eventID"], how="left")
+                d["cc_pass"] = d_merged["cc_pass"].fillna(False).to_numpy().astype(bool)
 
     ev_csv  = ctx.csv_path(f"{ctx.run_name}__hit_accounting")
     cl_csv  = ctx.csv_path(f"{ctx.run_name}__cluster_composition")
@@ -627,16 +726,50 @@ def run(ctx: RunContext, verbose: bool = True) -> Path:
               f"({100*ev_df['n_clustered'].mean()/ev_df['nhits'].mean():.1f}% of nhits)")
         print(f"  Unclustered:             {ev_df['n_unclustered'].mean():.1f}  "
               f"({100*ev_df['n_unclustered'].mean()/ev_df['nhits'].mean():.1f}% of nhits)")
-        print(f"\n--- Composition of CF cluster hits (all clusters pooled) ---")
-        for lbl in ("neutron", "background", "darknoise", "unclaimed"):
-            total = cl_df[lbl].sum()
-            grand = cl_df[["neutron", "background", "darknoise", "unclaimed"]].sum().sum()
-            print(f"  {lbl:<12s}: {total:7,}  ({100*total/grand:.1f}%)")
+        def _print_composition(df, header):
+            if not len(df):
+                print(f"\n--- {header} --- (no clusters)")
+                return
+            cols = ["neutron", "background", "darknoise", "unclaimed"]
+            grand = df[cols].sum().sum()
+            print(f"\n--- {header} ---  ({len(df):,} clusters, {int(grand):,} hits)")
+            for lbl in cols:
+                total = int(df[lbl].sum())
+                print(f"  {lbl:<12s}: {total:7,}  ({100*total/grand:.1f}%)" if grand else f"  {lbl:<12s}: 0")
+
+        _print_composition(cl_df, "Composition of CF cluster hits (ALL clusters pooled)")
+        if "cc_pass" in cl_df.columns:
+            _print_composition(cl_df[cl_df["cc_pass"]],
+                               "Composition of CF cluster hits (CC-PASSING events only)")
+            # Headline number the user asked for: neutron-hit fraction in surviving clusters
+            ccp = cl_df[cl_df["cc_pass"]]
+            if len(ccp):
+                cols = ["neutron", "background", "darknoise", "unclaimed"]
+                gr = ccp[cols].sum().sum()
+                nfrac = 100 * ccp["neutron"].sum() / gr if gr else 0.0
+                n_cc_events = int(ev_df["cc_pass"].sum()) if "cc_pass" in ev_df.columns else -1
+                print(f"\n  >>> HEADLINE: in CC-passing events, "
+                      f"{nfrac:.1f}% of CF-cluster hits are final-state neutrons "
+                      f"({n_cc_events} CC-passing events, {len(ccp):,} clusters) <<<")
         print(f"\n--- Neutron hit recovery ---")
         has_n = ev_df[ev_df["total_neutron"] > 0]
         rec = has_n["cf_neutron"] / has_n["total_neutron"]
         print(f"  Median fraction of event's neutron hits captured in CF: {rec.median()*100:.1f}%")
         print(f"  Mean:   {rec.mean()*100:.1f}%")
+
+        ne_total  = int(ev_df["n_no_entry"].sum())
+        tm_total  = int(ev_df["n_time_mismatch"].sum())
+        wr_total  = int(ev_df["n_wide_resolved"].sum())
+        wtm_total = int(ev_df["n_wide_time_mismatch_resolved"].sum())
+        untraced  = ne_total + tm_total
+        print(f"\n--- Untraced hit sub-types (Step 5 wide-tolerance ±{WIDE_TOL:.0f} ns) ---")
+        print(f"  no_entry     : {ne_total:7,}  (chankey absent — sub-threshold / masked PMT)")
+        print(f"  time_mismatch: {tm_total:7,}  (DP entry exists but |dt|>8 ns — merged-pulse)")
+        if untraced:
+            print(f"  Wide-resolved: {wr_total:7,} / {untraced:,}  ({100*wr_total/untraced:.1f}% of all untraced)")
+            print(f"    time_mismatch resolved: {wtm_total:7,} / {tm_total:,}  ({100*wtm_total/tm_total:.1f}%)" if tm_total else "    time_mismatch resolved: 0")
+            no_entry_res = wr_total - wtm_total
+            print(f"    no_entry resolved:      {no_entry_res:7,} / {ne_total:,}  (expect ~0 — no DP to match against)")
 
         if len(unc_df):
             nu = len(unc_df)
