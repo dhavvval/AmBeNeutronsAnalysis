@@ -42,6 +42,7 @@ COMMANDS: dict[tuple[str, str], str] = {
     ("mc", "timewindows"):      "ambe.mc.hit_time_windows:cli",
     ("mc", "capture"):          "ambe.mc.capture_truth:cli",
     ("mc", "trackwindows"):     "ambe.mc.track_windows:cli",
+    ("mc", "displays"):         "ambe.diagnostics.plot_cluster_event_displays:cli",
     ("data", "process"):        "ambe.data.processor:cli",
     # Same Stage 2 as `data process`, with no Stage 1. MC has no waveforms, so every
     # cluster is treated as having passed the good-waveform selection. Separate command
@@ -57,6 +58,9 @@ COMMANDS: dict[tuple[str, str], str] = {
     ("plots", "basic"):         "ambe.plots.basic:cli",
     ("plots", "combined"):      "ambe.plots.combined:cli",
     ("plots", "heatmap"):       "ambe.plots.heatmap:cli",
+    ("plots", "provenance"):    "ambe.plots.provenance_deck:cli",
+    ("plots", "clustertruth"):  "ambe.plots.cluster_truth:cli",
+    ("plots", "windowcompare"): "ambe.plots.window_compare:cli",
     ("plots", "efficiency"):    "ambe.efficiency_extraction.efficiency_thesis:cli",
     # Waveform-stage companion to `plots efficiency`: the Stage-1 AmBe small-PMT
     # selection, and whether the no-source run's flat background can be subtracted
@@ -74,6 +78,7 @@ COMMANDS: dict[tuple[str, str], str] = {
     ("plots", "livetime"):      "ambe.plots.livetime_sideband:cli",
     ("plots", "nosourcenorm"):  "ambe.plots.nosource_norm:cli",
     ("plots", "clustereff"):    "ambe.plots.clustereff:cli",
+    ("plots", "prvalidation"):  "ambe.plots.pr_validation:cli",
     ("plots", "pulseshape"):    "ambe.plots.pulse_shape:cli",
     ("pipeline", "mc"):         "ambe.pipeline:run_mc",
     ("pipeline", "data"):       "ambe.pipeline:run_data",
