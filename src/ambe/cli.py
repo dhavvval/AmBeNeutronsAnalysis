@@ -33,6 +33,15 @@ COMMANDS: dict[tuple[str, str], str] = {
     # group, cmd                 where to find it
     ("mc", "discriminate"):     "ambe.mc.cluster_discrimination:cli",
     ("mc", "timespread"):       "ambe.mc.time_spread:cli",
+    ("data", "process"):        "ambe.data.processor:cli",
+    # Same Stage 2 as `data process`, with no Stage 1. MC has no waveforms, so every
+    # cluster is treated as having passed the good-waveform selection. Separate command
+    # rather than a flag so neither config kind can be run through the wrong path.
+    ("data", "processmc"):      "ambe.data.processor:cli_mc",
+    ("data", "eff"):            "ambe.data.processor:cli",
+    ("data", "runtable"):       "ambe.diagnostics.runtable:cli",
+    ("data", "randoms"):        "ambe.data.randoms:cli",
+    ("diagnostics", "runtable"): "ambe.diagnostics.runtable:cli",
     ("pipeline", "mc"):         "ambe.pipeline:run_mc",
     ("pipeline", "data"):       "ambe.pipeline:run_data",
 }
