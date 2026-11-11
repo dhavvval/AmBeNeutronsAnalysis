@@ -1,0 +1,89 @@
+# productionv3fix tank WCSim re-run through today's ToolAnalysis dev build (cff4e58:
+# ANNIEsoft merge, PMTWaveformSim time smearing on, waveform hit charge/PE branches).
+# Files: all 20 productionv3fix tank parts; made by workflow/Snakefile (rule ta).
+run_name: cc_neutrino_v3fixsmearfull_truthtag
+display_label: "CC Neutrino v3 — TRUTH-tag, fixed geometry + capture truth (FV, p_mu, cos, isCC, FSL mu)"
+campaign: "MC CC Neutrino productionv3fix tank parts 1-20, dev build cff4e58 (smearing on)"
+description: >
+  All 20 productionv3fix tank parts (100,000 events) re-run through the dev ToolAnalysis build
+  cff4e58, same cuts as cc_neutrino_v3fixsmear_truthtag. Used for the OPTICS hyper-parameter scan.
+
+output_root: ambe_output
+
+inputs:
+  root_files:
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_1.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_2.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_3.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_4.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_5.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_6.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_7.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_8.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_9.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_10.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_11.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_12.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_13.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_14.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_15.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_16.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_17.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_18.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_19.root
+    - /exp/annie/data/users/dajana/v3fix_local/today_samples/out/ANNIEEvent_tank_20.root
+
+cuts:
+  min_pulses_per_event: 0
+
+  cc_stream: ccinc_truthtag
+
+  cc_cuts:
+    # phase space — identical in both streamlines
+    require_fv: true
+    fv_radius_cm: 100.0
+    fv_y_max_cm: 100.0
+    fv_require_z_negative: false
+    mu_p_min_mev: 600.0
+    mu_p_max_mev: 1200.0
+    cos_theta_min: 0.8
+    nhit_min: 4
+    # tagging — this is what differs between the two streamlines
+    require_cc: true
+    require_fsl_muon: true
+    require_no_veto: false
+    require_mrd: false
+    mrd_source: cluster
+    require_prompt_pe: false
+    prompt_pe_min: 500.0
+    prompt_pe_max: 3000.0
+
+truth:
+  hit_source: dp_match   # waveform-match truth, as for every earlier OPTICS number
+
+fit_params: {}
+
+residual:
+  cc_only: false          # keep non-selected tank events; cc_pass is carried per cluster
+  prompt_window_ns: 2000
+
+optics:
+  min_samples: [8]
+  xi: [0.02]
+  t_unit_ns: [25]
+  truth_window_ns: 75.0
+  hit_prefilter_ns: 0.0
+
+features:
+  methods: [optics, clusterfinder, peak]
+  min_samples: 8
+  xi: 0.02
+  t_unit_ns: 25.0
+  hit_prefilter_ns: 0.0
+  truth_window_ns: 75.0
+
+geometry:
+  pmt_geometry:   /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/FullTankPMTGeometry.csv
+  timing_offsets: /exp/annie/app/users/dajana/EB_BC_TA/configfiles/LoadGeometry/TankPMTTimingOffsets.csv
+  frame: tank                   # PMT table shifted into the tank-centred hit frame
+  apply_timing_offsets: false   # data calibration; WCSim hits carry no per-PMT offsets
