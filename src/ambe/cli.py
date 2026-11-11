@@ -31,8 +31,10 @@ from .context import RunContext, load_context
 # --------------------------------------------------------------------------- #
 COMMANDS: dict[tuple[str, str], str] = {
     # group, cmd                 where to find it
+    ("mc", "process"):          "ambe.mc.processor:cli",
     ("mc", "discriminate"):     "ambe.mc.cluster_discrimination:cli",
     ("mc", "timespread"):       "ambe.mc.time_spread:cli",
+    ("mc", "hitcomp"):          "ambe.mc.hit_accounting:cli",
     ("data", "process"):        "ambe.data.processor:cli",
     # Same Stage 2 as `data process`, with no Stage 1. MC has no waveforms, so every
     # cluster is treated as having passed the good-waveform selection. Separate command
