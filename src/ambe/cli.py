@@ -51,6 +51,7 @@ COMMANDS: dict[tuple[str, str], str] = {
     ("data", "runtable"):       "ambe.diagnostics.runtable:cli",
     ("data", "randoms"):        "ambe.data.randoms:cli",
     ("diagnostics", "runtable"): "ambe.diagnostics.runtable:cli",
+    ("mc", "mva"):             "ambe.mc.mva_analysis:cli",
     ("pipeline", "mc"):         "ambe.pipeline:run_mc",
     ("pipeline", "data"):       "ambe.pipeline:run_data",
 }
