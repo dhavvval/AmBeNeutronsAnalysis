@@ -48,10 +48,19 @@ COMMANDS: dict[tuple[str, str], str] = {
     # rather than a flag so neither config kind can be run through the wrong path.
     ("data", "processmc"):      "ambe.data.processor:cli_mc",
     ("data", "eff"):            "ambe.data.processor:cli",
+    ("data", "icscan"):         "ambe.plots.icscan:cli",
     ("data", "runtable"):       "ambe.diagnostics.runtable:cli",
     ("data", "randoms"):        "ambe.data.randoms:cli",
+    ("plots", "icscan"):        "ambe.plots.icscan:cli",
     ("diagnostics", "runtable"): "ambe.diagnostics.runtable:cli",
     ("mc", "mva"):             "ambe.mc.mva_analysis:cli",
+    ("plots", "basic"):         "ambe.plots.basic:cli",
+    ("plots", "combined"):      "ambe.plots.combined:cli",
+    ("plots", "heatmap"):       "ambe.plots.heatmap:cli",
+    # Waveform-stage companion to `plots efficiency`: the Stage-1 AmBe small-PMT
+    # selection, and whether the no-source run's flat background can be subtracted
+    # there rather than in the multiplicity fit.
+    ("plots", "waveformcuts"):  "ambe.plots.waveform_cuts:cli",
     ("pipeline", "mc"):         "ambe.pipeline:run_mc",
     ("pipeline", "data"):       "ambe.pipeline:run_data",
 }
