@@ -128,6 +128,33 @@ def draw_diff(ax, x, a, sa, b, sb, label: str = "difference", floor: float = 0.0
     return d, e
 
 
+def draw_ratio(ax, x, a, sa, b, sb=None, label: str = "data / MC", floor: float = 0.1, cap: float = 1.0,
+               logy: bool = False, **kw):
+    """Residual a / b with error sqrt((sa/b)^2 + (a sb/b^2)^2) as small points with error bars; bins with b <= 0 are
+    left out. Linear axis: symmetric about 1, half-width between floor and cap (points beyond are drawn at the edge).
+    Returns the ratio array."""
+    import numpy as np
+    a, sa, b = (np.asarray(v, float) for v in (a, sa, b))
+    sb = np.zeros_like(b) if sb is None else np.asarray(sb, float)
+    ok = b > 0
+    bb = np.where(ok, b, 1.0)
+    r = np.where(ok, a / bb, np.nan)
+    e = np.where(ok, np.sqrt((sa / bb) ** 2 + (a * sb / bb ** 2) ** 2), np.nan)
+    for k, v in (("color", "k"), ("fmt", "o"), ("ms", 2.2), ("lw", 0.8), ("capsize", 0)):
+        kw.setdefault(k, v)
+    ax.set_ylabel(label)
+    ax.set_gid("residual")
+    if logy:
+        ax.errorbar(x, np.where(r > 0, r, np.nan), e, **kw)
+        ax.set_yscale("log")
+        return r
+    fin = np.isfinite(r) & np.isfinite(e)
+    m = float(np.clip(1.15 * np.max(np.abs(r[fin] - 1) + e[fin]), floor, cap)) if fin.any() else floor
+    ax.errorbar(x, np.clip(r, 1 - m, 1 + m), e, **kw)
+    ax.set_ylim(1 - 1.05 * m, 1 + 1.05 * m)
+    return r
+
+
 def save_plot(
     fig,
     ctx: RunContext,

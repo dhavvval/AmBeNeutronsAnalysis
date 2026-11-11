@@ -44,3 +44,16 @@ def test_draw_diff_autoscale_option():
     draw_diff(resid[0, 0], [0, 1], [0.65, 0.70], [0.002, 0.002], [0.80, 0.85], [0.0, 0.0], center_zero=False)
     lo, hi = resid[0, 0].get_ylim()
     assert hi < 0
+
+
+def test_draw_ratio_values_axis_and_gid():
+    from ambe.plotting import draw_ratio
+    fig, main, resid = main_resid_axes()
+    r = draw_ratio(resid[0, 0], [0, 1, 2], [110, 90, 5], [10, 9, 2], [100, 100, 0], [0, 10, 0])
+    assert np.allclose(r[:2], [1.1, 0.9]) and np.isnan(r[2])
+    lo, hi = resid[0, 0].get_ylim()
+    assert np.isclose(1 - lo, hi - 1) and hi > 1.1
+    assert resid[0, 0].get_gid() == "residual"
+    fig, main, resid = main_resid_axes()
+    draw_ratio(resid[0, 0], [0, 1], [1e4, 10], [100, 3], [1, 1], logy=True)
+    assert resid[0, 0].get_yscale() == "log"
