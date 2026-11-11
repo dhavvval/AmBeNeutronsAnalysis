@@ -1084,7 +1084,16 @@ def run_by_position(ctx, fp: dict, ei: pd.DataFrame, *, n_bins: int,
     n_boot = int(fp.get("n_bootstrap", 400))
     seed = int(fp.get("seed", 0))
 
-    bkg = build_multiplicity(ei, bkg_run, n_bins, denom,
+    ei_bkg = ei
+    if fp.get("background_event_index"):
+        # a background run outside the source EventIndex (e.g. the ungated dummy run)
+        import glob
+        pats = fp["background_event_index"]
+        pats = [pats] if isinstance(pats, str) else list(pats)
+        ei_bkg = load_event_index([Path(p) for pat in pats for p in sorted(glob.glob(str(pat)))])
+        if bkg_run in set(ei.run):
+            ei = ei[ei.run != bkg_run]
+    bkg = build_multiplicity(ei_bkg, bkg_run, n_bins, denom,
                              overflow_policy=overflow_policy)
     print(f"\n--- per-position fits, denominator={denom}, likelihood={likelihood}, "
           f"background_uncertainty={bkg_unc_mode}, n_bins={n_bins}")
