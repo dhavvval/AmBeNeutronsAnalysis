@@ -1,0 +1,69 @@
+run_name: AmBe2.0v4_reclust
+display_label: "AmBe v4 data, 26 source runs + 6264, re-clustered (no box)"
+campaign: "AmBe 2.0v4"
+description: >
+  v4 source runs re-clustered with the MC clusterers (ambe data randoms --cluster, MC config
+  mc_ambe_v3fix_reclust) for the Data/MC comparison without box cuts. 6187 (Port 3 y=-60, no MC)
+  and 6249 (LAPPD on, +227 PE/trigger leak) are left out; 6264 is the no-source background run.
+output_root: ambe_output
+inputs:
+  root_files:
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6046.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6062.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6165.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6251.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6252.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6230.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6231.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6232.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6234.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6235.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6056.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6060.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6061.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6247.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6250.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6188.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6189.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6237.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6239.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6241.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6242.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6166.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6186.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6243.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6244.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6246.root
+    - /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v4/BeamCluster_6264.root
+
+cuts:
+  time_min_ns: 2000
+  time_max_ns: 67000
+
+clusterindex:
+  window_ns: [2000, 67000]
+  extra_source_positions:
+    6264: [0.0, 0.0, -999.0]
+  gate_event_index:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/EventIndex_AmBe2.0v4_all28_box_veto_*.parquet
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/EventIndex_AmBe2.0v4_effpair_box_6264.parquet
+  reference_efficiency: ambe_output/ambe_data/AmBe2.0v4_all28_box_veto/csv/efficiency_fit_by_position.csv
+  reference_label: v4 box cuts
+
+fit_params:
+  source_runs: all
+  background_run: 6264
+  denominator: ambe_triggers
+  nominal_model: poisson
+  likelihood: multinomial
+  background_uncertainty: profile
+  n_bins: 4
+  overflow_policy: clip
+  n_gof_toys: 2000
+  acquisition_window_ns: 67000
+  signal_window_start_ns: 2000
+  bkg_window_start_ns: 2000
+  eff_grid:    {min: 0.10, max: 0.95, step: 0.001}
+  lambda_grid: {min: 0.00, max: 0.60, step: 0.002}
+  s_grid:      {min: 0.00, max: 1.50, step: 0.005}
+  seed: 20260922

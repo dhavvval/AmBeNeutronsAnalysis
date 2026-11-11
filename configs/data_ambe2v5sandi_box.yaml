@@ -1,0 +1,79 @@
+run_name: AmBe2.0v5sandi_box_veto
+display_label: "AmBe v5sandi, 3 runs, traditional box cuts"
+campaign: "AmBe 2.0v5sandi"
+description: "AmBe data: ambe2v5sandi_box"
+
+output_root: ambe_output/ambe_data
+
+stage1:
+  data_directory: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/ambe_output/stage_v5sandi/source
+  waveform_dir: /pnfs/annie/persistent/users/dajana/AmBe/AmBe2.0v5sandi
+  file_pattern: 'BeamCluster_(\d+)\.root'
+  campaign: 1
+  which_tree: 1
+  selection_mode: ic
+  ic_min: 700
+  ic_max: 1200
+  plot_ic: true
+  save_waveform_samples: true
+  dump_good_events: true
+  dump_event_index: true
+  tag: AmBe2.0v5sandi_box_veto
+
+inputs:
+  trigger_summary:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_AmBe2.0v5sandi_box_veto.csv
+  candidate_csvs:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_AmBe2.0v5sandi_box_veto_*.csv
+  waveform_features:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/WaveformFeatures_AmBe2.0v5sandi_box_veto_*.parquet
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/WaveformFeatures_AmBe2.0v4_effpair_box_6264.parquet
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/WaveformFeatures_AmBe2.0v4_all28_box_veto_6046.parquet
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/WaveformFeatures_AmBe2.0v4_all28_box_veto_6062.parquet
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/WaveformFeatures_AmBe2.0v4_all28_box_veto_6165.parquet
+  # No v5sandi no-source run: the v4 no-source run 6264 is the background template.
+  event_index:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/EventIndex_AmBe2.0v5sandi_box_veto_*.parquet
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/EventIndex_AmBe2.0v4_effpair_box_6264.parquet
+
+cuts:
+  pe_max: 100
+  charge_balance_max: 0.45
+  time_min_ns: 2000
+  time_max_ns: 67000
+  cluster_hits_min: 5
+  # Plot-only cut inside src/ambe/plots/basic.py prepare_data. 0 here to match the
+  # v4 box/MVA decks, so the campaigns stay comparable.
+  plot_min_cluster_hits: 0
+  selection_label: "box cuts PE ≤ 100, CB < 0.45, t ≥ 2 µs, hits ≥ 5"
+
+fit_params:
+  source_runs: all
+  background_run: 6264
+  denominator: ambe_triggers
+  nominal_model: poisson
+  likelihood: multinomial
+  background_uncertainty: profile
+  n_bins: 4
+  overflow_policy: clip
+  n_gof_toys: 2000
+  acquisition_window_ns: 67000
+  signal_window_start_ns: 2000
+  bkg_window_start_ns: 2000
+  eff_grid:    {min: 0.10, max: 0.95, step: 0.001}
+  lambda_grid: {min: 0.00, max: 0.60, step: 0.002}
+  s_grid:      {min: 0.00, max: 1.50, step: 0.005}
+  seed: 20260922
+
+waveform_cuts:
+  source_runs: [6273, 6274, 6275]
+  background_run: 6264
+  crosscheck_runs: [6046, 6165, 6062]
+
+plots:
+  heatmap:
+    maps: [statistics, efficiency, residual, fit_poisson, fit_datadriven]
+
+reference:
+  comparison_campaign: "AmBe 2.0v4"
+  trigger_summary: /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_AmBe2.0v4_all28_box_veto.csv

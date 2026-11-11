@@ -1,0 +1,36 @@
+run_name: step3_ambe2v4_bkgnorm
+display_label: "Step 3: per-port forward fold, AmBe v4 bkgnorm data vs setup-A MC + 6264 false starts"
+campaign: "AmBe 2.0v4"
+description: >
+  Background-normalisation plan step 3 (WORKLOG_bkgnorm_reprocess.md, plan P4; recipe approved 2026-11-05,
+  no box cuts). `ambe stats foldeff --fold-model forward --stage closure|data|checks`. Candidates: TA ClusterFinder
+  + C++ merge clusters with time in 2-67 us on veto-passing IC-gated triggers (data: AmBe2.0v4_bkgnorm_nobox;
+  MC: mc_ambe_v3fix_wf_dtho6256 clusterindex). False starts: 6264 weighted by the frozen F_rsb_g.
+output_root: ambe_output
+
+fold:
+  data_config: configs/data_ambe2v4_bkgnorm_nobox.yaml
+  data_method: clusterfinder_tree
+  mc_config: configs/mc_ambe_v3fix_wf_dtho6256.yaml
+  mc_method: clusterfinder
+  factors_csv: ambe_output/ambe_data/AmBe2.0v4_bkgnorm/csv/nosourcenorm_icrun_factors.csv
+  factors_md5: 5c9b2883b60b34087b305901e65ee7ba
+  features_tag: AmBe2.0v4_bkgnorm
+  background_run: 6264
+  dummy_run: 6256
+  window_ns: [2000, 67000]
+  n_bins: 5            # 0, 1, 2, 3, >= 4
+  bb_share: template   # one Barlow-Beeston factor per (MC template, fit group, bin); 'run' = per run (closure failed 11/05)
+  bb_model: cov        # template pmf shift with its multinomial covariance per (template, group); 'diag' = per-bin factors (closure v2: s widths 1.04-1.125)
+  ic_cosmic: 3000
+  time_fit_max_us: 66        # last full 1-us bin; the readout ends near 66.5 us (data and MC)
+  flat_window_us: 64.5       # 2 to 66.5 us: length that turns the flat rate into mu_ind
+  time_fit_backend: lmfit    # time-spectrum check through lmfit least_squares (same fit as scipy, tested); default scipy
+  closure:
+    template_files: [0, 24]
+    pseudo_files: [25, 49]
+    s: [1.00, 0.85]
+    mu: [0.0, 0.02, 0.05]
+    n_toys: 200
+    seed: 20261105
+  pass: {mean_pull_max: 0.2, width_min: 0.9, width_max: 1.1}
