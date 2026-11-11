@@ -61,6 +61,15 @@ COMMANDS: dict[tuple[str, str], str] = {
     # selection, and whether the no-source run's flat background can be subtracted
     # there rather than in the multiplicity fit.
     ("plots", "waveformcuts"):  "ambe.plots.waveform_cuts:cli",
+    ("plots", "datamc"):        "ambe.plots.datamc:cli",
+    ("plots", "datamcclust"):   "ambe.plots.datamc_clustering:cli",
+    ("plots", "datamcneutron"): "ambe.plots.datamc_clustering:cli_neutron",
+    ("plots", "datamcwave"):    "ambe.plots.datamc_waveform:cli",
+    ("plots", "datamczero"):    "ambe.plots.datamc_zerobin:cli",
+    ("plots", "livetime"):      "ambe.plots.livetime_sideband:cli",
+    ("plots", "nosourcenorm"):  "ambe.plots.nosource_norm:cli",
+    ("plots", "clustereff"):    "ambe.plots.clustereff:cli",
+    ("plots", "pulseshape"):    "ambe.plots.pulse_shape:cli",
     ("pipeline", "mc"):         "ambe.pipeline:run_mc",
     ("pipeline", "data"):       "ambe.pipeline:run_data",
 }
