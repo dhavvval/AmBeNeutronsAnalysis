@@ -4,7 +4,7 @@ Output directory resolution.
 Resolution order:
   1. explicit argument (e.g. from a config file)
   2. $AMBE_OUT environment variable
-  3. ~/ambe_analysis_output/ (default)
+  3. <repository>/ambe_output/ (default)
 
 All `*_dir` helpers guarantee the directory exists (mkdir parents).
 """
@@ -13,17 +13,23 @@ import os
 from pathlib import Path
 from typing import Optional
 
-DEFAULT_OUTPUT = Path.home() / "ambe_analysis_output"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_OUTPUT = REPOSITORY_ROOT / "ambe_output"
 
 
 def output_root(explicit: Optional[str] = None) -> Path:
-    """Base output dir. explicit > $AMBE_OUT > ~/ambe_analysis_output/."""
+    """Base output dir. explicit > $AMBE_OUT > <repository>/ambe_output/."""
     if explicit:
         root = Path(explicit).expanduser()
     elif os.environ.get("AMBE_OUT"):
         root = Path(os.environ["AMBE_OUT"]).expanduser()
     else:
         root = DEFAULT_OUTPUT
+    if "AmBeNeutronAnalysis" in root.parts:
+        raise ValueError("Output path uses AmBeNeutronAnalysis; use AmBeNeutronsAnalysis. "
+                         "Legacy locations may still be used as input paths.")
+    if not root.is_absolute():
+        root = REPOSITORY_ROOT / root
     root.mkdir(parents=True, exist_ok=True)
     return root
 

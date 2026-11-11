@@ -13,18 +13,33 @@ venv/
 build/
 dist/
 
-# Output artefacts (everything here should live under $AMBE_OUT, not the repo)
-# Kept for historical reasons; new runs must write to $AMBE_OUT.
+# Output artefacts. These live in this directory but are NEVER repo content -- every
+# entry below is ignored, so a 20+ GB output tree can sit here safely.
+#
+# New products default to this checkout; see docs/OUTPUTS.md for legacy inputs.
 EventAmBeNeutronCandidatesData/
 TriggerSummary/
 verbose/
 OutputPlots/
 mc_results/
 mc_parquet/
+ambe_output/
+ambe_output_capture/
+beamoff/
+mc_steven/
+optics_beamcluster_benchmark_smoke/
+logs/
+*.log
 *.pdf
 *.png
 *.parquet
 *.npz
+
+# PRESENTATION_PLOTS/ is a collected-figure tree. Any script snapshotted into it by
+# collect_presentation_plots.py is a stale copy of the version tracked at the repo
+# root -- ignore those so git carries exactly one copy of each script. The per-deck
+# documentation is tracked under docs/presentations instead.
+PRESENTATION_PLOTS/*.py
 
 # CSVs that are outputs (keep CSVs under configs/ or tests/ if they're inputs)
 *.csv
@@ -36,3 +51,11 @@ mc_parquet/
 .idea/
 *.swp
 .DS_Store
+
+# Local data trees (BeamCluster ROOT files + per-run waveform subdirs).
+# newPMTPhysics/ is ~70 GB and test/ ~2.6 GB — inputs, never repo content.
+newPMTPhysics/
+test/
+
+# Generated Markdown reports are separate from curated documentation.
+docs/generated/
