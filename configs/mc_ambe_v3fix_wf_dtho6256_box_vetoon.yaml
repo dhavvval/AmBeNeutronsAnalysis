@@ -1,0 +1,44 @@
+run_name: MCAmBe_v3fixwf_dtho6256_box_vetoON
+display_label: "AmBe MC v3fix waveform model + 6256 overlay (setup A), 25 positions, box cuts, prompt veto ON"
+campaign: "AmBe MC setup A"
+description: >
+  Setup-A AmBe MC (productionv3fix_wf_nosmear_dataclock_dtho6256_dead15, 1250 files x 1000 events, 25 positions;
+  EB_BC_TA_pr/full PMTWaveformSim TimeShift 1074 = data clock, one 6256 dummy trigger overlaid per event before
+  ClusterFinder 20 ns / 5 hits + C++ time merge 50/2000, 15-PMT mask) through the same Stage 2 as the
+  AmBe2.0v4_bkgnorm data tag: box cuts, cluster window 2-67 us, hits >= 5, prompt veto ON (the overlay carries
+  the 6256 cosmics, as data does). No Stage 1: MC has no BGO waveforms.
+
+  runNumber is 0 in every pr/full tree (LoadWCSim takes it from the WCSim header), so the tree run check is off;
+  the run number and the position come from the folder label and the file name (label_map.txt).
+
+output_root: ambe_output/mc_ambe
+
+stage1_mc:
+  dataset_root: /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix_wf_nosmear_dataclock_dtho6256_dead15/QE_1.50
+  label_map: /pnfs/annie/persistent/users/dajana/output/AmBe_MC_toolchain/productionv3fix_wf_nosmear_dataclock_dtho6256_dead15/QE_1.50/label_map.txt
+  which_tree: 1
+  event_key_branch: eventNumber
+  dump_event_index: true
+  check_tree_run: false
+  tag: MCAmBe_v3fixwf_dtho6256_box_vetoON
+
+inputs:
+  trigger_summary:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/TriggerSummary/AmBeTriggerSummary_MCAmBe_v3fixwf_dtho6256_box_vetoON.csv
+  candidate_csvs:
+    - /exp/annie/app/users/dajana/AmBeNeutronsAnalysis/EventAmBeNeutronCandidatesData/EventAmBeNeutronCandidates_MCAmBe_v3fixwf_dtho6256_box_vetoON_*.csv
+
+cuts:
+  pe_max: 100
+  charge_balance_max: 0.45
+  time_min_ns: 2000
+  time_max_ns: 67000
+  cluster_hits_min: 5
+  plot_min_cluster_hits: 0
+  selection_label: "box cuts PE ≤ 100, CB < 0.45, t ≥ 2 µs, hits ≥ 5, prompt veto ON"
+
+plots:
+  heatmap:
+    maps: [statistics]
+
+fit_params: {}
